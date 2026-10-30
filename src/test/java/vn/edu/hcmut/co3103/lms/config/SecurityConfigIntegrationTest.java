@@ -149,7 +149,7 @@ class SecurityConfigIntegrationTest {
         mockMvc.perform(options(ADMIN)
                         .header(HttpHeaders.ORIGIN, origin)
                         .header(HttpHeaders.ACCESS_CONTROL_REQUEST_METHOD, "GET"))
-                .andExpect(status().isForbidden())
+                .andExpect(forbiddenJson(ADMIN))
                 .andExpect(header().doesNotExist(HttpHeaders.ACCESS_CONTROL_ALLOW_ORIGIN))
                 .andExpect(header().doesNotExist(HttpHeaders.ACCESS_CONTROL_ALLOW_CREDENTIALS));
     }
@@ -159,7 +159,7 @@ class SecurityConfigIntegrationTest {
         mockMvc.perform(options(ADMIN)
                         .header(HttpHeaders.ORIGIN, "http://localhost:3000")
                         .header(HttpHeaders.ACCESS_CONTROL_REQUEST_METHOD, "HEAD"))
-                .andExpect(status().isForbidden())
+                .andExpect(forbiddenJson(ADMIN))
                 .andExpect(header().doesNotExist(HttpHeaders.ACCESS_CONTROL_ALLOW_ORIGIN));
     }
 
@@ -169,7 +169,7 @@ class SecurityConfigIntegrationTest {
                         .header(HttpHeaders.ORIGIN, "http://localhost:5173")
                         .header(HttpHeaders.ACCESS_CONTROL_REQUEST_METHOD, "POST")
                         .header(HttpHeaders.ACCESS_CONTROL_REQUEST_HEADERS, "X-Untrusted-Header"))
-                .andExpect(status().isForbidden())
+                .andExpect(forbiddenJson(ADMIN))
                 .andExpect(header().doesNotExist(HttpHeaders.ACCESS_CONTROL_ALLOW_ORIGIN))
                 .andExpect(header().doesNotExist(HttpHeaders.ACCESS_CONTROL_ALLOW_HEADERS));
     }
@@ -200,16 +200,27 @@ class SecurityConfigIntegrationTest {
     @Test
     void rejectsActualCorsRequestFromUntrustedOrigin() throws Exception {
         mockMvc.perform(get(ME).header(HttpHeaders.ORIGIN, "https://untrusted.example"))
-                .andExpect(status().isForbidden())
+                .andExpect(forbiddenJson(ME))
                 .andExpect(header().doesNotExist(HttpHeaders.ACCESS_CONTROL_ALLOW_ORIGIN))
                 .andExpect(header().doesNotExist(HttpHeaders.ACCESS_CONTROL_ALLOW_CREDENTIALS));
     }
 
-    @Test
-    void optionsWithoutPreflightHeadersStillRequiresAuthentication() throws Exception {
-        mockMvc.perform(options(ME))
-                .andExpect(unauthorizedJson())
-                .andExpect(header().doesNotExist(HttpHeaders.ACCESS_CONTROL_ALLOW_ORIGIN));
+    @ParameterizedTest
+    @ValueSource(strings = {"missing", "malformed", "unknown", "suspended"})
+    void optionsWithoutPreflightHeadersDoesNotRequireAuthentication(String identity) throws Exception {
+        var request = options(ME);
+        if (identity.equals("malformed")) {
+            request.header(HttpHeaders.AUTHORIZATION, "Bearer invalid-token");
+        } else if (identity.equals("unknown") || identity.equals("suspended")) {
+            UUID id = identity.equals("unknown") ? UUID.randomUUID()
+                    : saveUser(LmsRole.STUDENT, AccessStatus.SUSPENDED).getUserId();
+            request.header(HttpHeaders.AUTHORIZATION, "Bearer " + token(id.toString()));
+        }
+        mockMvc.perform(request)
+                .andExpect(status().isOk())
+                .andExpect(header().doesNotExist(HttpHeaders.WWW_AUTHENTICATE))
+                .andExpect(header().doesNotExist(HttpHeaders.ACCESS_CONTROL_ALLOW_ORIGIN))
+                .andExpect(content().string(""));
     }
 
     @ParameterizedTest

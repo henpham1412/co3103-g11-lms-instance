@@ -95,6 +95,11 @@ public final class JwtTestSupport implements AutoCloseable {
 
     public static Stream<Arguments> fractionalTimestampBoundaries() {
         return Stream.of(
+                Arguments.of("iat", "60.4", false),
+                Arguments.of("iat", "60.000000001", false),
+                Arguments.of("iat", "60.000000000001", false),
+                Arguments.of("iat", "60", true),
+                Arguments.of("iat", "59.999999999", true),
                 Arguments.of("nbf", "60.4", false),
                 Arguments.of("nbf", "60.000000001", false),
                 Arguments.of("nbf", "60.000000000001", false),

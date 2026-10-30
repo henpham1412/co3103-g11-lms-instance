@@ -48,7 +48,9 @@ import java.util.stream.Collectors;
 import java.util.stream.Stream;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.doThrow;
+import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.reset;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
@@ -111,11 +113,36 @@ class SecurityErrorDispatchIntegrationTest {
     }
 
     static Stream<Arguments> databaseFailuresAndAcceptHeaders() {
-        return Stream.of("application/json", "text/html", "application/xml", "*/*", null)
+        return Stream.of("application/json", "text/html", "application/xml", "*/*", null,
+                        "application/json;q=0", "text/html;q=1, application/json;q=0",
+                        "*/*;q=0", "not-a-media-type")
                 .flatMap(accept -> Stream.of(
                         Arguments.of(new DataAccessResourceFailureException(PRIVATE_DETAILS), accept),
                         Arguments.of(new CannotCreateTransactionException("Could not open database connection",
                                 new SQLException(PRIVATE_DETAILS)), accept)));
+    }
+
+    @ParameterizedTest
+    @NullSource
+    @ValueSource(strings = {"http://localhost:3000", "http://localhost:5173"})
+    void optionsDoesNotQueryLocalAccessDuringDatabaseOutage(String origin) throws Exception {
+        doThrow(new DataAccessResourceFailureException(PRIVATE_DETAILS))
+                .when(repository).findById(user.getUserId());
+        var request = HttpRequest.newBuilder(URI.create("http://127.0.0.1:" + port + ME))
+                .timeout(Duration.ofSeconds(10)).method("OPTIONS", HttpRequest.BodyPublishers.noBody())
+                .header(HttpHeaders.AUTHORIZATION, "Bearer " + token(user.getUserId()));
+        if (origin != null) {
+            request.header(HttpHeaders.ORIGIN, origin)
+                    .header(HttpHeaders.ACCESS_CONTROL_REQUEST_METHOD, "POST");
+        }
+        try (var client = HttpClient.newHttpClient()) {
+            var response = client.send(request.build(), HttpResponse.BodyHandlers.ofString());
+            assertThat(response.statusCode()).isEqualTo(200);
+            assertThat(response.body()).isEmpty();
+            assertThat(response.headers().allValues(HttpHeaders.WWW_AUTHENTICATE)).isEmpty();
+        }
+        verify(repository, never()).findById(any());
+        assertThat(controller.invocations).hasValue(0);
     }
 
     @ParameterizedTest
@@ -206,14 +233,16 @@ class SecurityErrorDispatchIntegrationTest {
         assertThat(response.headers().firstValue(HttpHeaders.CACHE_CONTROL).orElseThrow()).contains("no-store");
         assertThat(response.headers().allValues(HttpHeaders.SET_COOKIE)).isEmpty();
         var body = objectMapper.readTree(response.body());
-        assertThat(body.size()).isEqualTo(4);
+        assertThat(body.size()).isEqualTo(5);
         assertThat(body.get("status").asInt()).isEqualTo(status);
         assertThat(body.get("error").asString()).isEqualTo(error);
+        assertThat(body.get("message").asString()).isEqualTo(status >= 500
+                ? "An unexpected server error occurred." : error);
         assertThat(body.get("path").asString()).isEqualTo(path);
         assertThat(Instant.parse(body.get("timestamp").asString()))
                 .isBetween(Instant.now().minusSeconds(60), Instant.now());
         assertThat(response.body()).doesNotContain("private-db", "private-password", "SELECT", "lms_user_access",
-                "Exception", "private-query", "trace", "message");
+                "Exception", "private-query", "trace");
     }
 
     private void assertSuccessfulLocalAccess(HttpResponse<String> response) {

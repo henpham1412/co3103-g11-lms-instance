@@ -36,7 +36,8 @@ and verified implementation components.
   Compare the original decimal timestamps against the injected clock before
   converting them to nanosecond-resolution `Instant` claims. Accept `exp` at
   exactly `now - 60s` and `nbf` at exactly `now + 60s`, rejecting values beyond
-  those limits without rounding. Require `exp > iat`; valid sub-second
+  those limits without rounding. Also require `iat <= now + 60s`, using the
+  same exact decimal comparison. Require `exp > iat`; valid sub-second
   lifespans must survive token construction without whole-second truncation.
 - Missing or malformed tokens, invalid signatures, unsupported algorithms,
   invalid issuer, expired tokens, and missing or malformed required claims
@@ -64,13 +65,24 @@ and verified implementation components.
   servlet ERROR dispatches may render the safe error response; ordinary requests
   to `/error` still require an active local role. Internal errors always use
   `Content-Type: application/json;charset=UTF-8`, regardless of the `Accept` header.
-  The server-error JSON contains only `timestamp`, `status`, `error`, and the original request `path`
-  (without query parameters), never exception messages, stack traces, or SQL.
+  The server-error JSON contains exactly `timestamp`, `status`, `error`, `message`,
+  and the original request `path` (without query parameters). `message` is a fixed
+  safe explanation, never an exception message, stack trace, or SQL.
   Recovery requires a fresh successful local-access lookup with no authority fallback.
 - `email` and `full_name` are display copies of Central Identity information.
   The identity key is `user_id`, never email. Local email is **not unique** and
   must not have a unique database constraint (DOC-04 section 2.1.5).
   Upgrades from V1 must preserve duplicate email projections through V2 and V3.
+
+## CORS and OPTIONS
+
+- Only `http://localhost:3000` and `http://localhost:5173` are allowed cross-origin
+  browser clients. Allowed methods and headers remain explicitly listed.
+- Allowed preflights and ordinary OPTIONS requests return HTTP 200 before Bearer
+  authentication or local-access lookup, including during a database outage.
+- CORS denials, including invalid origins and rejected preflight methods or
+  headers, return the standard five-field JSON 403 response. OPTIONS does not
+  bypass the CORS whitelist.
 
 ## Administrator bootstrap
 
@@ -95,7 +107,7 @@ and verified implementation components.
 
 ## Standard security error response (DOC-05 alignment)
 
-All 401 and 403 responses use `Content-Type: application/json;charset=UTF-8`
+All 401, 403, and servlet error responses use `Content-Type: application/json;charset=UTF-8`
 and these five fields:
 
 ```json
@@ -116,7 +128,7 @@ retain the HTTP Bearer challenge in `WWW-Authenticate`.
 
 The supplied task explicitly selects this five-field security error envelope.
 The older DOC-05 export uses `{code, message, details?}`; the approved task's
-envelope takes precedence for 401/403 in this implementation.
+envelope takes precedence for security and servlet errors in this implementation.
 
 ## Implementation and component structure
 

@@ -164,7 +164,9 @@ Central Identity remains on `http://localhost:8080` by default.
 Browser clients at `http://localhost:3000` and `http://localhost:5173` may make credentialed
 cross-origin requests using `GET`, `POST`, `PUT`, `DELETE`, `PATCH`, and `OPTIONS`.
 Valid CORS preflight requests are handled before Bearer authentication and may be cached for
-3600 seconds. Actual API requests still require a valid access token and active LMS-local access.
+3600 seconds. Ordinary OPTIONS requests also return 200 without authentication or database
+access. Disallowed CORS requests receive the standard JSON 403 envelope. Other API requests
+require a valid access token and active LMS-local access.
 
 ### 5.6 Bootstrap the Initial Administrator
 

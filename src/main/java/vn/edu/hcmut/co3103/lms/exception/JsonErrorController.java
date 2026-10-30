@@ -45,6 +45,8 @@ public class JsonErrorController implements ErrorController {
                 "timestamp", Instant.now().toString(),
                 "status", status.value(),
                 "error", status.getReasonPhrase(),
+                "message", status.is5xxServerError() ? "An unexpected server error occurred."
+                        : status.getReasonPhrase(),
                 "path", path));
     }
 }

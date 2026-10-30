@@ -158,7 +158,7 @@ class JwtValidationTest {
     }
 
     @ParameterizedTest
-    @ValueSource(strings = {"exp", "nbf"})
+    @ValueSource(strings = {"exp", "iat", "nbf"})
     void rejectsTimestampOutsideClockSkew(String name) throws Exception {
         Map<String, Object> claims = tokens.claims();
         claims.put(name, JwtTestSupport.NOW.plusSeconds(name.equals("exp") ? -90 : 90).getEpochSecond());
@@ -166,7 +166,7 @@ class JwtValidationTest {
     }
 
     @ParameterizedTest
-    @ValueSource(strings = {"exp", "nbf"})
+    @ValueSource(strings = {"exp", "iat", "nbf"})
     void acceptsTimestampInsideClockSkew(String name) throws Exception {
         Map<String, Object> claims = tokens.claims();
         claims.put(name, JwtTestSupport.NOW.plusSeconds(name.equals("exp") ? -30 : 30).getEpochSecond());

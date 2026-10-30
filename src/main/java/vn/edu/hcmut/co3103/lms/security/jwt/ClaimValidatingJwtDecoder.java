@@ -90,6 +90,7 @@ public final class ClaimValidatingJwtDecoder implements JwtDecoder {
             throw new BadJwtException("JWT expiration must be after issuance.");
         }
         if (expiresAt.compareTo(nowSeconds.subtract(CLOCK_SKEW_SECONDS)) < 0
+                || issuedAt.compareTo(nowSeconds.add(CLOCK_SKEW_SECONDS)) > 0
                 || (notBefore != null && notBefore.compareTo(nowSeconds.add(CLOCK_SKEW_SECONDS)) > 0)) {
             throw new BadJwtException("JWT is outside the allowed time window.");
         }

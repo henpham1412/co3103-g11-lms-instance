@@ -19,8 +19,10 @@ import org.springframework.security.web.SecurityFilterChain;
 import org.springframework.web.cors.CorsConfiguration;
 import org.springframework.web.cors.CorsConfigurationSource;
 import org.springframework.web.cors.UrlBasedCorsConfigurationSource;
+import org.springframework.web.filter.CorsFilter;
 import vn.edu.hcmut.co3103.lms.security.JsonAccessDeniedHandler;
 import vn.edu.hcmut.co3103.lms.security.JsonAuthenticationEntryPoint;
+import vn.edu.hcmut.co3103.lms.security.JsonCorsFilter;
 import vn.edu.hcmut.co3103.lms.security.jwt.ClaimValidatingJwtDecoder;
 import vn.edu.hcmut.co3103.lms.security.jwt.JwtSubjectValidator;
 import vn.edu.hcmut.co3103.lms.security.jwt.LocalAccessJwtAuthenticationConverter;
@@ -73,7 +75,7 @@ public class SecurityConfig {
                                            LocalAccessJwtAuthenticationConverter jwtAuthenticationConverter,
                                            CorsConfigurationSource corsConfigurationSource) {
         http.csrf(AbstractHttpConfigurer::disable)
-                .cors(cors -> cors.configurationSource(corsConfigurationSource))
+                .addFilterAt(new JsonCorsFilter(corsConfigurationSource, accessDeniedHandler), CorsFilter.class)
                 .sessionManagement(session -> session
                         .sessionCreationPolicy(SessionCreationPolicy.STATELESS)
                 )
