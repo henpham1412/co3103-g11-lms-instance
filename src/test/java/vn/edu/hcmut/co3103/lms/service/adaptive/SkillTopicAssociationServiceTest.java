@@ -1,8 +1,11 @@
 package vn.edu.hcmut.co3103.lms.service.adaptive;
 
-import jakarta.persistence.EntityNotFoundException;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import vn.edu.hcmut.co3103.lms.exception.AppException;
+
+import static vn.edu.hcmut.co3103.lms.exception.ErrorCode.*;
+import static vn.edu.hcmut.co3103.lms.service.adaptive.ErrorAssertions.assertError;
 import vn.edu.hcmut.co3103.lms.entity.*;
 import vn.edu.hcmut.co3103.lms.repository.adaptive.*;
 import vn.edu.hcmut.co3103.lms.service.adaptive.integration.ClassAccess;
@@ -83,7 +86,7 @@ class SkillTopicAssociationServiceTest {
 
     @Test
     void invalidLessonTopicsCannotCausePartialWrites() {
-        assertThrows(EntityNotFoundException.class,
+        assertError(SKILL_TOPIC_NOT_FOUND,
                 () -> service.replaceLessonTopics(LESSON, List.of(A, UUID.randomUUID())));
         verify(lessons, never()).deleteAll(anyIterable());
         verify(lessons, never()).saveAll(anyIterable());
@@ -93,13 +96,13 @@ class SkillTopicAssociationServiceTest {
     void rejectsCrossClassMappingsBeforeWrites() {
         when(topics.findAllById(Set.of(A))).thenReturn(List.of(
                 new SkillTopic(A, UUID.randomUUID(), "Foreign", null, null)));
-        assertThrows(IllegalArgumentException.class, () -> service.replaceLessonTopics(LESSON, List.of(A)));
+        assertError(RESOURCE_CLASS_MISMATCH, () -> service.replaceLessonTopics(LESSON, List.of(A)));
         verify(lessons, never()).deleteAll(anyIterable());
         when(scope.activityScope(ACTIVITY)).thenReturn(new ActivityScope(CLASS_ID, ActivityKind.ASSIGNMENT));
-        assertThrows(IllegalArgumentException.class, () -> service.replaceActivityTopics(ACTIVITY, List.of(A)));
+        assertError(RESOURCE_CLASS_MISMATCH, () -> service.replaceActivityTopics(ACTIVITY, List.of(A)));
         verify(activities, never()).deleteAll(anyIterable());
         when(scope.activityScope(ACTIVITY)).thenReturn(new ActivityScope(CLASS_ID, ActivityKind.QUIZ));
-        assertThrows(IllegalArgumentException.class, () -> service.replaceQuestionTopics(Q1, List.of(A)));
+        assertError(RESOURCE_CLASS_MISMATCH, () -> service.replaceQuestionTopics(Q1, List.of(A)));
         verify(questions, never()).deleteAll(anyIterable());
     }
 
@@ -115,7 +118,7 @@ class SkillTopicAssociationServiceTest {
 
     @Test
     void rejectsDirectReplacementOfQuizTopics() {
-        assertThrows(IllegalArgumentException.class, () -> service.replaceActivityTopics(ACTIVITY, List.of(A)));
+        assertError(QUIZ_TOPICS_DERIVED, () -> service.replaceActivityTopics(ACTIVITY, List.of(A)));
         verify(activities, never()).deleteAll(anyIterable());
         verify(activities, never()).saveAll(anyIterable());
     }
@@ -183,10 +186,10 @@ class SkillTopicAssociationServiceTest {
 
     @Test
     void unknownResourceAndDeniedAccessPropagateWithoutWrites() {
-        doThrow(new EntityNotFoundException("Missing lesson")).when(scope).classIdForLesson(LESSON);
-        assertThrows(EntityNotFoundException.class, () -> service.replaceLessonTopics(LESSON, List.of(A)));
-        doThrow(new SecurityException("Denied")).when(access).lockForWrite(CLASS_ID);
-        assertThrows(SecurityException.class, () -> service.replaceQuestionTopics(Q1, List.of(A)));
+        doThrow(new AppException(LEARNING_RESOURCE_NOT_FOUND)).when(scope).classIdForLesson(LESSON);
+        assertError(LEARNING_RESOURCE_NOT_FOUND, () -> service.replaceLessonTopics(LESSON, List.of(A)));
+        doThrow(new AppException(CLASS_ACCESS_DENIED)).when(access).lockForWrite(CLASS_ID);
+        assertError(CLASS_ACCESS_DENIED, () -> service.replaceQuestionTopics(Q1, List.of(A)));
         verify(lessons, never()).saveAll(anyIterable());
         verify(questions, never()).saveAll(anyIterable());
     }
@@ -194,15 +197,15 @@ class SkillTopicAssociationServiceTest {
     @Test
     void rejectsUnpersistedQuestionAndDuplicateIds() {
         when(scope.questionIdsForQuizActivity(ACTIVITY)).thenReturn(Set.of(Q2));
-        assertThrows(IllegalStateException.class, () -> service.replaceQuestionTopics(Q1, List.of(A)));
-        assertThrows(IllegalArgumentException.class, () -> service.replaceLessonTopics(LESSON, List.of(A, A)));
+        assertError(RESOURCE_STATE_CONFLICT, () -> service.replaceQuestionTopics(Q1, List.of(A)));
+        assertError(INVALID_TOPIC_ASSOCIATION, () -> service.replaceLessonTopics(LESSON, List.of(A, A)));
         verify(questions, never()).saveAll(anyIterable());
     }
 
     @Test
     void changedHierarchyAbortsBeforeWrites() {
         when(scope.classIdForLesson(LESSON)).thenReturn(CLASS_ID, UUID.randomUUID());
-        assertThrows(IllegalArgumentException.class, () -> service.replaceLessonTopics(LESSON, List.of(A)));
+        assertError(RESOURCE_CLASS_MISMATCH, () -> service.replaceLessonTopics(LESSON, List.of(A)));
         verify(lessons, never()).deleteAll(anyIterable());
     }
 

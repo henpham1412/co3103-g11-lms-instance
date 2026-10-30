@@ -1,6 +1,7 @@
 package vn.edu.hcmut.co3103.lms.service.adaptive;
 
 import org.springframework.transaction.annotation.Transactional;
+import vn.edu.hcmut.co3103.lms.exception.ErrorCode;
 import vn.edu.hcmut.co3103.lms.entity.SkillPrerequisite;
 import vn.edu.hcmut.co3103.lms.entity.SkillPrerequisiteId;
 import vn.edu.hcmut.co3103.lms.entity.SkillTopic;
@@ -43,7 +44,7 @@ public class SkillPrerequisiteService {
         UUID classId = SkillTopicChecks.requireClassId(topics, topicId);
         access.lockForWrite(classId);
         SkillTopicChecks.requireTopic(topics, topicId);
-        SkillTopicChecks.requireTopicsInClass(topics, requested, classId);
+        SkillTopicChecks.requireTopicsInClass(topics, requested, classId, ErrorCode.PREREQUISITE_CLASS_MISMATCH);
 
         Map<UUID, UUID> classTopics = topics.findAllByClassId(classId).stream()
                 .collect(Collectors.toMap(SkillTopic::getSkillTopicId, SkillTopic::getClassId));

@@ -30,9 +30,10 @@ is included. This also avoids adding unsatisfied component dependencies to start
 ## Behavior and transaction boundaries
 
 * SkillTopic create/update use the Entity's normalization and Jakarta validation,
-  including non-null name and maximum length 150. Blank-name rejection is not added
-  without an agreed rule. Names remain case-sensitive; metadata update replaces all
-  editable fields, allowing null description and difficulty. Enum conversion and
+  including a trimmed non-blank name of maximum length 150 and required difficulty.
+  Names remain case-sensitive; metadata update replaces all editable fields, allowing
+  null description. Create/update receive business Command records, with resource
+  IDs passed separately. Enum conversion and
   auditing remain owned by the existing Entity/converter/listener.
 * Every write requires ClassAccess's real class lock/authorization. For topic
   updates/deletes, a scalar repository projection determines the class before the
@@ -50,11 +51,12 @@ is included. This also avoids adding unsatisfied component dependencies to start
   their identity. Old/new topic sets are returned for future LMS-9 integration, but
   this step does not create signals or calculate mastery/recommendations.
 * Repositories and services do not implement HTTP errors or JSON handling. The
-  existing GlobalExceptionHandler is empty; this step does not invent an HTTP error
-  contract. Existing validator-style IllegalArgumentException is used for invalid
-  inputs, IllegalStateException for reference/state conflicts, Jakarta
-  EntityNotFoundException for missing topics and ConstraintViolationException for
-  Entity validation. Upstream adapter authorization failures propagate unchanged.
+  existing GlobalExceptionHandler is extended rather than replaced by a second
+  advice system. AppException carries the shared ErrorCode for validation, missing topics and
+  reference/state conflicts. Upstream adapters must use the agreed class/resource
+  ErrorCodes. GlobalExceptionHandler now handles the DOC-05 error envelope,
+  differentiates Bean Validation from database constraints, and logs unexpected
+  exceptions before returning a safe 500 response.
 
 ## LMS-5 integration (not a replacement Question workflow)
 
@@ -99,3 +101,12 @@ the four existing Spring application tests errored because PostgreSQL at
 localhost:5432 refused the connection. Full verification did not pass. That run
 preceded the final two transaction tests, which subsequently passed in the focused
 suite. No database rollback, concurrency or migration success is claimed.
+
+## Command/error refactor
+
+See [lms8-service-code-guide.md](lms8-service-code-guide.md) for class/method
+explanations and error mappings. V6 adds the required difficulty NOT NULL constraint
+without editing V2-V5. It intentionally fails on legacy NULL values rather than
+backfilling guessed levels. It is not deployable until the upstream parent schema
+and migration ordering are resolved. Historical test results above describe the
+pre-refactor commit; current verification is recorded in the guide.

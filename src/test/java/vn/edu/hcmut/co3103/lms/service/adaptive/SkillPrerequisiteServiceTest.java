@@ -1,8 +1,11 @@
 package vn.edu.hcmut.co3103.lms.service.adaptive;
 
-import jakarta.persistence.EntityNotFoundException;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import vn.edu.hcmut.co3103.lms.exception.AppException;
+
+import static vn.edu.hcmut.co3103.lms.exception.ErrorCode.*;
+import static vn.edu.hcmut.co3103.lms.service.adaptive.ErrorAssertions.assertError;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.ValueSource;
 import vn.edu.hcmut.co3103.lms.entity.SkillPrerequisite;
@@ -92,7 +95,7 @@ class SkillPrerequisiteServiceTest {
             default -> List.of(edge(B, C), edge(C, A));
         };
         when(prerequisites.findAllById_SkillTopicIdIn(any())).thenReturn(existing);
-        assertThrows(IllegalArgumentException.class,
+        assertError(kind == 0 ? PREREQUISITE_SELF_REFERENCE : PREREQUISITE_CYCLE,
                 () -> service.replace(A, List.of(kind == 0 ? A : B)));
         verify(prerequisites, never()).deleteAll(anyIterable());
         verify(prerequisites, never()).saveAll(anyIterable());
@@ -102,15 +105,15 @@ class SkillPrerequisiteServiceTest {
     void rejectsForeignClassAndMissingTopicsBeforeAnyWrite() {
         when(topics.findAllById(Set.of(B))).thenReturn(List.of(
                 new SkillTopic(B, UUID.randomUUID(), "Foreign", null, null)));
-        assertThrows(IllegalArgumentException.class, () -> service.replace(A, List.of(B)));
-        assertThrows(EntityNotFoundException.class, () -> service.replace(A, List.of(UUID.randomUUID())));
+        assertError(PREREQUISITE_CLASS_MISMATCH, () -> service.replace(A, List.of(B)));
+        assertError(SKILL_TOPIC_NOT_FOUND, () -> service.replace(A, List.of(UUID.randomUUID())));
         verify(prerequisites, never()).deleteAll(anyIterable());
     }
 
     @Test
     void rejectsDuplicateAndNullIdsBeforeLocking() {
-        assertThrows(IllegalArgumentException.class, () -> service.replace(A, List.of(B, B)));
-        assertThrows(IllegalArgumentException.class,
+        assertError(INVALID_TOPIC_ASSOCIATION, () -> service.replace(A, List.of(B, B)));
+        assertError(INVALID_TOPIC_ASSOCIATION,
                 () -> service.replace(A, java.util.Arrays.asList(B, null)));
         verifyNoInteractions(access);
     }
@@ -127,8 +130,8 @@ class SkillPrerequisiteServiceTest {
     void readsRequireClassAccessAndWriteDenialPreventsMutation() {
         service.list(A);
         verify(access).requireReadAccess(CLASS_ID);
-        doThrow(new SecurityException("Denied")).when(access).lockForWrite(CLASS_ID);
-        assertThrows(SecurityException.class, () -> service.replace(A, List.of(B)));
+        doThrow(new AppException(CLASS_ACCESS_DENIED)).when(access).lockForWrite(CLASS_ID);
+        assertError(CLASS_ACCESS_DENIED, () -> service.replace(A, List.of(B)));
         verify(prerequisites, never()).deleteAll(anyIterable());
     }
 

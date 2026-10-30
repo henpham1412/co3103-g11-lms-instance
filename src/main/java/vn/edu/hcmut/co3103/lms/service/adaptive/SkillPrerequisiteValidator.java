@@ -1,5 +1,8 @@
 package vn.edu.hcmut.co3103.lms.service.adaptive;
 
+import vn.edu.hcmut.co3103.lms.exception.AppException;
+import vn.edu.hcmut.co3103.lms.exception.ErrorCode;
+
 import java.util.ArrayDeque;
 import java.util.HashMap;
 import java.util.HashSet;
@@ -27,8 +30,7 @@ public final class SkillPrerequisiteValidator {
      * Every referenced topic must be present. Separate classes may have independent
      * graphs, but an edge cannot cross classes. Inputs are not modified.
      *
-     * @throws IllegalArgumentException for unknown topics, self-links, cross-class
-     *                                  edges or cycles
+     * @throws AppException for unknown topics, self-links, cross-class edges or cycles
      * @throws NullPointerException for null inputs, IDs, class IDs or edges
      */
     public static void validate(Map<UUID, UUID> topicClassIds, Set<PrerequisiteEdge> edges) {
@@ -43,10 +45,10 @@ public final class SkillPrerequisiteValidator {
             UUID targetClass = requireClassId(topics, target);
             UUID prerequisiteClass = requireClassId(topics, prerequisite);
             if (target.equals(prerequisite)) {
-                throw new IllegalArgumentException("A topic cannot be its own prerequisite");
+                throw new AppException(ErrorCode.PREREQUISITE_SELF_REFERENCE);
             }
             if (!targetClass.equals(prerequisiteClass)) {
-                throw new IllegalArgumentException("Prerequisite topics must belong to the same class");
+                throw new AppException(ErrorCode.PREREQUISITE_CLASS_MISMATCH);
             }
             outgoing.computeIfAbsent(target, ignored -> new HashSet<>()).add(prerequisite);
             incomingCounts.putIfAbsent(target, 0);
@@ -72,7 +74,7 @@ public final class SkillPrerequisiteValidator {
             }
         }
         if (visited != incomingCounts.size()) {
-            throw new IllegalArgumentException("Prerequisite graph must be acyclic");
+            throw new AppException(ErrorCode.PREREQUISITE_CYCLE);
         }
     }
 
@@ -105,7 +107,7 @@ public final class SkillPrerequisiteValidator {
     private static UUID requireClassId(Map<UUID, UUID> topics, UUID topicId) {
         UUID classId = topics.get(topicId);
         if (classId == null) {
-            throw new IllegalArgumentException("Unknown skill topic: " + topicId);
+            throw new AppException(ErrorCode.SKILL_TOPIC_NOT_FOUND);
         }
         return classId;
     }

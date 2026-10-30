@@ -8,6 +8,7 @@ import jakarta.persistence.PrePersist;
 import jakarta.persistence.PreUpdate;
 import jakarta.persistence.Table;
 import jakarta.persistence.UniqueConstraint;
+import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.NotNull;
 import jakarta.validation.constraints.Size;
 import lombok.AccessLevel;
@@ -39,7 +40,7 @@ public class SkillTopic extends AuditedEntity {
     @Column(name = "class_id", nullable = false)
     private UUID classId;
 
-    @NotNull
+    @NotBlank
     @Size(max = 150)
     @Column(name = "name", nullable = false, length = 150)
     private String name;
@@ -49,8 +50,9 @@ public class SkillTopic extends AuditedEntity {
     private String description;
 
     @Setter
+    @NotNull
     @Convert(converter = TopicDifficultyConverter.class)
-    @Column(name = "difficulty_level", columnDefinition = "SMALLINT")
+    @Column(name = "difficulty_level", nullable = false, columnDefinition = "SMALLINT")
     private TopicDifficulty difficultyLevel;
 
     public SkillTopic(

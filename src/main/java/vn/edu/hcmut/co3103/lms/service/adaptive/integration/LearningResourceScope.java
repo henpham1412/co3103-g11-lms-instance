@@ -3,7 +3,11 @@ package vn.edu.hcmut.co3103.lms.service.adaptive.integration;
 import java.util.Set;
 import java.util.UUID;
 
-/** Required LMS-4/LMS-5 hierarchy queries, using their canonical models. */
+/**
+ * Required LMS-4/LMS-5 hierarchy queries, using their canonical models.
+ * Missing resources use AppException(LEARNING_RESOURCE_NOT_FOUND); inconsistent
+ * class relationships use AppException(RESOURCE_CLASS_MISMATCH).
+ */
 public interface LearningResourceScope {
 
     enum ActivityKind { QUIZ, ASSIGNMENT }

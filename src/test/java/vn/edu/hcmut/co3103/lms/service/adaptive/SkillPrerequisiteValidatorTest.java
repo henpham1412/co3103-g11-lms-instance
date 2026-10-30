@@ -1,6 +1,10 @@
 package vn.edu.hcmut.co3103.lms.service.adaptive;
 
 import org.junit.jupiter.api.Test;
+import vn.edu.hcmut.co3103.lms.exception.AppException;
+
+import static vn.edu.hcmut.co3103.lms.exception.ErrorCode.*;
+import static vn.edu.hcmut.co3103.lms.service.adaptive.ErrorAssertions.assertError;
 
 import java.util.HashMap;
 import java.util.HashSet;
@@ -47,38 +51,38 @@ class SkillPrerequisiteValidatorTest {
 
     @Test
     void rejectsSelfLink() {
-        assertThrows(IllegalArgumentException.class, () -> validate(TOPICS, Set.of(edge(A, A))));
+        assertError(PREREQUISITE_SELF_REFERENCE, () -> validate(TOPICS, Set.of(edge(A, A))));
     }
 
     @Test
     void rejectsCrossClassEdge() {
         Map<UUID, UUID> topics = Map.of(A, CLASS_ID, B, OTHER_CLASS_ID);
-        assertThrows(IllegalArgumentException.class, () -> validate(topics, Set.of(edge(A, B))));
+        assertError(PREREQUISITE_CLASS_MISMATCH, () -> validate(topics, Set.of(edge(A, B))));
     }
 
     @Test
     void rejectsUnknownTargetOrPrerequisite() {
-        assertThrows(IllegalArgumentException.class,
+        assertError(SKILL_TOPIC_NOT_FOUND,
                 () -> validate(Map.of(A, CLASS_ID), Set.of(edge(A, B))));
-        assertThrows(IllegalArgumentException.class,
+        assertError(SKILL_TOPIC_NOT_FOUND,
                 () -> validate(Map.of(B, CLASS_ID), Set.of(edge(A, B))));
     }
 
     @Test
     void rejectsDirectCycle() {
-        assertThrows(IllegalArgumentException.class,
+        assertError(PREREQUISITE_CYCLE,
                 () -> validate(TOPICS, Set.of(edge(A, B), edge(B, A))));
     }
 
     @Test
     void rejectsIndirectCycle() {
-        assertThrows(IllegalArgumentException.class,
+        assertError(PREREQUISITE_CYCLE,
                 () -> validate(TOPICS, Set.of(edge(A, B), edge(B, C), edge(C, A))));
     }
 
     @Test
     void rejectsCycleInDisconnectedComponent() {
-        assertThrows(IllegalArgumentException.class,
+        assertError(PREREQUISITE_CYCLE,
                 () -> validate(TOPICS, Set.of(edge(A, B), edge(C, D), edge(D, C))));
     }
 
@@ -94,31 +98,31 @@ class SkillPrerequisiteValidatorTest {
         assertDoesNotThrow(() -> validateReplacement(
                 TOPICS, Set.of(edge(A, B), edge(B, A)), A, Set.of()));
         // B -> A must remain, so a replacement A -> B must still be rejected.
-        assertThrows(IllegalArgumentException.class, () -> validateReplacement(
+        assertError(PREREQUISITE_CYCLE, () -> validateReplacement(
                 TOPICS, Set.of(edge(B, A)), A, Set.of(B)));
     }
 
     @Test
     void rejectsReplacementCreatingIndirectCycle() {
-        assertThrows(IllegalArgumentException.class, () -> validateReplacement(
+        assertError(PREREQUISITE_CYCLE, () -> validateReplacement(
                 TOPICS, Set.of(edge(A, B), edge(B, C)), C, Set.of(A)));
     }
 
     @Test
     void replacementDoesNotRemoveOtherTargetsEdges() {
-        assertThrows(IllegalArgumentException.class, () -> validateReplacement(
+        assertError(PREREQUISITE_CYCLE, () -> validateReplacement(
                 TOPICS, Set.of(edge(B, C), edge(C, B)), A, Set.of(D)));
     }
 
     @Test
     void rejectsInvalidReplacementReferences() {
-        assertThrows(IllegalArgumentException.class,
+        assertError(PREREQUISITE_SELF_REFERENCE,
                 () -> validateReplacement(TOPICS, Set.of(), A, Set.of(A)));
-        assertThrows(IllegalArgumentException.class,
+        assertError(SKILL_TOPIC_NOT_FOUND,
                 () -> validateReplacement(Map.of(A, CLASS_ID), Set.of(), A, Set.of(B)));
-        assertThrows(IllegalArgumentException.class,
+        assertError(SKILL_TOPIC_NOT_FOUND,
                 () -> validateReplacement(Map.of(A, CLASS_ID), Set.of(), B, Set.of()));
-        assertThrows(IllegalArgumentException.class, () -> validateReplacement(
+        assertError(PREREQUISITE_CLASS_MISMATCH, () -> validateReplacement(
                 Map.of(A, CLASS_ID, B, OTHER_CLASS_ID), Set.of(), A, Set.of(B)));
     }
 
@@ -128,7 +132,7 @@ class SkillPrerequisiteValidatorTest {
         Set<PrerequisiteEdge> edges = new HashSet<>(Set.of(edge(A, B)));
         Set<UUID> prerequisites = new HashSet<>(Set.of(C));
         validateReplacement(topics, edges, A, prerequisites);
-        assertThrows(IllegalArgumentException.class,
+        assertError(PREREQUISITE_CYCLE,
                 () -> validateReplacement(topics, edges, B, Set.of(A)));
         assertEquals(TOPICS, topics);
         assertEquals(Set.of(edge(A, B)), edges);
