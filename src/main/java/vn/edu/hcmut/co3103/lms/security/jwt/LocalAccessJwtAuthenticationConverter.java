@@ -39,7 +39,7 @@ public final class LocalAccessJwtAuthenticationConverter implements Converter<Jw
                 .orElseGet(List::of);
 
         // A valid identity without active local access has no authorities. SecurityConfig
-        // requires a local role on every request, producing 403 rather than an authentication failure.
+        // requires a local role on ordinary requests, producing 403 rather than an authentication failure.
         return new JwtAuthenticationToken(jwt, authorities, userId.toString());
     }
 }

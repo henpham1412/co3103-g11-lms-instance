@@ -59,6 +59,13 @@ that all LMS-2 features are already implemented.
 - Local status and role must be checked for each request; reuse of the same
   token must not preserve revoked access. Resource ownership and class
   membership checks remain additional requirements.
+- Infrastructure failures during local-access lookup fail closed and return
+  **HTTP 500 Internal Server Error**, without a Bearer challenge. Internal
+  servlet ERROR dispatches may render the safe error response; ordinary requests
+  to `/error` still require an active local role. The default server-error JSON
+  contains only `timestamp`, `status`, `error`, and the original request `path`
+  (without query parameters), never exception messages, stack traces, or SQL.
+  Recovery requires a fresh successful local-access lookup with no authority fallback.
 - `email` and `full_name` are display copies of Central Identity information.
   The identity key is `user_id`, never email. Local email is **not unique** and
   must not have a unique database constraint (DOC-04 section 2.1.5).
@@ -115,7 +122,7 @@ envelope takes precedence for 401/403 in this implementation.
 - Commit 2 implements local database role/status enforcement, method security,
   and the JSON 403 handler. Its five previously disabled integration-test
   methods are enabled. The JWT converter grants authorities only for active
-  local access; every request requires one of the three local roles. A valid
+  local access; every ordinary request requires one of the three local roles. A valid
   identity with no local authorities therefore receives 403. Keep this local
   role requirement when adding endpoint authorization rules; checking only
   `authenticated()` does not establish local LMS access.
