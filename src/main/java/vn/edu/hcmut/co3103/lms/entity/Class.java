@@ -15,7 +15,7 @@ import java.time.Instant;
 import java.util.UUID;
 
 @Entity
-@Table(name = "classes")
+@Table(name = "class")
 public class Class {
 
     @Id

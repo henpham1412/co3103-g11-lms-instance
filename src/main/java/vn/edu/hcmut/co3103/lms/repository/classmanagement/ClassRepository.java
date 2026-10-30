@@ -34,7 +34,7 @@ public interface ClassRepository extends JpaRepository<Class, UUID> {
                     WHERE cm.class_id = c.class_id
                       AND cm.status = 'ACTIVE') AS "activeMemberCount",
                    c.max_capacity AS "maxCapacity"
-            FROM classes c
+            FROM class c
             JOIN lms_user_access u ON u.user_id = c.tutor_id
             WHERE c.status = 'ACTIVE'
               AND u.access_status = 'ACTIVE'
@@ -47,7 +47,7 @@ public interface ClassRepository extends JpaRepository<Class, UUID> {
             """,
             countQuery = """
                     SELECT COUNT(*)
-                    FROM classes c
+                    FROM class c
                     JOIN lms_user_access u ON u.user_id = c.tutor_id
                     WHERE c.status = 'ACTIVE'
                       AND u.access_status = 'ACTIVE'

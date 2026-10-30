@@ -43,6 +43,20 @@ public class ClassMembershipService {
         );
     }
 
+    /**
+     * Requires an active class membership before accessing protected learning resources.
+     * The caller must pass the student ID resolved from the authenticated identity.
+     */
+    @Transactional(readOnly = true)
+    public void requireActiveMembership(UUID classId, UUID studentId) {
+        if (!hasActiveMembership(classId, studentId)) {
+            throw new ResponseStatusException(
+                    HttpStatus.FORBIDDEN,
+                    "MEMBERSHIP_REQUIRED"
+            );
+        }
+    }
+
     @Transactional
     public ClassMember requestToJoin(UUID classId, UUID studentId) {
         Class targetClass = requireClassForUpdate(classId);
