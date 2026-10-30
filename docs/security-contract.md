@@ -22,8 +22,22 @@ that all LMS-2 features are already implemented.
   - `exp` is a mandatory, valid NumericDate expiration timestamp. Tokens without
     expiration are invalid, even if their signature verifies.
   - `iat` is a mandatory, valid NumericDate issuance timestamp.
+- Validate raw `exp`, `iat`, and optional `nbf` before timestamp conversion:
+  values must be finite JSON numbers in the range `0 <= seconds < 253402300800`
+  (1970 through 9999). Check bounds using exact decimal values before any
+  floating-point coercion, so tiny negative values and high-precision fractions
+  retain their sign and range. This prevents numeric coercion and millisecond overflow.
+- Optional `scope` and `scp` must be strings or arrays containing only strings.
+  Optional `cnf` must be an object; its `x5t#S256` member, when present, must be
+  a string. Explicit nulls and malformed shapes are invalid tokens, producing
+  the same JSON 401 response and Bearer challenge at the original request URI.
 - Retain standard timestamp validation, including `nbf` when supplied. Clock
   skew tolerance must not exceed **60 seconds**.
+  Compare the original decimal timestamps against the injected clock before
+  converting them to nanosecond-resolution `Instant` claims. Accept `exp` at
+  exactly `now - 60s` and `nbf` at exactly `now + 60s`, rejecting values beyond
+  those limits without rounding. Require `exp > iat`; valid sub-second
+  lifespans must survive token construction without whole-second truncation.
 - Missing or malformed tokens, invalid signatures, unsupported algorithms,
   invalid issuer, expired tokens, and missing or malformed required claims
   result in **HTTP 401 Unauthorized** with the JSON format below.

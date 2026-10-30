@@ -1,0 +1,168 @@
+package vn.edu.hcmut.co3103.lms.security.jwt;
+
+import com.nimbusds.jose.JOSEException;
+import com.nimbusds.jose.JWSAlgorithm;
+import com.nimbusds.jose.JWSHeader;
+import com.nimbusds.jose.JWSObject;
+import com.nimbusds.jose.Payload;
+import com.nimbusds.jose.crypto.MACSigner;
+import com.nimbusds.jose.crypto.RSASSASigner;
+import com.nimbusds.jose.jwk.JWKSet;
+import com.nimbusds.jose.jwk.RSAKey;
+import com.nimbusds.jose.jwk.gen.RSAKeyGenerator;
+import com.nimbusds.jwt.JWTClaimsSet;
+import com.nimbusds.jwt.PlainJWT;
+import com.sun.net.httpserver.HttpServer;
+import org.junit.jupiter.params.provider.Arguments;
+
+import java.io.IOException;
+import java.math.BigDecimal;
+import java.math.BigInteger;
+import java.net.InetSocketAddress;
+import java.nio.charset.StandardCharsets;
+import java.text.ParseException;
+import java.time.Clock;
+import java.time.Instant;
+import java.time.ZoneOffset;
+import java.util.Arrays;
+import java.util.LinkedHashMap;
+import java.util.List;
+import java.util.Map;
+import java.util.stream.Stream;
+
+/** Real signatures and an in-process public JWKS endpoint; no external IdP is needed. */
+public final class JwtTestSupport implements AutoCloseable {
+
+    public static final String ISSUER = "https://identity.example.test";
+    public static final String SUBJECT = "550e8400-e29b-41d4-a716-446655440000";
+
+    public static final Instant NOW = Instant.parse("2030-01-01T00:00:00.500Z");
+    public static final Clock CLOCK = Clock.fixed(NOW, ZoneOffset.UTC);
+
+    private final RSAKey key;
+    private final HttpServer server;
+
+    public JwtTestSupport() throws JOSEException, IOException {
+        key = new RSAKeyGenerator(2048).keyID("test-key").generate();
+        byte[] publicKeys = new JWKSet(key.toPublicJWK()).toString().getBytes(StandardCharsets.UTF_8);
+        server = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
+        server.createContext("/jwks", exchange -> {
+            try (exchange) {
+                exchange.getResponseHeaders().set("Content-Type", "application/json");
+                exchange.sendResponseHeaders(200, publicKeys.length);
+                exchange.getResponseBody().write(publicKeys);
+            }
+        });
+        server.start();
+    }
+
+    public String jwksUri() {
+        return "http://127.0.0.1:" + server.getAddress().getPort() + "/jwks";
+    }
+
+    public Map<String, Object> claims() {
+        long now = NOW.getEpochSecond();
+        Map<String, Object> claims = new LinkedHashMap<>();
+        claims.put("iss", ISSUER);
+        claims.put("sub", SUBJECT);
+        claims.put("iat", now - 300);
+        claims.put("exp", now + 300);
+        return claims;
+    }
+
+    public static Stream<Arguments> invalidNumericDates() {
+        return Stream.of("exp", "iat", "nbf").flatMap(name -> Stream.of(
+                -9223372036854776L, Long.MAX_VALUE, Long.MIN_VALUE,
+                18446744073709552L, new BigInteger("18446744075409551616"),
+                253402300800L, -1L, -0.5, 1e100, "1700000000",
+                new BigDecimal("-1e-400"), new BigDecimal("-1e-10000"),
+                new BigDecimal("253402300800.000000000001"), new BigDecimal("1e400"))
+                .map(value -> Arguments.of(name, value)));
+    }
+
+    public static Stream<Arguments> validPreciseNumericDates() {
+        return Stream.concat(Stream.of("iat", "nbf").flatMap(name -> Stream.of(
+                new BigDecimal("1e-400"), new BigDecimal("0e-400"))
+                .map(value -> Arguments.of(name, value))), Stream.of(
+                "253402300799.000000000001", "253402300799.999999999999",
+                "2.53402300799999999999999e11")
+                .map(value -> Arguments.of("exp", new BigDecimal(value))));
+    }
+
+    public static BigDecimal numericDate(Instant instant) {
+        return BigDecimal.valueOf(instant.getEpochSecond()).add(BigDecimal.valueOf(instant.getNano(), 9));
+    }
+
+    public static Stream<Arguments> fractionalTimestampBoundaries() {
+        return Stream.of(
+                Arguments.of("nbf", "60.4", false),
+                Arguments.of("nbf", "60.000000001", false),
+                Arguments.of("nbf", "60.000000000001", false),
+                Arguments.of("nbf", "60", true),
+                Arguments.of("nbf", "59.999999999", true),
+                Arguments.of("nbf", "59.6", true),
+                Arguments.of("nbf", "0", true),
+                Arguments.of("exp", "-59.6", true),
+                Arguments.of("exp", "-59.999999999", true),
+                Arguments.of("exp", "-60", true),
+                Arguments.of("exp", "-60.000000001", false),
+                Arguments.of("exp", "-60.000000000001", false),
+                Arguments.of("exp", "-60.4", false),
+                Arguments.of("exp", "0", true));
+    }
+
+    public static Stream<Arguments> fractionalLifespans() {
+        return Stream.of(
+                Arguments.of("0.25", "0.75", true),
+                Arguments.of("0.499999999", "0.500000001", true),
+                Arguments.of("0.5", "0.500000001", true),
+                Arguments.of("0.5", "0.5", false),
+                Arguments.of("0.500000001", "0.5", false));
+    }
+
+    public static Stream<Arguments> malformedOptionalClaims() {
+        return Stream.concat(Stream.of("scope", "scp").flatMap(name -> Stream.of(
+                Arguments.of(name, 123), Arguments.of(name, true), Arguments.of(name, null),
+                Arguments.of(name, Map.of("read", true)), Arguments.of(name, List.of(123)),
+                Arguments.of(name, List.of("read", 123)), Arguments.of(name, Arrays.asList("read", null)),
+                Arguments.of(name, List.of(List.of("read"))))), Stream.of(
+                Arguments.of("cnf", List.of("bad")), Arguments.of("cnf", "bad"),
+                Arguments.of("cnf", 123), Arguments.of("cnf", true), Arguments.of("cnf", null),
+                Arguments.of("cnf", Map.of("x5t#S256", 123)),
+                Arguments.of("cnf", Map.of("x5t#S256", List.of("bad"))),
+                Arguments.of("cnf", Map.of("x5t#S256", Map.of("bad", true))),
+                Arguments.of("cnf", java.util.Collections.singletonMap("x5t#S256", null))));
+    }
+
+    public static Stream<Arguments> validOptionalClaims() {
+        return Stream.concat(Stream.of("scope", "scp").flatMap(name -> Stream.of(
+                Arguments.of(name, "read write"), Arguments.of(name, List.of("read", "write")),
+                Arguments.of(name, ""), Arguments.of(name, List.of()))),
+                Stream.of(Arguments.of("cnf", Map.of())));
+    }
+
+    public String token(Map<String, Object> claims) throws JOSEException {
+        return token(claims, JWSAlgorithm.RS256);
+    }
+
+    public String token(Map<String, Object> claims, JWSAlgorithm algorithm) throws JOSEException {
+        JWSObject token = new JWSObject(new JWSHeader.Builder(algorithm).keyID(key.getKeyID()).build(),
+                new Payload(claims));
+        if (JWSAlgorithm.HS256.equals(algorithm)) {
+            // Deliberately use public-key material as an HMAC secret to test algorithm confusion.
+            token.sign(new MACSigner(key.toRSAPublicKey().getEncoded()));
+        } else {
+            token.sign(new RSASSASigner(key));
+        }
+        return token.serialize();
+    }
+
+    public String unsignedToken() throws ParseException {
+        return new PlainJWT(JWTClaimsSet.parse(claims())).serialize();
+    }
+
+    @Override
+    public void close() {
+        server.stop(0);
+    }
+}
