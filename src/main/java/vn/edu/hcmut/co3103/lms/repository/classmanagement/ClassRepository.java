@@ -30,7 +30,7 @@ public interface ClassRepository extends JpaRepository<Class, UUID> {
                    u.user_id AS "tutorId",
                    u.full_name AS "tutorName",
                    (SELECT COUNT(*)
-                    FROM class_members cm
+                    FROM class_member cm
                     WHERE cm.class_id = c.class_id
                       AND cm.status = 'ACTIVE') AS "activeMemberCount",
                    c.max_capacity AS "maxCapacity"
