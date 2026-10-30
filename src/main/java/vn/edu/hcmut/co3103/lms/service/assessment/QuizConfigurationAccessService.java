@@ -46,6 +46,7 @@ public class QuizConfigurationAccessService {
             throw new ResponseStatusException(HttpStatus.FORBIDDEN, "FORBIDDEN");
         }
         membershipService.requireActiveMembership(targetClass.getClassId(), userId);
+        // TODO: optimize this by delegating this to the actual responsible service
         if (targetClass.getStatus() != Class.ClassStatus.ACTIVE
                 || !"PUBLISHED".equals(chapter.getStatus())
                 || !"PUBLISHED".equals(lesson.getStatus())

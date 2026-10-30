@@ -29,4 +29,25 @@ public class QuizService {
                 quiz.getAttemptsAllowed(), quiz.getGradingMethod(), quiz.getOpeningTime(),
                 quiz.getDeadline(), quiz.getRequiredScore());
     }
+
+    /*
+     * Contract-based alternative once the teammate's proposed Learning Content
+     * service is implemented. Their getActivity(activityId, userId) is the
+     * applicable function here: it should resolve the Activity and apply the
+     * common Tutor ownership / Student membership and published-path checks.
+     * QuizService then owns only assessment configuration lookup and mapping.
+     *
+     * public QuizConfigurationResponse getQuizConfiguration(UUID activityId, UUID userId) {
+     *     Activity activity = activityService.getActivity(activityId, userId);
+     *     Quiz quiz = quizRepository.findByActivity_Id(activity.getId())
+     *             .orElseThrow(() -> new ResponseStatusException(
+     *                     HttpStatus.NOT_FOUND, "QUIZ_NOT_FOUND"));
+     *     return new QuizConfigurationResponse(
+     *             quiz.getId(), quiz.getTimeLimitMinutes(), quiz.getAttemptsAllowed(),
+     *             quiz.getGradingMethod(), quiz.getOpeningTime(), quiz.getDeadline(),
+     *             quiz.getRequiredScore());
+     * }
+     *
+     * This endpoint intentionally returns quiz settings only, never questions/options.
+     */
 }
