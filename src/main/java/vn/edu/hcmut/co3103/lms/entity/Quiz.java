@@ -61,5 +61,10 @@ public class Quiz {
     @Column(name = "updated_at", nullable = false)
     private OffsetDateTime updatedAt;
 
+    @PreUpdate
+    protected void onUpdate() {
+        updatedAt = OffsetDateTime.now();
+    }
+
 
 }

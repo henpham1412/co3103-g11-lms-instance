@@ -27,9 +27,7 @@ public class QuizConfigurationAccessService {
     }
 
     public void requireCanView(Activity activity, UUID userId) {
-        LmsUserAccess user = userAccessRepository.findById(userId)
-                .filter(access -> "ACTIVE".equals(access.getAccessStatus()))
-                .orElseThrow(() -> new ResponseStatusException(HttpStatus.FORBIDDEN, "FORBIDDEN"));
+        LmsUserAccess user = requireActiveUser(userId);
 
         Lesson lesson = activity.getLesson();
         Chapter chapter = lesson.getChapter();
@@ -53,5 +51,19 @@ public class QuizConfigurationAccessService {
                 || !"PUBLISHED".equals(activity.getStatus())) {
             throw new ResponseStatusException(HttpStatus.NOT_FOUND, "QUIZ_NOT_FOUND");
         }
+    }
+
+    public void requireOwningTutor(Activity activity, UUID userId) {
+        LmsUserAccess user = requireActiveUser(userId);
+        Class targetClass = activity.getLesson().getChapter().getClassField();
+        if (!"TUTOR".equals(user.getLmsRole()) || !targetClass.getTutorId().equals(userId)) {
+            throw new ResponseStatusException(HttpStatus.FORBIDDEN, "FORBIDDEN");
+        }
+    }
+
+    private LmsUserAccess requireActiveUser(UUID userId) {
+        return userAccessRepository.findById(userId)
+                .filter(access -> "ACTIVE".equals(access.getAccessStatus()))
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.FORBIDDEN, "FORBIDDEN"));
     }
 }
