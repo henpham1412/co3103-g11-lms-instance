@@ -17,12 +17,51 @@ import vn.edu.hcmut.co3103.lms.repository.LmsSetupStateRepository;
 import vn.edu.hcmut.co3103.lms.repository.LmsUserAccessRepository;
 
 import java.time.Instant;
+import java.util.List;
 import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 class AdminBootstrapCliIntegrationTest {
+
+    @Test
+    void upgradesV1WithDuplicateEmailProjectionsThroughV2AndV3() {
+        String schema = "bootstrap_v1_upgrade_" + UUID.randomUUID().toString().replace("-", "");
+        UUID firstId = UUID.randomUUID();
+        UUID secondId = UUID.randomUUID();
+        String email = "shared@example.com";
+        try (var context = application(schema).properties("spring.flyway.target=1",
+                "spring.jpa.hibernate.ddl-auto=none").run()) {
+            assertThat(context.getBean(Flyway.class).info().current().getVersion().getVersion()).isEqualTo("1");
+            context.getBean(LmsUserAccessRepository.class).saveAllAndFlush(List.of(
+                    new LmsUserAccess(firstId, "First User", email, LmsRole.STUDENT,
+                            AccessStatus.ACTIVE, null, null, null),
+                    new LmsUserAccess(secondId, "Second User", email, LmsRole.TUTOR,
+                            AccessStatus.SUSPENDED, null, null, null)));
+        }
+
+        try (var context = application(schema).run()) {
+            var flyway = context.getBean(Flyway.class);
+            assertThat(flyway.info().current().getVersion().getVersion()).isEqualTo("3");
+            assertThat(flyway.info().applied()).filteredOn(info -> info.getVersion() != null)
+                    .extracting(info -> info.getVersion().getVersion()).containsExactly("1", "2", "3");
+            var users = context.getBean(LmsUserAccessRepository.class);
+            assertThat(users.findAll()).extracting(LmsUserAccess::getUserId)
+                    .containsExactlyInAnyOrder(firstId, secondId);
+            assertThat(users.findAll()).extracting(LmsUserAccess::getEmail).containsExactly(email, email);
+            var states = context.getBean(LmsSetupStateRepository.class);
+            assertThat(states.findAll()).singleElement().satisfies(state -> {
+                assertThat(state.getId()).isEqualTo(LmsSetupState.GLOBAL_ID);
+                assertThat(state.isCompleted()).isFalse();
+            });
+            users.saveAndFlush(new LmsUserAccess(UUID.randomUUID(), "Third User", email, LmsRole.STUDENT,
+                    AccessStatus.ACTIVE, null, null, null));
+            assertThat(users.count()).isEqualTo(3);
+            states.deleteAllInBatch();
+            users.deleteAllInBatch();
+        }
+    }
 
     @Test
     void actualNonWebStartupBootstrapsAndRemainsClosedAcrossContextRestarts() {

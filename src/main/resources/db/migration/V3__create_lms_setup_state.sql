@@ -1,5 +1,5 @@
 -- Email is a mutable identity projection, never an LMS identity key.
-ALTER TABLE lms_user_access DROP CONSTRAINT uq_lms_user_access_email;
+ALTER TABLE lms_user_access DROP CONSTRAINT IF EXISTS uq_lms_user_access_email;
 
 CREATE TABLE lms_setup_state (
     id VARCHAR(32) PRIMARY KEY,

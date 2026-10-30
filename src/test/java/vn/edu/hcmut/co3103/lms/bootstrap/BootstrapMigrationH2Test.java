@@ -24,7 +24,7 @@ class BootstrapMigrationH2Test {
     void createV2EquivalentSchema() throws SQLException {
         url = "jdbc:h2:mem:" + UUID.randomUUID();
         connection = DriverManager.getConnection(url, "sa", "");
-        // V1/V2 are immutable historical PostgreSQL scripts. V3 must also run on native H2.
+        // V1/V2 use PostgreSQL syntax. Include the legacy constraint to verify V3 cleanup on native H2.
         execute("""
                 CREATE TABLE lms_user_access (
                     user_id UUID PRIMARY KEY,
@@ -43,6 +43,21 @@ class BootstrapMigrationH2Test {
     @AfterEach
     void closeDatabase() throws SQLException {
         connection.close();
+    }
+
+    @Test
+    void migratesWithoutLegacyEmailConstraint() throws SQLException {
+        execute("ALTER TABLE lms_user_access DROP CONSTRAINT uq_lms_user_access_email");
+        insertUser(UUID.randomUUID());
+        insertUser(UUID.randomUUID());
+
+        migrateV3();
+
+        try (var statement = connection.createStatement();
+             var result = statement.executeQuery("SELECT COUNT(*) FROM lms_user_access")) {
+            assertThat(result.next()).isTrue();
+            assertThat(result.getInt(1)).isEqualTo(2);
+        }
     }
 
     @Test

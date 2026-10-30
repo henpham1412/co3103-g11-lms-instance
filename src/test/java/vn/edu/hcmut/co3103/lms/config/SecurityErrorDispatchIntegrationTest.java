@@ -3,9 +3,11 @@ package vn.edu.hcmut.co3103.lms.config;
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
-import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.Arguments;
 import org.junit.jupiter.params.provider.MethodSource;
+import org.junit.jupiter.params.provider.NullSource;
+import org.junit.jupiter.params.provider.ValueSource;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.test.context.SpringBootTest;
@@ -108,38 +110,29 @@ class SecurityErrorDispatchIntegrationTest {
         repository.deleteById(user.getUserId());
     }
 
-    static Stream<RuntimeException> databaseFailures() {
-        return Stream.of(new DataAccessResourceFailureException(PRIVATE_DETAILS),
-                new CannotCreateTransactionException("Could not open database connection",
-                        new SQLException(PRIVATE_DETAILS)));
+    static Stream<Arguments> databaseFailuresAndAcceptHeaders() {
+        return Stream.of("application/json", "text/html", "application/xml", "*/*", null)
+                .flatMap(accept -> Stream.of(
+                        Arguments.of(new DataAccessResourceFailureException(PRIVATE_DETAILS), accept),
+                        Arguments.of(new CannotCreateTransactionException("Could not open database connection",
+                                new SQLException(PRIVATE_DETAILS)), accept)));
     }
 
     @ParameterizedTest
-    @MethodSource("databaseFailures")
-    void failsClosedWithSafeServerErrorAndRecoversUsingTheSameToken(RuntimeException failure) throws Exception {
+    @MethodSource("databaseFailuresAndAcceptHeaders")
+    void failsClosedWithSafeServerErrorAndRecoversUsingTheSameToken(RuntimeException failure,
+                                                                   String accept) throws Exception {
         String token = token(user.getUserId());
         assertSuccessfulLocalAccess(call(ME, token));
         assertThat(controller.invocations).hasValue(1);
 
         doThrow(failure).when(repository).findById(user.getUserId());
         for (int attempt = 0; attempt < 2; attempt++) {
-            var response = call(ME + "?trace=true&message=true&errors=true&exception=true&private=private-query", token);
+            var response = call(ME + "?trace=true&message=true&errors=true&exception=true&private=private-query",
+                    token, accept);
 
-            assertThat(response.statusCode()).isEqualTo(500);
-            assertThat(response.headers().allValues(HttpHeaders.WWW_AUTHENTICATE)).isEmpty();
-            assertThat(response.headers().firstValue(HttpHeaders.CONTENT_TYPE).orElseThrow())
-                    .startsWith("application/json");
-            assertThat(response.headers().firstValue(HttpHeaders.CACHE_CONTROL).orElseThrow()).contains("no-store");
-            assertThat(response.headers().allValues(HttpHeaders.SET_COOKIE)).isEmpty();
-            var body = objectMapper.readTree(response.body());
-            assertThat(body.size()).isEqualTo(4);
-            assertThat(body.get("status").asInt()).isEqualTo(500);
-            assertThat(body.get("error").asString()).isEqualTo("Internal Server Error");
-            assertThat(body.get("path").asString()).isEqualTo(ME);
-            assertThat(Instant.parse(body.get("timestamp").asString()))
-                    .isBetween(Instant.now().minusSeconds(60), Instant.now());
-            assertThat(response.body()).doesNotContain("private-db", "private-password", "SELECT", "lms_user_access",
-                    "Exception", "private-query", token, "trace", "message");
+            assertSafeError(response, 500, "Internal Server Error", ME);
+            assertThat(response.body()).doesNotContain(token);
             assertThat(controller.invocations).hasValue(1);
         }
         verify(repository, times(3)).findById(user.getUserId());
@@ -157,28 +150,70 @@ class SecurityErrorDispatchIntegrationTest {
         assertThat(controller.invocations).hasValue(2);
     }
 
-    @Test
-    void directErrorRequestWithoutTokenStillRequiresAuthentication() throws Exception {
-        var response = call("/error", null);
+    @ParameterizedTest
+    @NullSource
+    @ValueSource(strings = {"application/json", "text/html", "application/xml", "*/*"})
+    void directErrorRequestWithoutTokenStillRequiresAuthentication(String accept) throws Exception {
+        var response = call("/error", null, accept);
 
         assertThat(response.statusCode()).isEqualTo(401);
+        assertThat(response.headers().firstValue(HttpHeaders.CONTENT_TYPE))
+                .contains("application/json;charset=UTF-8");
         assertThat(response.headers().firstValue(HttpHeaders.WWW_AUTHENTICATE)).contains("Bearer");
         assertThat(objectMapper.readTree(response.body()).get("path").asString()).isEqualTo("/error");
         assertThat(controller.invocations).hasValue(0);
     }
 
-    @Test
-    void directErrorRequestWithoutActiveLocalRoleIsForbidden() throws Exception {
+    @ParameterizedTest
+    @NullSource
+    @ValueSource(strings = {"application/json", "text/html", "application/xml", "*/*"})
+    void directErrorRequestWithoutActiveLocalRoleIsForbidden(String accept) throws Exception {
         user.setAccessStatus(AccessStatus.SUSPENDED);
         repository.saveAndFlush(user);
         for (UUID id : List.of(user.getUserId(), UUID.randomUUID())) {
-            var response = call("/error", token(id));
+            var response = call("/error", token(id), accept);
 
             assertThat(response.statusCode()).isEqualTo(403);
+            assertThat(response.headers().firstValue(HttpHeaders.CONTENT_TYPE))
+                    .contains("application/json;charset=UTF-8");
             assertThat(response.headers().allValues(HttpHeaders.WWW_AUTHENTICATE)).isEmpty();
             assertThat(objectMapper.readTree(response.body()).get("path").asString()).isEqualTo("/error");
         }
         assertThat(controller.invocations).hasValue(0);
+    }
+
+    @ParameterizedTest
+    @NullSource
+    @ValueSource(strings = {"application/json", "text/html", "application/xml", "*/*"})
+    void directErrorRequestWithActiveLocalRoleHasSafeFallback(String accept) throws Exception {
+        assertSafeError(call("/error", token(user.getUserId()), accept),
+                500, "Internal Server Error", "/error");
+    }
+
+    @ParameterizedTest
+    @NullSource
+    @ValueSource(strings = {"application/json", "text/html", "application/xml", "*/*"})
+    void missingRouteRetainsStatusAndOriginalPath(String accept) throws Exception {
+        String path = "/test/security/error-dispatch/missing";
+        assertSafeError(call(path, token(user.getUserId()), accept), 404, "Not Found", path);
+    }
+
+    private void assertSafeError(HttpResponse<String> response, int status, String error, String path) {
+        assertThat(response.statusCode()).isEqualTo(status);
+        assertThat(response.headers().allValues(HttpHeaders.WWW_AUTHENTICATE)).isEmpty();
+        assertThat(response.headers().firstValue(HttpHeaders.CONTENT_TYPE))
+                .contains("application/json;charset=UTF-8");
+        assertThat(response.headers().firstValue(HttpHeaders.CACHE_CONTROL).orElseThrow()).contains("no-store");
+        assertThat(response.headers().allValues(HttpHeaders.SET_COOKIE)).isEmpty();
+        var body = objectMapper.readTree(response.body());
+        assertThat(body.size()).isEqualTo(4);
+        assertThat(body.get("status").asInt()).isEqualTo(status);
+        assertThat(body.get("error").asString()).isEqualTo(error);
+        assertThat(body.get("path").asString()).isEqualTo(path);
+        assertThat(Instant.parse(body.get("timestamp").asString()))
+                .isBetween(Instant.now().minusSeconds(60), Instant.now());
+        assertThat(response.body()).doesNotContain("private-db", "private-password", "SELECT", "lms_user_access",
+                "Exception", "private-query", "trace", "message");
     }
 
     private void assertSuccessfulLocalAccess(HttpResponse<String> response) {
@@ -197,8 +232,15 @@ class SecurityErrorDispatchIntegrationTest {
     }
 
     private HttpResponse<String> call(String path, String token) throws Exception {
+        return call(path, token, "application/json");
+    }
+
+    private HttpResponse<String> call(String path, String token, String accept) throws Exception {
         var request = HttpRequest.newBuilder(URI.create("http://127.0.0.1:" + port + path))
-                .timeout(Duration.ofSeconds(10)).header(HttpHeaders.ACCEPT, "application/json").GET();
+                .timeout(Duration.ofSeconds(10)).GET();
+        if (accept != null) {
+            request.header(HttpHeaders.ACCEPT, accept);
+        }
         if (token != null) {
             request.header(HttpHeaders.AUTHORIZATION, "Bearer " + token);
         }

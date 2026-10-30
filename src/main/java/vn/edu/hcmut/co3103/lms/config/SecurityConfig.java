@@ -58,7 +58,7 @@ public class SecurityConfig {
                         .sessionCreationPolicy(SessionCreationPolicy.STATELESS)
                 )
                 .authorizeHttpRequests(auth -> auth
-                        // Let Tomcat render infrastructure failures at the original URI without a false 401.
+                        // Let internal dispatches render safe JSON errors without a false 401.
                         // Direct requests to /error still require an active local role below.
                         .dispatcherTypeMatchers(DispatcherType.ERROR).permitAll()
                         // A valid JWT establishes identity; an active local role grants LMS access.

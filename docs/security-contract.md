@@ -62,13 +62,15 @@ and verified implementation components.
 - Infrastructure failures during local-access lookup fail closed and return
   **HTTP 500 Internal Server Error**, without a Bearer challenge. Internal
   servlet ERROR dispatches may render the safe error response; ordinary requests
-  to `/error` still require an active local role. The default server-error JSON
-  contains only `timestamp`, `status`, `error`, and the original request `path`
+  to `/error` still require an active local role. Internal errors always use
+  `Content-Type: application/json;charset=UTF-8`, regardless of the `Accept` header.
+  The server-error JSON contains only `timestamp`, `status`, `error`, and the original request `path`
   (without query parameters), never exception messages, stack traces, or SQL.
   Recovery requires a fresh successful local-access lookup with no authority fallback.
 - `email` and `full_name` are display copies of Central Identity information.
   The identity key is `user_id`, never email. Local email is **not unique** and
   must not have a unique database constraint (DOC-04 section 2.1.5).
+  Upgrades from V1 must preserve duplicate email projections through V2 and V3.
 
 ## Administrator bootstrap
 
