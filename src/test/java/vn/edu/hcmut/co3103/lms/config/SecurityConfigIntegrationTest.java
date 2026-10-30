@@ -5,6 +5,7 @@ import com.nimbusds.jose.JWSAlgorithm;
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.Arguments;
 import org.junit.jupiter.params.provider.EnumSource;
 import org.junit.jupiter.params.provider.MethodSource;
 import org.junit.jupiter.params.provider.NullAndEmptySource;
@@ -44,10 +45,12 @@ import java.util.List;
 import java.util.Map;
 import java.util.UUID;
 import java.util.stream.Collectors;
+import java.util.stream.Stream;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.hamcrest.Matchers.startsWith;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.options;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.content;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.header;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
@@ -91,6 +94,123 @@ class SecurityConfigIntegrationTest {
 
     @Autowired
     private ObjectMapper objectMapper;
+
+    static Stream<Arguments> allowedCorsOriginsAndMethods() {
+        return Stream.of("http://localhost:3000", "http://localhost:5173")
+                .flatMap(origin -> Stream.of("GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS")
+                        .map(method -> Arguments.of(origin, method)));
+    }
+
+    @ParameterizedTest
+    @MethodSource("allowedCorsOriginsAndMethods")
+    void permitsCorsPreflightWithoutAuthentication(String origin, String method) throws Exception {
+        String headers = "authorization,content-type,accept,origin,x-requested-with,"
+                + "access-control-request-method,access-control-request-headers";
+
+        mockMvc.perform(options(ADMIN)
+                        .header(HttpHeaders.ORIGIN, origin)
+                        .header(HttpHeaders.ACCESS_CONTROL_REQUEST_METHOD, method)
+                        .header(HttpHeaders.ACCESS_CONTROL_REQUEST_HEADERS, headers))
+                .andExpect(status().isOk())
+                .andExpect(header().string(HttpHeaders.ACCESS_CONTROL_ALLOW_ORIGIN, origin))
+                .andExpect(header().string(HttpHeaders.ACCESS_CONTROL_ALLOW_CREDENTIALS, "true"))
+                .andExpect(header().string(HttpHeaders.ACCESS_CONTROL_MAX_AGE, "3600"))
+                .andExpect(result -> {
+                    var response = result.getResponse();
+                    assertThat(response.getHeader(HttpHeaders.ACCESS_CONTROL_ALLOW_METHODS).split(",\\s*"))
+                            .containsExactlyInAnyOrder("GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS");
+                    assertThat(response.getHeader(HttpHeaders.ACCESS_CONTROL_ALLOW_HEADERS).split(",\\s*"))
+                            .containsExactlyInAnyOrder(headers.split(","));
+                    assertThat(response.getHeaders(HttpHeaders.VARY))
+                            .contains(HttpHeaders.ORIGIN, HttpHeaders.ACCESS_CONTROL_REQUEST_METHOD,
+                                    HttpHeaders.ACCESS_CONTROL_REQUEST_HEADERS);
+                })
+                .andExpect(header().doesNotExist(HttpHeaders.WWW_AUTHENTICATE))
+                .andExpect(header().doesNotExist(HttpHeaders.SET_COOKIE))
+                .andExpect(content().string(""));
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {"http://localhost:3000", "http://localhost:5173"})
+    void handlesCorsPreflightBeforeBearerAuthentication(String origin) throws Exception {
+        mockMvc.perform(options(ADMIN)
+                        .header(HttpHeaders.ORIGIN, origin)
+                        .header(HttpHeaders.ACCESS_CONTROL_REQUEST_METHOD, "POST")
+                        .header(HttpHeaders.AUTHORIZATION, "Bearer invalid-token"))
+                .andExpect(status().isOk())
+                .andExpect(header().string(HttpHeaders.ACCESS_CONTROL_ALLOW_ORIGIN, origin))
+                .andExpect(header().doesNotExist(HttpHeaders.WWW_AUTHENTICATE));
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {"https://untrusted.example", "http://localhost:3000.untrusted.example",
+            "http://localhost:3001", "https://localhost:3000", "null"})
+    void rejectsCorsPreflightFromUntrustedOrigins(String origin) throws Exception {
+        mockMvc.perform(options(ADMIN)
+                        .header(HttpHeaders.ORIGIN, origin)
+                        .header(HttpHeaders.ACCESS_CONTROL_REQUEST_METHOD, "GET"))
+                .andExpect(status().isForbidden())
+                .andExpect(header().doesNotExist(HttpHeaders.ACCESS_CONTROL_ALLOW_ORIGIN))
+                .andExpect(header().doesNotExist(HttpHeaders.ACCESS_CONTROL_ALLOW_CREDENTIALS));
+    }
+
+    @Test
+    void rejectsCorsPreflightWithUnlistedMethod() throws Exception {
+        mockMvc.perform(options(ADMIN)
+                        .header(HttpHeaders.ORIGIN, "http://localhost:3000")
+                        .header(HttpHeaders.ACCESS_CONTROL_REQUEST_METHOD, "HEAD"))
+                .andExpect(status().isForbidden())
+                .andExpect(header().doesNotExist(HttpHeaders.ACCESS_CONTROL_ALLOW_ORIGIN));
+    }
+
+    @Test
+    void rejectsCorsPreflightWithUnlistedHeader() throws Exception {
+        mockMvc.perform(options(ADMIN)
+                        .header(HttpHeaders.ORIGIN, "http://localhost:5173")
+                        .header(HttpHeaders.ACCESS_CONTROL_REQUEST_METHOD, "POST")
+                        .header(HttpHeaders.ACCESS_CONTROL_REQUEST_HEADERS, "X-Untrusted-Header"))
+                .andExpect(status().isForbidden())
+                .andExpect(header().doesNotExist(HttpHeaders.ACCESS_CONTROL_ALLOW_ORIGIN))
+                .andExpect(header().doesNotExist(HttpHeaders.ACCESS_CONTROL_ALLOW_HEADERS));
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {"http://localhost:3000", "http://localhost:5173"})
+    void retainsAuthenticationAndLocalAuthorizationForCorsRequests(String origin) throws Exception {
+        mockMvc.perform(get(ME).header(HttpHeaders.ORIGIN, origin))
+                .andExpect(unauthorizedJson())
+                .andExpect(header().string(HttpHeaders.ACCESS_CONTROL_ALLOW_ORIGIN, origin))
+                .andExpect(header().string(HttpHeaders.ACCESS_CONTROL_ALLOW_CREDENTIALS, "true"));
+
+        LmsUserAccess user = saveUser(LmsRole.STUDENT, AccessStatus.ACTIVE);
+        String bearer = "Bearer " + token(user.getUserId().toString());
+        mockMvc.perform(get(ME).header(HttpHeaders.ORIGIN, origin)
+                        .header(HttpHeaders.AUTHORIZATION, bearer))
+                .andExpect(status().isOk())
+                .andExpect(content().string(user.getUserId() + "|ROLE_STUDENT"))
+                .andExpect(header().string(HttpHeaders.ACCESS_CONTROL_ALLOW_ORIGIN, origin))
+                .andExpect(header().string(HttpHeaders.ACCESS_CONTROL_ALLOW_CREDENTIALS, "true"));
+        mockMvc.perform(get(ADMIN).header(HttpHeaders.ORIGIN, origin)
+                        .header(HttpHeaders.AUTHORIZATION, bearer))
+                .andExpect(forbiddenJson(ADMIN))
+                .andExpect(header().string(HttpHeaders.ACCESS_CONTROL_ALLOW_ORIGIN, origin))
+                .andExpect(header().string(HttpHeaders.ACCESS_CONTROL_ALLOW_CREDENTIALS, "true"));
+    }
+
+    @Test
+    void rejectsActualCorsRequestFromUntrustedOrigin() throws Exception {
+        mockMvc.perform(get(ME).header(HttpHeaders.ORIGIN, "https://untrusted.example"))
+                .andExpect(status().isForbidden())
+                .andExpect(header().doesNotExist(HttpHeaders.ACCESS_CONTROL_ALLOW_ORIGIN))
+                .andExpect(header().doesNotExist(HttpHeaders.ACCESS_CONTROL_ALLOW_CREDENTIALS));
+    }
+
+    @Test
+    void optionsWithoutPreflightHeadersStillRequiresAuthentication() throws Exception {
+        mockMvc.perform(options(ME))
+                .andExpect(unauthorizedJson())
+                .andExpect(header().doesNotExist(HttpHeaders.ACCESS_CONTROL_ALLOW_ORIGIN));
+    }
 
     @ParameterizedTest
     @EnumSource(LmsRole.class)

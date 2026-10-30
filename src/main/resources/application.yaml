@@ -1,4 +1,5 @@
 server:
+  port: ${SERVER_PORT:8081}
   error:
     # Error dispatches are public; never expose exception details, even via query parameters.
     include-exception: false
