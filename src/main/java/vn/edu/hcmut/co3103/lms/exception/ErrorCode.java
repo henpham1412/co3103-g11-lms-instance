@@ -19,6 +19,10 @@ public enum ErrorCode {
     QUIZ_TOPICS_DERIVED("Quiz Activity topics are derived from its Questions", HttpStatus.CONFLICT),
     RESOURCE_STATE_CONFLICT("Resource state changed; retry the operation", HttpStatus.CONFLICT),
     INVALID_REQUEST("Request data is invalid", HttpStatus.BAD_REQUEST),
+    RESOURCE_NOT_FOUND("Resource not found", HttpStatus.NOT_FOUND),
+    METHOD_NOT_ALLOWED("HTTP method is not allowed for this resource", HttpStatus.METHOD_NOT_ALLOWED),
+    NOT_ACCEPTABLE("Requested response media type is not supported", HttpStatus.NOT_ACCEPTABLE),
+    UNSUPPORTED_MEDIA_TYPE("Request media type is not supported", HttpStatus.UNSUPPORTED_MEDIA_TYPE),
     DATA_CONFLICT("Operation conflicts with stored data", HttpStatus.CONFLICT),
     INTERNAL_ERROR("An unexpected error occurred", HttpStatus.INTERNAL_SERVER_ERROR);
 

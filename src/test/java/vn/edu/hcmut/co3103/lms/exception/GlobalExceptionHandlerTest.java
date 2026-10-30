@@ -9,17 +9,21 @@ import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.setup.MockMvcBuilders;
 import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.PostMapping;
+import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
 import java.sql.SQLException;
 import java.util.Arrays;
 import java.util.Set;
+import java.util.Map;
 
 import static org.hamcrest.Matchers.containsString;
 import static org.hamcrest.Matchers.not;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.*;
 
 /** Test-only endpoints exercise advice dispatch; no production feature API is created. */
@@ -87,8 +91,53 @@ class GlobalExceptionHandlerTest {
                 Arrays.stream(ErrorCode.values()).map(Enum::name).distinct().count());
     }
 
+    @Test
+    void missingRequiredParameterIs400() throws Exception {
+        mvc.perform(get("/test/business"))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.code").value("INVALID_REQUEST"));
+    }
+
+    @Test
+    void unsupportedMethodIs405AndPreservesAllowHeader() throws Exception {
+        mvc.perform(post("/test/business"))
+                .andExpect(status().isMethodNotAllowed())
+                .andExpect(header().string("Allow", containsString("GET")))
+                .andExpect(jsonPath("$.code").value("METHOD_NOT_ALLOWED"));
+    }
+
+    @Test
+    void unsupportedMediaTypeIs415() throws Exception {
+        mvc.perform(post("/test/body").contentType("text/plain").content("private rejected body"))
+                .andExpect(status().isUnsupportedMediaType())
+                .andExpect(jsonPath("$.code").value("UNSUPPORTED_MEDIA_TYPE"))
+                .andExpect(content().string(not(containsString("private rejected body"))));
+    }
+
+    @Test
+    void unacceptableResponseTypeIs406() throws Exception {
+        mvc.perform(post("/test/body").contentType("application/json").accept("text/plain").content("{}"))
+                .andExpect(status().isNotAcceptable())
+                .andExpect(jsonPath("$.code").value("NOT_ACCEPTABLE"));
+    }
+
+    @Test
+    void malformedJsonIs400AndMissingRouteIs404() throws Exception {
+        mvc.perform(post("/test/body").contentType("application/json").content("{"))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.code").value("INVALID_REQUEST"));
+        mvc.perform(get("/test/unknown"))
+                .andExpect(status().isNotFound())
+                .andExpect(jsonPath("$.code").value("RESOURCE_NOT_FOUND"));
+    }
+
     @RestController
     static class ErrorProbe {
+        @PostMapping(value = "/test/body", consumes = "application/json", produces = "application/json")
+        public Map<String, String> body(@RequestBody Map<String, String> body) {
+            return body;
+        }
+
         @GetMapping("/test/business")
         public void business(@RequestParam("code") String code) {
             throw new AppException(ErrorCode.valueOf(code));

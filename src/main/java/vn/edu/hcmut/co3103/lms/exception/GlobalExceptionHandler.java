@@ -4,20 +4,22 @@ import jakarta.validation.ConstraintViolationException;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.dao.DataIntegrityViolationException;
+import org.springframework.http.HttpHeaders;
+import org.springframework.http.HttpStatusCode;
+import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
-import org.springframework.http.converter.HttpMessageNotReadableException;
 import org.springframework.security.access.AccessDeniedException;
-import org.springframework.web.bind.MethodArgumentNotValidException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
-import org.springframework.web.method.annotation.MethodArgumentTypeMismatchException;
+import org.springframework.web.context.request.WebRequest;
+import org.springframework.web.servlet.mvc.method.annotation.ResponseEntityExceptionHandler;
 
 import java.util.List;
 import java.util.Map;
 
-/** DOC-05 error envelope only; no feature controller or transport DTO is introduced. */
+/** DOC-05 envelope with Spring MVC's status codes and protocol headers preserved. */
 @RestControllerAdvice
-public class GlobalExceptionHandler {
+public class GlobalExceptionHandler extends ResponseEntityExceptionHandler {
     private static final Logger log = LoggerFactory.getLogger(GlobalExceptionHandler.class);
 
     @ExceptionHandler(AppException.class)
@@ -31,10 +33,29 @@ public class GlobalExceptionHandler {
         return response(ErrorCode.INVALID_REQUEST);
     }
 
-    @ExceptionHandler({MethodArgumentNotValidException.class, HttpMessageNotReadableException.class,
-            MethodArgumentTypeMismatchException.class})
-    public ResponseEntity<Map<String, Object>> handleInvalidRequest(Exception exception) {
-        return response(ErrorCode.INVALID_REQUEST);
+    @Override
+    protected ResponseEntity<Object> handleExceptionInternal(Exception exception, Object body,
+            HttpHeaders headers, HttpStatusCode status, WebRequest request) {
+        // Discard framework detail text: rejected values and implementation details are not public.
+        ErrorCode code = switch (status.value()) {
+            case 400 -> ErrorCode.INVALID_REQUEST;
+            case 404 -> ErrorCode.RESOURCE_NOT_FOUND;
+            case 405 -> ErrorCode.METHOD_NOT_ALLOWED;
+            case 406 -> ErrorCode.NOT_ACCEPTABLE;
+            case 415 -> ErrorCode.UNSUPPORTED_MEDIA_TYPE;
+            default -> null;
+        };
+        if (status.is5xxServerError()) {
+            log.error("Unexpected MVC error", exception);
+            code = ErrorCode.INTERNAL_ERROR;
+        }
+        Map<String, Object> envelope = code != null ? envelope(code)
+                : Map.of("code", "HTTP_ERROR", "message", "HTTP request could not be completed", "details", List.of());
+        HttpHeaders responseHeaders = new HttpHeaders();
+        responseHeaders.putAll(headers);
+        // Error envelopes are JSON even when the request's Accept header caused a 406.
+        responseHeaders.setContentType(MediaType.APPLICATION_JSON);
+        return super.handleExceptionInternal(exception, envelope, responseHeaders, status, request);
     }
 
     @ExceptionHandler({AccessDeniedException.class, SecurityException.class})
@@ -70,7 +91,10 @@ public class GlobalExceptionHandler {
     }
 
     private ResponseEntity<Map<String, Object>> response(ErrorCode code) {
-        return ResponseEntity.status(code.getStatus()).body(Map.of(
-                "code", code.name(), "message", code.getMessage(), "details", List.of()));
+        return ResponseEntity.status(code.getStatus()).contentType(MediaType.APPLICATION_JSON).body(envelope(code));
+    }
+
+    private Map<String, Object> envelope(ErrorCode code) {
+        return Map.of("code", code.name(), "message", code.getMessage(), "details", List.of());
     }
 }
