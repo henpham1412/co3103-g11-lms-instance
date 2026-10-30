@@ -50,7 +50,8 @@ deletion of administrators. Deleting the recorded administrator clears only the
 nullable `bootstrapped_by` reference. Bootstrap is not an administrator recovery
 mechanism; it does not recreate a missing setup row or reset completed setup.
 
-V3 also removes V2's unique email constraint without changing historical migration
-checksums. Automated tests run V3 on PostgreSQL and native H2 (starting from a
-V2-equivalent schema, since the historical migrations use PostgreSQL syntax),
-and verify locking, rollback, restart persistence, and web/CLI boundaries.
+V2 preserves non-unique email projections per DOC-04 §2.1.5, and V3 defensively
+drops any legacy unique email constraint if present. Automated tests run V3 on
+PostgreSQL and native H2 (starting from a V2-equivalent schema, since the historical
+migrations use PostgreSQL syntax), and verify locking, rollback, restart persistence,
+duplicate email migration paths, and web/CLI boundaries.
