@@ -1,0 +1,1 @@
+ALTER TABLE class_members RENAME TO class_member;
