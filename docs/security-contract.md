@@ -1,6 +1,6 @@
 # LMS-2 security and bootstrap contract
 
-Approved implementation decisions for Commit 0 and Commit 1, dated 2026-10-30.
+Approved implementation decisions for Commits 0 through 2, dated 2026-10-30.
 This contract records the task's decisions against DOC-01 (bootstrap), DOC-04
 section 2.1.5 (local identity projection), DOC-05 (authentication and HTTP errors),
 and the LMS-2 research report. It defines required behavior, not a declaration
@@ -112,9 +112,13 @@ envelope takes precedence for 401/403 in this implementation.
 
 - Commit 0 records this contract. Commit 1 implements JWT identity/claim
   validation and the JSON 401 entry point, with real signed-token tests.
-- Local database role/status enforcement and the JSON 403 handler belong to
-  Commit 2. Its five existing integration-test methods remain explicitly
-  disabled until that implementation is delivered.
+- Commit 2 implements local database role/status enforcement, method security,
+  and the JSON 403 handler. Its five previously disabled integration-test
+  methods are enabled. The JWT converter grants authorities only for active
+  local access; every request requires one of the three local roles. A valid
+  identity with no local authorities therefore receives 403. Keep this local
+  role requirement when adding endpoint authorization rules; checking only
+  `authenticated()` does not establish local LMS access.
 - Bootstrap and its database locking/state migration are subsequent work.
 - The existing V2 migration, entity, and repository tests currently enforce
   unique local email, contrary to the approved projection contract above.
