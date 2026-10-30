@@ -17,6 +17,12 @@ public interface ClassMemberRepository
             UUID studentId
     );
 
+    boolean existsByClassIdAndStudentIdAndStatus(
+            UUID classId,
+            UUID studentId,
+            MembershipStatus status
+    );
+
     Optional<ClassMember> findByClassMemberIdAndClassId(
             UUID classMemberId,
             UUID classId

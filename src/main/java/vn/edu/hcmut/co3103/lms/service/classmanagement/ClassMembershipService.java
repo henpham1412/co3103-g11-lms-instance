@@ -29,6 +29,20 @@ public class ClassMembershipService {
         this.classMemberRepository = classMemberRepository;
     }
 
+    /**
+     * Checks only the class-membership condition for access to learning activities.
+     * Assessment eligibility also depends on activity visibility, class state,
+     * quiz availability times, and the learner's remaining attempts.
+     */
+    @Transactional(readOnly = true)
+    public boolean hasActiveMembership(UUID classId, UUID studentId) {
+        return classMemberRepository.existsByClassIdAndStudentIdAndStatus(
+                classId,
+                studentId,
+                MembershipStatus.ACTIVE
+        );
+    }
+
     @Transactional
     public ClassMember requestToJoin(UUID classId, UUID studentId) {
         Class targetClass = requireClassForUpdate(classId);
