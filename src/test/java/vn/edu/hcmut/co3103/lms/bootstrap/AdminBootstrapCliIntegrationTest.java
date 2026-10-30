@@ -1,6 +1,9 @@
 package vn.edu.hcmut.co3103.lms.bootstrap;
 
+import org.flywaydb.core.Flyway;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 import org.springframework.boot.WebApplicationType;
 import org.springframework.boot.builder.SpringApplicationBuilder;
 import org.springframework.context.ConfigurableApplicationContext;
@@ -9,6 +12,7 @@ import vn.edu.hcmut.co3103.lms.Co3103G11LmsInstanceApplication;
 import vn.edu.hcmut.co3103.lms.domain.AccessStatus;
 import vn.edu.hcmut.co3103.lms.domain.LmsRole;
 import vn.edu.hcmut.co3103.lms.domain.LmsSetupState;
+import vn.edu.hcmut.co3103.lms.domain.LmsUserAccess;
 import vn.edu.hcmut.co3103.lms.repository.LmsSetupStateRepository;
 import vn.edu.hcmut.co3103.lms.repository.LmsUserAccessRepository;
 
@@ -55,6 +59,70 @@ class AdminBootstrapCliIntegrationTest {
             assertThat(state.getCompletedAt()).isEqualTo(completedAt);
             assertThat(state.getBootstrappedBy()).isEqualTo(id);
             assertThat(users.count()).isEqualTo(1);
+            states.deleteAllInBatch();
+            users.deleteAllInBatch();
+        }
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {"suspend", "demote", "delete"})
+    void upgradeSealsExistingAdministratorBeforeAnyCliInvocation(String change) {
+        String schema = "bootstrap_upgrade_" + UUID.randomUUID().toString().replace("-", "");
+        UUID existingId = UUID.randomUUID();
+        UUID candidateId = UUID.randomUUID();
+
+        // Reproduce an existing installation using the real PostgreSQL V1/V2 migrations.
+        try (var context = application(schema).properties("spring.flyway.target=2",
+                "spring.jpa.hibernate.ddl-auto=none").run()) {
+            assertThat(context.getBean(Flyway.class).info().current().getVersion().getVersion()).isEqualTo("2");
+            assertThat(context.getBeansOfType(AdminBootstrapRunner.class)).isEmpty();
+            context.getBean(LmsUserAccessRepository.class).saveAndFlush(new LmsUserAccess(existingId,
+                    "Existing Admin", "existing@example.com", LmsRole.ADMINISTRATOR,
+                    AccessStatus.ACTIVE, null, null, null));
+        }
+
+        Instant beforeMigration = Instant.now().minusSeconds(1);
+        Instant completedAt;
+        try (var context = application(schema).run()) {
+            assertThat(context.getBean(Flyway.class).info().current().getVersion().getVersion()).isEqualTo("3");
+            assertThat(context.getBeansOfType(AdminBootstrapRunner.class)).isEmpty();
+            var state = context.getBean(LmsSetupStateRepository.class).findById(LmsSetupState.GLOBAL_ID).orElseThrow();
+            assertThat(state.isCompleted()).isTrue();
+            assertThat(state.getCompletedAt()).isBetween(beforeMigration, Instant.now());
+            assertThat(state.getBootstrappedBy()).isNull();
+            completedAt = state.getCompletedAt();
+
+            var users = context.getBean(LmsUserAccessRepository.class);
+            var existing = users.findById(existingId).orElseThrow();
+            switch (change) {
+                case "suspend" -> { existing.setAccessStatus(AccessStatus.SUSPENDED); users.saveAndFlush(existing); }
+                case "demote" -> { existing.setLmsRole(LmsRole.STUDENT); users.saveAndFlush(existing); }
+                case "delete" -> users.deleteById(existingId);
+                default -> throw new AssertionError(change);
+            }
+            assertThat(users.existsByLmsRoleAndAccessStatus(LmsRole.ADMINISTRATOR, AccessStatus.ACTIVE)).isFalse();
+        }
+
+        // The first actual CLI invocation must refuse even though no active administrator remains.
+        assertThatThrownBy(() -> {
+            try (var ignored = application(schema).run("--lms.bootstrap.admin.enabled=true",
+                    "--lms.bootstrap.admin.user-id=" + candidateId,
+                    "--lms.bootstrap.admin.full-name=New Admin",
+                    "--lms.bootstrap.admin.email=new@example.com")) {
+                throw new AssertionError("Upgrade must permanently close bootstrap");
+            }
+        }).isInstanceOf(IllegalStateException.class).hasStackTraceContaining("Administrator setup is already complete.");
+
+        try (var context = application(schema).run()) {
+            var states = context.getBean(LmsSetupStateRepository.class);
+            var users = context.getBean(LmsUserAccessRepository.class);
+            var state = states.findById(LmsSetupState.GLOBAL_ID).orElseThrow();
+            assertThat(state.isCompleted()).isTrue();
+            assertThat(state.getCompletedAt()).isEqualTo(completedAt);
+            assertThat(state.getBootstrappedBy()).isNull();
+            assertThat(users.findById(candidateId)).isEmpty();
+            assertThat(users.existsByLmsRoleAndAccessStatus(LmsRole.ADMINISTRATOR, AccessStatus.ACTIVE)).isFalse();
+            assertThat(users.count()).isEqualTo(change.equals("delete") ? 0 : 1);
             states.deleteAllInBatch();
             users.deleteAllInBatch();
         }

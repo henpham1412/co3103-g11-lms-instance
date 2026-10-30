@@ -4,6 +4,8 @@ import org.flywaydb.core.Flyway;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.CsvSource;
 
 import java.sql.Connection;
 import java.sql.DriverManager;
@@ -16,10 +18,11 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 class BootstrapMigrationH2Test {
 
     private Connection connection;
+    private String url;
 
     @BeforeEach
-    void migrateV2EquivalentSchemaUsingRealV3() throws SQLException {
-        String url = "jdbc:h2:mem:" + UUID.randomUUID();
+    void createV2EquivalentSchema() throws SQLException {
+        url = "jdbc:h2:mem:" + UUID.randomUUID();
         connection = DriverManager.getConnection(url, "sa", "");
         // V1/V2 are immutable historical PostgreSQL scripts. V3 must also run on native H2.
         execute("""
@@ -35,8 +38,6 @@ class BootstrapMigrationH2Test {
                     CONSTRAINT uq_lms_user_access_email UNIQUE (email)
                 )
                 """);
-        Flyway.configure().dataSource(url, "sa", "").baselineOnMigrate(true).baselineVersion("2")
-                .locations("classpath:db/migration").load().migrate();
     }
 
     @AfterEach
@@ -46,6 +47,7 @@ class BootstrapMigrationH2Test {
 
     @Test
     void seedsExactlyOneIncompleteRowAndRejectsOtherKeys() throws SQLException {
+        migrateV3();
         try (var statement = connection.createStatement();
              var result = statement.executeQuery("SELECT * FROM lms_setup_state")) {
             assertThat(result.next()).isTrue();
@@ -63,6 +65,7 @@ class BootstrapMigrationH2Test {
 
     @Test
     void permitsDuplicateEmailsAndPreservesCompletionWhenUserIsDeleted() throws SQLException {
+        migrateV3();
         UUID first = UUID.randomUUID();
         UUID second = UUID.randomUUID();
         insertUser(first);
@@ -89,12 +92,61 @@ class BootstrapMigrationH2Test {
 
     @Test
     void foreignKeyRejectsUnknownBootstrapIdentity() {
+        migrateV3();
         assertThatThrownBy(() -> {
             try (var statement = connection.prepareStatement("UPDATE lms_setup_state SET bootstrapped_by = ?")) {
                 statement.setObject(1, UUID.randomUUID());
                 statement.executeUpdate();
             }
         }).isInstanceOf(SQLException.class);
+    }
+
+    @ParameterizedTest
+    @CsvSource({
+            "ADMINISTRATOR, ACTIVE, true",
+            "ADMINISTRATOR, SUSPENDED, false",
+            "STUDENT, ACTIVE, false",
+            "STUDENT, SUSPENDED, false",
+            "TUTOR, ACTIVE, false",
+            "TUTOR, SUSPENDED, false"
+    })
+    void migrationSealsSetupOnlyForExistingActiveAdministrators(String role, String status,
+                                                               boolean completed) throws SQLException {
+        // Seed two users before V3 to also verify that it still inserts exactly one setup row.
+        for (int i = 0; i < 2; i++) {
+            UUID id = UUID.randomUUID();
+            try (var statement = connection.prepareStatement("""
+                    INSERT INTO lms_user_access (user_id, full_name, email, lms_role, access_status)
+                    VALUES (?, 'Existing User', ?, ?, ?)
+                    """)) {
+                statement.setObject(1, id);
+                statement.setString(2, id + "@example.com");
+                statement.setString(3, role);
+                statement.setString(4, status);
+                statement.executeUpdate();
+            }
+        }
+
+        migrateV3();
+
+        try (var statement = connection.createStatement();
+             var result = statement.executeQuery("SELECT * FROM lms_setup_state")) {
+            assertThat(result.next()).isTrue();
+            assertThat(result.getString("id")).isEqualTo("GLOBAL");
+            assertThat(result.getBoolean("is_completed")).isEqualTo(completed);
+            if (completed) {
+                assertThat(result.getObject("completed_at")).isNotNull();
+            } else {
+                assertThat(result.getObject("completed_at")).isNull();
+            }
+            assertThat(result.getObject("bootstrapped_by")).isNull();
+            assertThat(result.next()).isFalse();
+        }
+    }
+
+    private void migrateV3() {
+        Flyway.configure().dataSource(url, "sa", "").baselineOnMigrate(true).baselineVersion("2")
+                .locations("classpath:db/migration").load().migrate();
     }
 
     private void insertUser(UUID id) throws SQLException {
