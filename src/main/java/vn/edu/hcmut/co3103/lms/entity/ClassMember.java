@@ -13,7 +13,7 @@ import java.time.Instant;
 import java.util.UUID;
 
 @Entity
-@Table(name = "class_members")
+@Table(name = "class_member")
 public class ClassMember {
 
     @Id
