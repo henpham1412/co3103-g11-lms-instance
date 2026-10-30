@@ -9,6 +9,7 @@ import lombok.Setter;
 
 import java.io.Serial;
 import java.io.Serializable;
+import java.util.UUID;
 
 @Getter
 @Setter
@@ -19,11 +20,11 @@ public class AttemptAnswerOptionId implements Serializable {
     private static final long serialVersionUID = 8879447185182317976L;
     @NotNull
     @Column(name = "answer_id", nullable = false)
-    private Integer answerId;
+    private UUID answerId;
 
     @NotNull
     @Column(name = "option_id", nullable = false)
-    private Integer optionId;
+    private UUID optionId;
 
 
 }

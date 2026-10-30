@@ -1,6 +1,6 @@
 CREATE TABLE quiz (
-    quiz_id INTEGER PRIMARY KEY GENERATED ALWAYS AS IDENTITY,
-    activity_id INTEGER NOT NULL UNIQUE REFERENCES activity(activity_id),
+    quiz_id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+    activity_id UUID NOT NULL UNIQUE REFERENCES activity(activity_id),
     time_limit_minutes INTEGER NOT NULL,
     attempts_allowed INTEGER NOT NULL DEFAULT 1,
     grading_method VARCHAR(20) NOT NULL DEFAULT 'HIGHEST',
@@ -23,8 +23,8 @@ CREATE TABLE quiz (
 );
 
 CREATE TABLE question (
-    question_id INTEGER PRIMARY KEY GENERATED ALWAYS AS IDENTITY,
-    quiz_id INTEGER NOT NULL REFERENCES quiz(quiz_id),
+    question_id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    quiz_id UUID NOT NULL REFERENCES quiz(quiz_id),
     question_type VARCHAR(20) NOT NULL,
     content TEXT NOT NULL,
     points_awarded NUMERIC(10, 2) NOT NULL,
@@ -42,8 +42,8 @@ CREATE TABLE question (
 );
 
 CREATE TABLE question_option (
-    option_id INTEGER PRIMARY KEY GENERATED ALWAYS AS IDENTITY,
-    question_id INTEGER NOT NULL REFERENCES question(question_id),
+    option_id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    question_id UUID NOT NULL REFERENCES question(question_id),
     content TEXT NOT NULL,
     is_correct BOOLEAN NOT NULL,
     order_index INTEGER NOT NULL,
@@ -55,8 +55,8 @@ CREATE TABLE question_option (
 );
 
 CREATE TABLE quiz_attempt (
-    attempt_id INTEGER PRIMARY KEY GENERATED ALWAYS AS IDENTITY,
-    quiz_id INTEGER NOT NULL REFERENCES quiz(quiz_id),
+    attempt_id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    quiz_id UUID NOT NULL REFERENCES quiz(quiz_id),
     class_member_id UUID NOT NULL REFERENCES class_member(class_member_id),
     attempt_number INTEGER NOT NULL,
     status VARCHAR(20) NOT NULL DEFAULT 'IN_PROGRESS',
@@ -77,9 +77,9 @@ CREATE TABLE quiz_attempt (
 );
 
 CREATE TABLE attempt_answer (
-    answer_id INTEGER PRIMARY KEY GENERATED ALWAYS AS IDENTITY,
-    attempt_id INTEGER NOT NULL REFERENCES quiz_attempt(attempt_id),
-    question_id INTEGER NOT NULL REFERENCES question(question_id) ON DELETE RESTRICT,
+    answer_id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    attempt_id UUID NOT NULL REFERENCES quiz_attempt(attempt_id),
+    question_id UUID NOT NULL REFERENCES question(question_id) ON DELETE RESTRICT,
     is_correct BOOLEAN NOT NULL,
     points_earned NUMERIC(10, 2) NOT NULL,
 
@@ -88,8 +88,8 @@ CREATE TABLE attempt_answer (
 );
 
 CREATE TABLE attempt_answer_option (
-    answer_id INTEGER NOT NULL REFERENCES attempt_answer(answer_id) ON DELETE CASCADE,
-    option_id INTEGER NOT NULL REFERENCES question_option(option_id) ON DELETE RESTRICT,
+    answer_id UUID NOT NULL REFERENCES attempt_answer(answer_id) ON DELETE CASCADE,
+    option_id UUID NOT NULL REFERENCES question_option(option_id) ON DELETE RESTRICT,
 
     PRIMARY KEY (answer_id, option_id)
 );

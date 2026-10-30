@@ -1,5 +1,5 @@
 CREATE TABLE chapter (
-    chapter_id INTEGER PRIMARY KEY GENERATED ALWAYS AS IDENTITY,
+    chapter_id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     class_id UUID NOT NULL REFERENCES class(class_id),
     title VARCHAR(150) NOT NULL,
     description TEXT,
@@ -16,7 +16,7 @@ CREATE TABLE chapter (
 );
 
 CREATE TABLE lesson (
-    lesson_id INTEGER PRIMARY KEY GENERATED ALWAYS AS IDENTITY,
+    lesson_id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     chapter_id INTEGER NOT NULL REFERENCES chapter(chapter_id),
     title VARCHAR(150) NOT NULL,
     description TEXT,
@@ -36,7 +36,7 @@ CREATE TABLE lesson (
 );
 
 CREATE TABLE activity (
-    activity_id INTEGER PRIMARY KEY GENERATED ALWAYS AS IDENTITY,
+    activity_id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     lesson_id INTEGER NOT NULL REFERENCES lesson(lesson_id),
     activity_type VARCHAR(20) NOT NULL,
     title VARCHAR(150) NOT NULL,
@@ -57,7 +57,7 @@ CREATE TABLE activity (
 );
 
 CREATE TABLE material (
-    material_id INTEGER PRIMARY KEY GENERATED ALWAYS AS IDENTITY,
+    material_id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     lesson_id INTEGER NOT NULL REFERENCES lesson(lesson_id),
     title VARCHAR(150) NOT NULL,
     material_type VARCHAR(20) NOT NULL,
