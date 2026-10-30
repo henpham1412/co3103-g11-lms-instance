@@ -1,5 +1,6 @@
 package vn.edu.hcmut.co3103.lms.service.assessment;
 
+import lombok.RequiredArgsConstructor;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -15,14 +16,10 @@ import java.time.OffsetDateTime;
 import java.util.Set;
 
 @Service
+@RequiredArgsConstructor // either field injection or constructor injection
 public class QuizService {
     private final QuizRepository quizRepository;
     private final QuizConfigurationAccessService accessService;
-
-    public QuizService(QuizRepository quizRepository, QuizConfigurationAccessService accessService) {
-        this.quizRepository = quizRepository;
-        this.accessService = accessService;
-    }
 
     @Transactional(readOnly = true)
     public QuizConfigurationResponse getQuizConfiguration(UUID activityId, UUID userId) {
@@ -109,3 +106,4 @@ public class QuizService {
      * This endpoint intentionally returns quiz settings only, never questions/options.
      */
 }
+
