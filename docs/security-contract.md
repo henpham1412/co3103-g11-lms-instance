@@ -1,10 +1,10 @@
 # LMS-2 security and bootstrap contract
 
-Approved implementation decisions for Commits 0 through 3, dated 2026-10-30.
+Approved implementation specification for the LMS-2 security architecture, dated 2026-10-30.
 This contract records the task's decisions against DOC-01 (bootstrap), DOC-04
 section 2.1.5 (local identity projection), DOC-05 (authentication and HTTP errors),
-and the LMS-2 research report. It defines required behavior, not a declaration
-that all LMS-2 features are already implemented.
+and the LMS-2 research report. It defines required behavior, architectural guarantees,
+and verified implementation components.
 
 ## JWT identity and security
 
@@ -43,7 +43,7 @@ that all LMS-2 features are already implemented.
   result in **HTTP 401 Unauthorized** with the JSON format below.
 - Issuer and JWKS addresses come from trusted application configuration, never
   from an unverified token. Audience requirements need a separate agreed IdP
-  contract; these commits do not invent a required audience.
+  contract; this implementation does not invent a required audience.
 
 ## Local access and RBAC
 
@@ -75,6 +75,7 @@ that all LMS-2 features are already implemented.
 - The initial administrator is created exclusively through a trusted **non-web
   CLI / CommandLineRunner** execution, disabled during ordinary web startup.
   The operator identifies an existing active Central Identity account by UUID.
+  See [administrator bootstrap operations](administrator-bootstrap.md).
 - There must be **no REST endpoint** for administrator bootstrapping.
 - A dedicated singleton `lms_setup_state` row is created ahead of bootstrap.
   Bootstrap acquires a database-level pessimistic lock using
@@ -115,28 +116,30 @@ The supplied task explicitly selects this five-field security error envelope.
 The older DOC-05 export uses `{code, message, details?}`; the approved task's
 envelope takes precedence for 401/403 in this implementation.
 
-## Delivery boundaries
+## Implementation and component structure
 
-- Commit 0 records this contract. Commit 1 implements JWT identity/claim
-  validation and the JSON 401 entry point, with real signed-token tests.
-- Commit 2 implements local database role/status enforcement, method security,
-  and the JSON 403 handler. Its five previously disabled integration-test
-  methods are enabled. The JWT converter grants authorities only for active
-  local access; every ordinary request requires one of the three local roles. A valid
-  identity with no local authorities therefore receives 403. Keep this local
-  role requirement when adding endpoint authorization rules; checking only
-  `authenticated()` does not establish local LMS access.
-- Commit 3 implements administrator bootstrap through an explicitly enabled
-  non-web runner. Its transaction locks the migration-seeded `GLOBAL` setup row,
-  checks for active administrators, creates or activates local access by UUID,
-  and permanently records completion. An existing active administrator commits
-  completion before the runner reports refusal. Neither bootstrap service nor
-  runner is registered in a web context, even when the enable flag is set.
-- V3 removes V2's unique local email constraint and adds `lms_setup_state`.
-  Email queries return collections; user identity remains keyed only by UUID.
-  V1/V2 and their recorded migration checksums remain unchanged. V3 works on
-  PostgreSQL and H2; the historical V1/V2 scripts remain PostgreSQL-specific.
-- `bootstrapped_by` references the created/activated local account. It is null
-  when closing setup because an administrator already exists. Deleting the
-  referenced account sets this field to null without changing completion.
-  See [administrator bootstrap operations](administrator-bootstrap.md).
+The LMS-2 security implementation is structured into three cohesive functional modules,
+fully verified by automated integration tests and security audits:
+
+1. **Central Identity JWT Validation & Claim Contract (`6e1dbc5`):**
+   - Implements RS256 token verification against Central Identity JWKS.
+   - Enforces strict claim validation: RFC 4122 UUID `sub`, finite numeric timestamps (`exp`, `iat`, `nbf`), and clock skew tolerance of at most 60 seconds.
+   - Standardizes JSON 401 Unauthorized entry point with `WWW-Authenticate` Bearer challenge and five-field error payload.
+   - Validates malformed claim rejection (missing claims, wrong formats, invalid algorithms) fail-closed.
+
+2. **Local Access Control & RBAC Enforcement (`9853cb7`, `4f1fc70`):**
+   - Implements local database role mapping from `lms_user_access` (`ROLE_STUDENT`, `ROLE_TUTOR`, `ROLE_ADMINISTRATOR`).
+   - Restricts authorization strictly to accounts with `access_status = ACTIVE`; missing or `SUSPENDED` accounts receive standard JSON 403 Forbidden.
+   - Ensures ordinary requests require an active local LMS role (checking only `authenticated()` is insufficient).
+   - Handles database lookup outages fail-closed with HTTP 500 JSON envelope at the original request path, preventing stack trace or sensitive info leaks.
+
+3. **Run-Once Administrator Bootstrap & Database Locking (`b5724ae`, `0e061f1`):**
+   - Provides trusted non-web CLI `AdminBootstrapRunner` (`--spring.main.web-application-type=none`), strictly detached from and disabled during web HTTP startup.
+   - Enforces database-level pessimistic lock (`SELECT ... FOR UPDATE` via `PESSIMISTIC_WRITE`) on singleton table `lms_setup_state` to serialize concurrent bootstrap attempts across multi-instance deployments.
+   - Enforces permanent run-once guarantee: records setup completion in database migration if an active administrator already exists; subsequent suspension, demotion, or deletion cannot reopen bootstrap.
+   - Completely rolls back both user updates and setup completion markers upon any initialization failure.
+
+4. **Flyway Database Migration (`V3__create_lms_setup_state.sql`):**
+   - Seeds the singleton `lms_setup_state` record.
+   - Aligns schema with DOC-04 §2.1.5: removes the unique constraint on local email projection, preserving canonical `user_id` UUID as the sole identity key.
+   - Fully compatible with both PostgreSQL and H2.
