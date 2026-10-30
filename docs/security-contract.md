@@ -1,6 +1,6 @@
 # LMS-2 security and bootstrap contract
 
-Approved implementation decisions for Commits 0 through 2, dated 2026-10-30.
+Approved implementation decisions for Commits 0 through 3, dated 2026-10-30.
 This contract records the task's decisions against DOC-01 (bootstrap), DOC-04
 section 2.1.5 (local identity projection), DOC-05 (authentication and HTTP errors),
 and the LMS-2 research report. It defines required behavior, not a declaration
@@ -126,8 +126,17 @@ envelope takes precedence for 401/403 in this implementation.
   identity with no local authorities therefore receives 403. Keep this local
   role requirement when adding endpoint authorization rules; checking only
   `authenticated()` does not establish local LMS access.
-- Bootstrap and its database locking/state migration are subsequent work.
-- The existing V2 migration, entity, and repository tests currently enforce
-  unique local email, contrary to the approved projection contract above.
-  Correcting that schema and its tests requires subsequent migration work;
-  Commit 0/1 do not change already recorded migration checksums.
+- Commit 3 implements administrator bootstrap through an explicitly enabled
+  non-web runner. Its transaction locks the migration-seeded `GLOBAL` setup row,
+  checks for active administrators, creates or activates local access by UUID,
+  and permanently records completion. An existing active administrator commits
+  completion before the runner reports refusal. Neither bootstrap service nor
+  runner is registered in a web context, even when the enable flag is set.
+- V3 removes V2's unique local email constraint and adds `lms_setup_state`.
+  Email queries return collections; user identity remains keyed only by UUID.
+  V1/V2 and their recorded migration checksums remain unchanged. V3 works on
+  PostgreSQL and H2; the historical V1/V2 scripts remain PostgreSQL-specific.
+- `bootstrapped_by` references the created/activated local account. It is null
+  when closing setup because an administrator already exists. Deleting the
+  referenced account sets this field to null without changing completion.
+  See [administrator bootstrap operations](administrator-bootstrap.md).

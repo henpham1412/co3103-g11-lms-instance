@@ -11,7 +11,6 @@ import org.springframework.boot.data.jpa.test.autoconfigure.DataJpaTest;
 import org.springframework.boot.flyway.autoconfigure.FlywayAutoConfiguration;
 import org.springframework.boot.jdbc.test.autoconfigure.AutoConfigureTestDatabase;
 import org.springframework.core.io.ClassPathResource;
-import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.jdbc.core.ConnectionCallback;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.jdbc.datasource.init.ScriptUtils;
@@ -24,7 +23,6 @@ import java.time.temporal.ChronoUnit;
 import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
-import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 @DataJpaTest(properties = "spring.jpa.hibernate.ddl-auto=validate", showSql = false)
 @AutoConfigureTestDatabase(replace = AutoConfigureTestDatabase.Replace.NONE)
@@ -181,22 +179,25 @@ class LmsUserAccessRepositoryTest {
         repository.saveAndFlush(user);
         entityManager.clear();
 
-        assertThat(repository.findByEmail(user.getEmail()))
-                .map(LmsUserAccess::getUserId).contains(user.getUserId());
-        assertThat(repository.findByEmail(UUID.randomUUID() + "@example.com")).isEmpty();
+        assertThat(repository.findAllByEmail(user.getEmail()))
+                .extracting(LmsUserAccess::getUserId).containsExactly(user.getUserId());
+        assertThat(repository.findAllByEmail(UUID.randomUUID() + "@example.com")).isEmpty();
     }
 
     @Test
-    void rejectsDuplicateEmails() {
+    void storesDuplicateEmailProjectionsUnderDistinctIdentityUuids() {
         LmsUserAccess first = newUser(LmsRole.STUDENT, AccessStatus.ACTIVE);
         repository.saveAndFlush(first);
         entityManager.clear();
         LmsUserAccess duplicate = newUser(LmsRole.TUTOR, AccessStatus.ACTIVE);
         duplicate.setEmail(first.getEmail());
 
-        assertThatThrownBy(() -> repository.saveAndFlush(duplicate))
-                .isInstanceOf(DataIntegrityViolationException.class)
-                .hasMessageContaining("uq_lms_user_access_email");
+        repository.saveAndFlush(duplicate);
+        entityManager.clear();
+
+        assertThat(repository.findAllByEmail(first.getEmail()))
+                .extracting(LmsUserAccess::getUserId)
+                .containsExactlyInAnyOrder(first.getUserId(), duplicate.getUserId());
     }
 
     @Test

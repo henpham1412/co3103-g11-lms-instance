@@ -160,6 +160,12 @@ After PostgreSQL is available and the required datasource and security configura
 
 The application uses the server port and API configuration defined in its Spring Boot configuration. The final local URL and API base path will be recorded after those settings are confirmed.
 
+### 5.6 Bootstrap the Initial Administrator
+
+Use the [administrator bootstrap CLI](docs/administrator-bootstrap.md) once for a new LMS database.
+It requires an explicitly enabled non-web execution and the verified Central Identity account UUID.
+Ordinary web startup never executes bootstrap.
+
 ## 6. Maven Wrapper Configuration
 
 The repository uses the following settings in `.mvn/wrapper/maven-wrapper.properties`:
