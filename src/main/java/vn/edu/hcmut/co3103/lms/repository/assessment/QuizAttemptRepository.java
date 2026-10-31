@@ -10,6 +10,7 @@ import org.springframework.data.repository.query.Param;
 import vn.edu.hcmut.co3103.lms.entity.QuizAttempt;
 
 import java.util.List;
+import java.util.Optional;
 import java.util.UUID;
 import java.time.OffsetDateTime;
 
@@ -18,6 +19,9 @@ public interface QuizAttemptRepository extends JpaRepository<QuizAttempt, UUID> 
     List<QuizAttempt> findByQuiz_IdAndStatus(UUID quizId, String status);
     List<QuizAttempt> findByQuiz_IdAndClassMember_ClassMemberIdOrderByAttemptNumber(UUID quizId, UUID classMemberId);
     Page<QuizAttempt> findByQuiz_Id(UUID quizId, Pageable pageable);
+
+    @Query("select attempt.quiz.id from QuizAttempt attempt where attempt.id = :attemptId")
+    Optional<UUID> findQuizIdByAttemptId(@Param("attemptId") UUID attemptId);
 
     @Lock(LockModeType.PESSIMISTIC_WRITE)
     java.util.Optional<QuizAttempt> findLockedById(UUID attemptId);
