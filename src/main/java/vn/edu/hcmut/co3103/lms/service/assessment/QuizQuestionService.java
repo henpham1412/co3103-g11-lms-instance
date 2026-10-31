@@ -6,19 +6,26 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.server.ResponseStatusException;
 import vn.edu.hcmut.co3103.lms.dto.request.QuestionCreateRequest;
+import vn.edu.hcmut.co3103.lms.dto.request.QuestionUpdateRequest;
 import vn.edu.hcmut.co3103.lms.dto.response.QuestionResponse;
 import vn.edu.hcmut.co3103.lms.entity.Question;
 import vn.edu.hcmut.co3103.lms.entity.QuestionOption;
 import vn.edu.hcmut.co3103.lms.entity.Quiz;
+import vn.edu.hcmut.co3103.lms.entity.QuizAttempt;
+import vn.edu.hcmut.co3103.lms.entity.AttemptAnswer;
+import vn.edu.hcmut.co3103.lms.repository.assessment.AttemptAnswerOptionRepository;
+import vn.edu.hcmut.co3103.lms.repository.assessment.AttemptAnswerRepository;
 import vn.edu.hcmut.co3103.lms.repository.assessment.QuestionOptionRepository;
 import vn.edu.hcmut.co3103.lms.repository.assessment.QuestionRepository;
+import vn.edu.hcmut.co3103.lms.repository.assessment.QuizAttemptRepository;
 import vn.edu.hcmut.co3103.lms.repository.assessment.QuizRepository;
 
 import java.math.BigDecimal;
-import java.util.HashSet;
-import java.util.List;
-import java.util.Set;
-import java.util.UUID;
+import java.math.RoundingMode;
+import java.util.*;
+import java.time.OffsetDateTime;
+import java.util.function.Function;
+import java.util.stream.Collectors;
 
 @Service
 @RequiredArgsConstructor
@@ -26,6 +33,9 @@ public class QuizQuestionService {
     private final QuizRepository quizRepository;
     private final QuestionRepository questionRepository;
     private final QuestionOptionRepository optionRepository;
+    private final QuizAttemptRepository attemptRepository;
+    private final AttemptAnswerRepository answerRepository;
+    private final AttemptAnswerOptionRepository selectedOptionRepository;
     private final QuizConfigurationAccessService accessService;
 
     @Transactional
@@ -33,7 +43,13 @@ public class QuizQuestionService {
         Quiz quiz = quizRepository.findByActivity_Id(activityId)
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "QUIZ_NOT_FOUND"));
         accessService.requireOwningTutor(quiz.getActivity(), userId);
+        if (attemptRepository.existsByQuiz_Id(quiz.getId())) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT, "QUESTION_EDIT_LOCKED");
+        }
         validateQuestion(request);
+        if (questionRepository.existsByQuiz_IdAndOrderIndex(quiz.getId(), request.orderIndex())) {
+            throw invalidQuestion();
+        }
 
         Question question = new Question();
         question.setQuiz(quiz);
@@ -60,34 +76,205 @@ public class QuizQuestionService {
                 savedQuestion.getPointsDeducted(), savedQuestion.getOrderIndex(), options);
     }
 
+    @Transactional
+    public QuestionResponse updateQuestion(UUID questionId, UUID userId, QuestionUpdateRequest request) {
+        Question question = questionRepository.findById(questionId)
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "QUESTION_NOT_FOUND"));
+        accessService.requireOwningTutor(question.getQuiz().getActivity(), userId);
+        if (request == null || !hasAnyField(request)) throw invalidQuestion();
+
+        Quiz quiz = question.getQuiz();
+        boolean hasAttempts = attemptRepository.existsByQuiz_Id(quiz.getId());
+        List<QuestionOption> existingOptions = optionRepository.findByQuestion_IdOrderByOrderIndex(questionId);
+        List<QuestionUpdateRequest.Option> requestedOptions = request.optionsProvided()
+                ? request.options() : existingOptions.stream().map(option -> new QuestionUpdateRequest.Option(
+                        option.getId(), option.getContent(), option.getIsCorrect(), option.getOrderIndex())).toList();
+
+        String newType = request.questionTypeProvided() ? request.questionType() : question.getQuestionType();
+        String newContent = request.contentProvided() ? request.content() : question.getContent();
+        BigDecimal newPointsAwarded = request.pointsAwardedProvided()
+                ? request.pointsAwarded() : question.getPointsAwarded();
+        BigDecimal newPointsDeducted = request.pointsDeductedProvided()
+                ? request.pointsDeducted() : question.getPointsDeducted();
+        Integer newOrderIndex = request.orderIndexProvided() ? request.orderIndex() : question.getOrderIndex();
+
+        validateQuestion(newType, newContent, newPointsAwarded, newPointsDeducted,
+                newOrderIndex, requestedOptions, questionId, quiz.getId());
+        if (request.skillTopicIdsProvided()
+                && request.skillTopicIds() != null && !request.skillTopicIds().isEmpty()) {
+            throw invalidQuestion();
+        }
+        // TODO: validate and persist skill_topic_ids once SkillTopic persistence is implemented.
+
+        if (hasAttempts && !newType.equals(question.getQuestionType())) throw lockedQuestion();
+        Set<UUID> suppliedExistingIds = requestedOptions.stream().map(QuestionUpdateRequest.Option::optionId)
+                .filter(Objects::nonNull).collect(Collectors.toSet());
+        Set<UUID> existingIds = existingOptions.stream().map(QuestionOption::getId).collect(Collectors.toSet());
+        if (!existingIds.containsAll(suppliedExistingIds)) throw invalidQuestion();
+        if (hasAttempts && !suppliedExistingIds.containsAll(existingIds)) throw lockedQuestion();
+        if (questionRepository.existsByQuiz_IdAndOrderIndexAndIdNot(quiz.getId(), newOrderIndex, questionId)) {
+            throw invalidQuestion();
+        }
+
+        boolean gradingChanged = !newPointsAwarded.equals(question.getPointsAwarded())
+                || !newPointsDeducted.equals(question.getPointsDeducted())
+                || optionsAffectGrading(requestedOptions, existingOptions);
+
+        if (request.optionsProvided()) persistOptions(question, existingOptions, requestedOptions);
+        question.setQuestionType(newType);
+        question.setContent(newContent.trim());
+        question.setPointsAwarded(newPointsAwarded);
+        question.setPointsDeducted(newPointsDeducted);
+        question.setOrderIndex(newOrderIndex);
+
+        if (hasAttempts && gradingChanged) recalculateSubmittedAttempts(quiz);
+        return toResponse(question, optionRepository.findByQuestion_IdOrderByOrderIndex(questionId));
+    }
+
+    private boolean hasAnyField(QuestionUpdateRequest request) {
+        return request.questionTypeProvided() || request.contentProvided() || request.pointsAwardedProvided()
+                || request.pointsDeductedProvided() || request.orderIndexProvided() || request.optionsProvided();
+    }
+
+    private boolean optionsAffectGrading(List<QuestionUpdateRequest.Option> requested,
+                                         List<QuestionOption> existing) {
+        Map<UUID, QuestionOption> byId = existing.stream().collect(Collectors.toMap(
+                QuestionOption::getId, Function.identity()));
+        for (QuestionUpdateRequest.Option option : requested) {
+            if (option.optionId() == null) {
+                if (Boolean.TRUE.equals(option.isCorrect())) return true;
+                continue;
+            }
+            QuestionOption old = byId.get(option.optionId());
+            if (old == null || !old.getIsCorrect().equals(option.isCorrect())) return true;
+        }
+        return false;
+    }
+
+    private void persistOptions(Question question, List<QuestionOption> existing,
+                                List<QuestionUpdateRequest.Option> requested) {
+        Map<UUID, QuestionOption> byId = existing.stream().collect(Collectors.toMap(
+                QuestionOption::getId, Function.identity()));
+        Set<UUID> keepIds = requested.stream().map(QuestionUpdateRequest.Option::optionId)
+                .filter(Objects::nonNull).collect(Collectors.toSet());
+        List<QuestionOption> removed = existing.stream().filter(option -> !keepIds.contains(option.getId())).toList();
+        if (!removed.isEmpty()) optionRepository.deleteAll(removed);
+        optionRepository.flush();
+
+        int maxRequestedOrder = requested.stream().map(QuestionUpdateRequest.Option::orderIndex)
+                .max(Integer::compareTo).orElse(0);
+        long maxExistingOrder = existing.stream().map(QuestionOption::getOrderIndex)
+                .max(Integer::compareTo).orElse(0);
+        long offset = Math.max(maxRequestedOrder, maxExistingOrder) + existing.size() + 1L;
+        if (existing.stream().anyMatch(option -> (long) option.getOrderIndex() + offset > Integer.MAX_VALUE)) {
+            throw invalidQuestion();
+        }
+        for (QuestionOption option : existing) option.setOrderIndex(option.getOrderIndex() + (int) offset);
+        optionRepository.saveAll(existing);
+        optionRepository.flush();
+
+        for (QuestionUpdateRequest.Option item : requested) {
+            QuestionOption option = item.optionId() == null ? new QuestionOption() : byId.get(item.optionId());
+            option.setQuestion(question);
+            option.setContent(item.content().trim());
+            option.setIsCorrect(item.isCorrect());
+            option.setOrderIndex(item.orderIndex());
+            optionRepository.save(option);
+        }
+    }
+
+    private void recalculateSubmittedAttempts(Quiz quiz) {
+        List<Question> quizQuestions = questionRepository.findByQuiz_IdOrderByOrderIndex(quiz.getId());
+        BigDecimal totalEarnable = quizQuestions.stream().map(Question::getPointsAwarded)
+                .reduce(BigDecimal.ZERO, BigDecimal::add);
+        Map<UUID, Set<UUID>> correctOptions = quizQuestions.stream().collect(Collectors.toMap(
+                Question::getId,
+                question -> optionRepository.findByQuestion_IdOrderByOrderIndex(question.getId()).stream()
+                        .filter(QuestionOption::getIsCorrect).map(QuestionOption::getId).collect(Collectors.toSet())
+        ));
+
+        for (QuizAttempt attempt : attemptRepository.findByQuiz_IdAndStatus(quiz.getId(), "SUBMITTED")) {
+            BigDecimal scored = BigDecimal.ZERO;
+            for (Question question : quizQuestions) {
+                AttemptAnswer answer = answerRepository.findByAttempt_IdAndQuestion_Id(
+                        attempt.getId(), question.getId()).orElse(null);
+                if (answer == null) continue;
+                Set<UUID> selected = selectedOptionRepository.findByAnswer_Id(answer.getId()).stream()
+                        .map(answerOption -> answerOption.getOption().getId()).collect(Collectors.toSet());
+                boolean correct = !selected.isEmpty() && selected.equals(correctOptions.get(question.getId()));
+                BigDecimal earned = selected.isEmpty() ? BigDecimal.ZERO
+                        : correct ? question.getPointsAwarded() : question.getPointsDeducted().negate();
+                answer.setIsCorrect(correct);
+                answer.setPointsEarned(earned);
+                scored = scored.add(earned);
+            }
+            BigDecimal percentage = totalEarnable.signum() <= 0 ? BigDecimal.ZERO
+                    : scored.multiply(BigDecimal.valueOf(100))
+                            .divide(totalEarnable, 2, RoundingMode.HALF_UP).max(BigDecimal.ZERO);
+            attempt.setScore(percentage);
+            attempt.setGradedAt(OffsetDateTime.now());
+        }
+    }
+
+    private QuestionResponse toResponse(Question question, List<QuestionOption> options) {
+        return new QuestionResponse(question.getId(), question.getQuestionType(), question.getContent(),
+                question.getPointsAwarded(), question.getPointsDeducted(), question.getOrderIndex(),
+                options.stream().map(option -> new QuestionResponse.Option(option.getId(), option.getContent(),
+                        option.getIsCorrect(), option.getOrderIndex())).toList());
+    }
+
+    private ResponseStatusException invalidQuestion() {
+        return new ResponseStatusException(HttpStatus.BAD_REQUEST, "INVALID_QUESTION");
+    }
+
+    private ResponseStatusException lockedQuestion() {
+        return new ResponseStatusException(HttpStatus.CONFLICT, "QUESTION_EDIT_LOCKED");
+    }
+
     private void validateQuestion(QuestionCreateRequest request) {
-        if (request == null || request.questionType() == null
-                || !Set.of("MCQ_SINGLE", "MCQ_MULTIPLE", "TRUE_FALSE").contains(request.questionType())
-                || request.content() == null || request.content().isBlank()
-                || request.pointsAwarded() == null || request.pointsAwarded().compareTo(BigDecimal.ZERO) < 0
-                || request.pointsDeducted() == null || request.pointsDeducted().compareTo(BigDecimal.ZERO) < 0
-                || request.orderIndex() == null || request.orderIndex() < 0
-                || request.options() == null || request.options().isEmpty()
-                || (request.questionType().startsWith("MCQ_") && request.options().size() < 2)
-                || (request.skillTopicIds() != null && !request.skillTopicIds().isEmpty())) {
-            /* TODO: validate skillTopicIds with the actual skill topics of the class;
-            for now, we just check that the list is not empty if provided */
-            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "INVALID_QUESTION");
+        if (request == null || request.options() == null) throw invalidQuestion();
+        validateQuestion(request.questionType(), request.content(), request.pointsAwarded(),
+                request.pointsDeducted(), request.orderIndex(), request.options().stream()
+                        .map(option -> option == null ? null : new QuestionUpdateRequest.Option(null,
+                                option.content(), option.isCorrect(), option.orderIndex())).toList(), null, null);
+        if (request.skillTopicIds() != null && !request.skillTopicIds().isEmpty()) {
+            throw invalidQuestion();
+        }
+        // TODO: validate and persist skill_topic_ids once SkillTopic persistence is implemented.
+    }
+
+    private void validateQuestion(String type, String content, BigDecimal pointsAwarded,
+                                  BigDecimal pointsDeducted, Integer orderIndex,
+                                  List<QuestionUpdateRequest.Option> options,
+                                  UUID questionId, UUID quizId) {
+        if (type == null || !Set.of("MCQ_SINGLE", "MCQ_MULTIPLE", "TRUE_FALSE").contains(type)
+                || content == null || content.isBlank()
+                || pointsAwarded == null || pointsAwarded.compareTo(BigDecimal.ZERO) < 0
+                || pointsDeducted == null || pointsDeducted.compareTo(BigDecimal.ZERO) < 0
+                || orderIndex == null || orderIndex < 0 || options == null || options.isEmpty()
+                || (type.startsWith("MCQ_") && options.size() < 2)
+                || ("TRUE_FALSE".equals(type) && options.size() != 2)
+                || (quizId != null && (questionId == null
+                ? questionRepository.existsByQuiz_IdAndOrderIndex(quizId, orderIndex)
+                : questionRepository.existsByQuiz_IdAndOrderIndexAndIdNot(quizId, orderIndex, questionId)))) {
+            throw invalidQuestion();
         }
 
         long correctCount = 0;
         Set<Integer> optionOrders = new HashSet<>();
-        for (QuestionCreateRequest.Option option : request.options()) {
+        Set<UUID> optionIds = new HashSet<>();
+        for (QuestionUpdateRequest.Option option : options) {
             if (option == null || option.content() == null || option.content().isBlank()
                     || option.isCorrect() == null || option.orderIndex() == null || option.orderIndex() < 0
-                    || !optionOrders.add(option.orderIndex())) {
-                throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "INVALID_QUESTION");
+                    || !optionOrders.add(option.orderIndex())
+                    || (option.optionId() != null && !optionIds.add(option.optionId()))) {
+                throw invalidQuestion();
             }
             if (option.isCorrect()) correctCount++;
         }
-        if (correctCount == 0 || (("MCQ_SINGLE".equals(request.questionType())
-                || "TRUE_FALSE".equals(request.questionType())) && correctCount != 1)) {
-            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "INVALID_QUESTION");
+        if (correctCount == 0 || (("MCQ_SINGLE".equals(type)
+                || "TRUE_FALSE".equals(type)) && correctCount != 1)) {
+            throw invalidQuestion();
         }
     }
 }
