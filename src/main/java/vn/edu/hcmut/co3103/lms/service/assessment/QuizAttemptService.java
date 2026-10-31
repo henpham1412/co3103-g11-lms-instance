@@ -8,6 +8,7 @@ import org.springframework.web.server.ResponseStatusException;
 import vn.edu.hcmut.co3103.lms.dto.response.QuizAttemptStartResponse;
 import vn.edu.hcmut.co3103.lms.dto.request.SaveAnswerRequest;
 import vn.edu.hcmut.co3103.lms.dto.response.QuizAttemptResultResponse;
+import vn.edu.hcmut.co3103.lms.dto.response.QuizAttemptStateResponse;
 import vn.edu.hcmut.co3103.lms.entity.Activity;
 import vn.edu.hcmut.co3103.lms.entity.AttemptAnswer;
 import vn.edu.hcmut.co3103.lms.entity.AttemptAnswerOption;
@@ -193,6 +194,48 @@ public class QuizAttemptService {
         Boolean passed = requiredScore == null ? null : attempt.getScore().compareTo(requiredScore) >= 0;
         return new QuizAttemptResultResponse(attempt.getId(), attempt.getStatus(), attempt.getAutoSubmitted(),
                 attempt.getScore(), requiredScore, passed, attempt.getSubmittedAt());
+    }
+
+    @Transactional(readOnly = true)
+    public QuizAttemptStateResponse getAttemptState(UUID attemptId, UUID userId) {
+        QuizAttempt attempt = attemptRepository.findById(attemptId)
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "ATTEMPT_NOT_FOUND"));
+        UUID studentId = attempt.getClassMember().getStudentId();
+        if (studentId.equals(userId)) {
+            accessService.requireEligibleStudent(attempt.getQuiz().getActivity(), userId);
+        } else {
+            accessService.requireOwningTutor(attempt.getQuiz().getActivity(), userId);
+            if (!"SUBMITTED".equals(attempt.getStatus())) {
+                throw new ResponseStatusException(HttpStatus.FORBIDDEN, "FORBIDDEN");
+            }
+        }
+
+        OffsetDateTime now = OffsetDateTime.now();
+        OffsetDateTime endAt = calculateEndAt(attempt.getStartedAt(), attempt.getQuiz());
+        long remainingSeconds = "IN_PROGRESS".equals(attempt.getStatus())
+                ? Math.max(0, Duration.between(now, endAt).getSeconds()) : 0;
+
+        var answers = answerRepository.findByAttempt_Id(attemptId).stream()
+                .collect(java.util.stream.Collectors.toMap(
+                        answer -> answer.getQuestion().getId(),
+                        answer -> selectedOptionRepository.findByAnswer_Id(answer.getId()).stream()
+                                .map(link -> link.getOption().getId()).toList()));
+        List<QuizAttemptStateResponse.Question> questions = questionRepository
+                .findByQuiz_IdOrderByOrderIndex(attempt.getQuiz().getId()).stream()
+                .map(question -> {
+                    List<QuizAttemptStateResponse.Option> options = optionRepository
+                            .findByQuestion_IdOrderByOrderIndex(question.getId()).stream()
+                            .map(option -> new QuizAttemptStateResponse.Option(option.getId(),
+                                    option.getContent(), option.getOrderIndex())).toList();
+                    return new QuizAttemptStateResponse.Question(question.getId(), question.getQuestionType(),
+                            question.getContent(), question.getPointsAwarded(), question.getPointsDeducted(),
+                            question.getOrderIndex(), options,
+                            answers.getOrDefault(question.getId(), List.of()));
+                }).toList();
+
+        return new QuizAttemptStateResponse(attempt.getId(), attempt.getQuiz().getId(),
+                attempt.getAttemptNumber(), attempt.getStatus(), attempt.getStartedAt(), endAt,
+                remainingSeconds, questions);
     }
 
     private QuizAttempt lockOwnedStudentAttempt(UUID attemptId, UUID studentId, String notFoundCode) {
