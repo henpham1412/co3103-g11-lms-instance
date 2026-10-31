@@ -118,9 +118,7 @@ public class QuizAttemptService {
 
     @Transactional
     public void saveAnswer(UUID attemptId, UUID questionId, UUID studentId, SaveAnswerRequest request) {
-        QuizAttempt attempt = lockOwnedStudentAttempt(attemptId, studentId, "ATTEMPT_OR_QUESTION_NOT_FOUND");
-        if (!"IN_PROGRESS".equals(attempt.getStatus())) throw expiredAttempt();
-        accessService.requireEligibleStudent(attempt.getQuiz().getActivity(), studentId);
+        QuizAttempt attempt = requireEditableAttempt(attemptId, studentId);
 
         Question question = questionRepository.findByIdAndQuiz_Id(questionId, attempt.getQuiz().getId())
                 .orElseThrow(() -> new ResponseStatusException(
@@ -168,9 +166,7 @@ public class QuizAttemptService {
 
     @Transactional
     public void clearAnswer(UUID attemptId, UUID questionId, UUID studentId) {
-        QuizAttempt attempt = lockOwnedStudentAttempt(attemptId, studentId, "ATTEMPT_OR_QUESTION_NOT_FOUND");
-        if (!"IN_PROGRESS".equals(attempt.getStatus())) throw expiredAttempt();
-        accessService.requireEligibleStudent(attempt.getQuiz().getActivity(), studentId);
+        QuizAttempt attempt = requireEditableAttempt(attemptId, studentId);
         if (questionRepository.findByIdAndQuiz_Id(questionId, attempt.getQuiz().getId()).isEmpty()) {
             throw new ResponseStatusException(HttpStatus.NOT_FOUND, "ATTEMPT_OR_QUESTION_NOT_FOUND");
         }
@@ -190,25 +186,21 @@ public class QuizAttemptService {
             attempt.setSubmittedAt(now);
             gradingService.gradeAttempt(attempt);
         }
-        BigDecimal requiredScore = attempt.getQuiz().getRequiredScore();
-        Boolean passed = requiredScore == null ? null : attempt.getScore().compareTo(requiredScore) >= 0;
-        return new QuizAttemptResultResponse(attempt.getId(), attempt.getStatus(), attempt.getAutoSubmitted(),
-                attempt.getScore(), requiredScore, passed, attempt.getSubmittedAt());
+        return toResultResponse(attempt);
+    }
+
+    @Transactional(readOnly = true)
+    public QuizAttemptResultResponse getResult(UUID attemptId, UUID userId) {
+        QuizAttempt attempt = findVisibleAttempt(attemptId, userId);
+        if (!"SUBMITTED".equals(attempt.getStatus())) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT, "ATTEMPT_NOT_SUBMITTED");
+        }
+        return toResultResponse(attempt);
     }
 
     @Transactional(readOnly = true)
     public QuizAttemptStateResponse getAttemptState(UUID attemptId, UUID userId) {
-        QuizAttempt attempt = attemptRepository.findById(attemptId)
-                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "ATTEMPT_NOT_FOUND"));
-        UUID studentId = attempt.getClassMember().getStudentId();
-        if (studentId.equals(userId)) {
-            accessService.requireEligibleStudent(attempt.getQuiz().getActivity(), userId);
-        } else {
-            accessService.requireOwningTutor(attempt.getQuiz().getActivity(), userId);
-            if (!"SUBMITTED".equals(attempt.getStatus())) {
-                throw new ResponseStatusException(HttpStatus.FORBIDDEN, "FORBIDDEN");
-            }
-        }
+        QuizAttempt attempt = findVisibleAttempt(attemptId, userId);
 
         OffsetDateTime now = OffsetDateTime.now();
         OffsetDateTime endAt = calculateEndAt(attempt.getStartedAt(), attempt.getQuiz());
@@ -238,6 +230,24 @@ public class QuizAttemptService {
                 remainingSeconds, questions);
     }
 
+    private QuizAttempt findVisibleAttempt(UUID attemptId, UUID userId) {
+        QuizAttempt attempt = attemptRepository.findById(attemptId)
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "ATTEMPT_NOT_FOUND"));
+        if (attempt.getClassMember().getStudentId().equals(userId)) {
+            accessService.requireEligibleStudent(attempt.getQuiz().getActivity(), userId);
+        } else {
+            accessService.requireOwningTutor(attempt.getQuiz().getActivity(), userId);
+        }
+        return attempt;
+    }
+
+    private QuizAttemptResultResponse toResultResponse(QuizAttempt attempt) {
+        BigDecimal requiredScore = attempt.getQuiz().getRequiredScore();
+        Boolean passed = requiredScore == null ? null : attempt.getScore().compareTo(requiredScore) >= 0;
+        return new QuizAttemptResultResponse(attempt.getId(), attempt.getStatus(), attempt.getAutoSubmitted(),
+                attempt.getScore(), requiredScore, passed, attempt.getSubmittedAt());
+    }
+
     private QuizAttempt lockOwnedStudentAttempt(UUID attemptId, UUID studentId, String notFoundCode) {
         QuizAttempt initial = attemptRepository.findById(attemptId)
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, notFoundCode));
@@ -248,6 +258,14 @@ public class QuizAttemptService {
         if (!attempt.getClassMember().getStudentId().equals(studentId)) {
             throw new ResponseStatusException(HttpStatus.FORBIDDEN, "FORBIDDEN");
         }
+        return attempt;
+    }
+
+    private QuizAttempt requireEditableAttempt(UUID attemptId, UUID studentId) {
+        QuizAttempt attempt = lockOwnedStudentAttempt(
+                attemptId, studentId, "ATTEMPT_OR_QUESTION_NOT_FOUND");
+        if (!"IN_PROGRESS".equals(attempt.getStatus())) throw expiredAttempt();
+        accessService.requireEligibleStudent(attempt.getQuiz().getActivity(), studentId);
         return attempt;
     }
 

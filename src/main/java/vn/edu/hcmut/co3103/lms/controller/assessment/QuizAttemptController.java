@@ -74,5 +74,13 @@ public class QuizAttemptController {
     ) {
         return attemptService.getAttemptState(attemptId, UUID.fromString(jwt.getSubject()));
     }
+
+    @GetMapping("/quiz-attempts/{attemptId}/result")
+    public QuizAttemptResultResponse getResult(
+            @PathVariable UUID attemptId,
+            @AuthenticationPrincipal Jwt jwt
+    ) {
+        return attemptService.getResult(attemptId, UUID.fromString(jwt.getSubject()));
+    }
 }
 
