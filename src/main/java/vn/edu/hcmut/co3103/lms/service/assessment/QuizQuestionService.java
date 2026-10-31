@@ -131,6 +131,21 @@ public class QuizQuestionService {
         return toResponse(question, optionRepository.findByQuestion_IdOrderByOrderIndex(questionId));
     }
 
+    // note: no regrade happens if a question is deleted; it cannot happen had any attempts been submitted.
+    @Transactional
+    public void deleteQuestion(UUID questionId, UUID userId) {
+        Question question = questionRepository.findById(questionId)
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "QUESTION_NOT_FOUND"));
+        accessService.requireOwningTutor(question.getQuiz().getActivity(), userId);
+        if (attemptRepository.existsByQuiz_Id(question.getQuiz().getId())) {
+            throw lockedQuestion();
+        }
+
+        optionRepository.deleteByQuestion_Id(questionId);
+        optionRepository.flush();
+        questionRepository.delete(question);
+    }
+
     private boolean hasAnyField(QuestionUpdateRequest request) {
         return request.questionTypeProvided() || request.contentProvided() || request.pointsAwardedProvided()
                 || request.pointsDeductedProvided() || request.orderIndexProvided() || request.optionsProvided();
