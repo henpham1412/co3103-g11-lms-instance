@@ -65,9 +65,8 @@ and implementation components.
   servlet ERROR dispatches may render the safe error response; ordinary requests
   to `/error` still require an active local role. Internal errors always use
   `Content-Type: application/json;charset=UTF-8`, regardless of the `Accept` header.
-  The server-error JSON contains exactly `timestamp`, `status`, `error`, `message`,
-  and the original request `path` (without query parameters). `message` is a fixed
-  safe explanation, never an exception message, stack trace, or SQL.
+  The server-error JSON follows DOC-05 §1.8 with `code`, `message`, and `details`.
+  `message` is a fixed safe explanation, never an exception message, stack trace, or SQL.
   Recovery requires a fresh successful local-access lookup with no authority fallback.
 - `email` and `full_name` are display copies of Central Identity information.
   The identity key is `user_id`, never email (DOC-04 section 2.1.5).
@@ -92,7 +91,7 @@ and implementation components.
 - Allowed preflights and ordinary OPTIONS requests return HTTP 200 before Bearer
   authentication or local-access lookup, including during a database outage.
 - CORS denials, including invalid origins and rejected preflight methods or
-  headers, return the standard five-field JSON 403 response. OPTIONS does not
+  headers, return the DOC-05 §1.8 JSON 403 response. OPTIONS does not
   bypass the CORS whitelist.
 
 ## Administrator bootstrap
@@ -126,28 +125,28 @@ and implementation components.
 
 ## Standard security error response (DOC-05 alignment)
 
-All 401, 403, and servlet error responses use `Content-Type: application/json;charset=UTF-8`
-and these five fields:
+All HTTP error responses follow DOC-05 §1.8 `{code, message, details}`.
+Authentication, authorization, CORS, and servlet errors use
+`Content-Type: application/json;charset=UTF-8` and this payload:
 
 ```json
 {
-  "timestamp": "2026-10-30T08:30:00Z",
-  "status": 401,
-  "error": "Unauthorized",
+  "code": "UNAUTHORIZED",
   "message": "A valid Bearer access token is required.",
-  "path": "/api/v1/classes"
+  "details": []
 }
 ```
 
-`timestamp` is an ISO-8601 UTC timestamp. For 403, `status` is `403` and `error`
-is `Forbidden`. `message` gives a safe explanation of the failure; `path` is
-the request URI, without query parameters. Do not expose tokens, keys, raw
-exception details, stack traces, or database information. Authentication errors
-retain the HTTP Bearer challenge in `WWW-Authenticate`.
-
-The supplied task explicitly selects this five-field security error envelope.
-The older DOC-05 export uses `{code, message, details?}`; the approved task's
-envelope takes precedence for security and servlet errors in this implementation.
+`code` is a machine-readable string: `UNAUTHORIZED` for 401, `FORBIDDEN` for
+403, `NOT_FOUND` for 404, and `INTERNAL_SERVER_ERROR` for 500. Other recognized
+HTTP statuses use their uppercase status name, such as `BAD_REQUEST` for 400.
+Missing or unrecognized servlet error statuses fall back to HTTP 500 and
+`INTERNAL_SERVER_ERROR`. The HTTP status remains in the response status line.
+`message` is a human-readable, safe explanation. `details` is an optional array
+under DOC-05 §1.8; these handlers always emit an empty array (`[]`). No additional
+payload fields are included. Do not expose tokens, keys, raw exception details,
+stack traces, or database information. Authentication errors retain
+`WWW-Authenticate: Bearer`.
 
 ## Implementation and component structure
 
@@ -157,7 +156,7 @@ coverage and PostgreSQL/servlet integration coverage are separate verification g
 1. **Central Identity JWT Validation & Claim Contract (`6e1dbc5`):**
    - Implements RS256 token verification against Central Identity JWKS.
    - Enforces strict claim validation: RFC 4122 UUID `sub`, finite numeric timestamps (`exp`, `iat`, `nbf`), and clock skew tolerance of at most 60 seconds.
-   - Standardizes JSON 401 Unauthorized entry point with `WWW-Authenticate` Bearer challenge and five-field error payload.
+   - Standardizes JSON 401 Unauthorized entry point with `WWW-Authenticate` Bearer challenge and DOC-05 §1.8 error payload.
    - Validates malformed claim rejection (missing claims, wrong formats, invalid algorithms) fail-closed.
 
 2. **Local Access Control & RBAC Enforcement (`9853cb7`, `4f1fc70`):**

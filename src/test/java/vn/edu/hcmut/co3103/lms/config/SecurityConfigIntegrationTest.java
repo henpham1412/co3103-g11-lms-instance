@@ -149,7 +149,7 @@ class SecurityConfigIntegrationTest {
         mockMvc.perform(options(ADMIN)
                         .header(HttpHeaders.ORIGIN, origin)
                         .header(HttpHeaders.ACCESS_CONTROL_REQUEST_METHOD, "GET"))
-                .andExpect(forbiddenJson(ADMIN))
+                .andExpect(forbiddenJson())
                 .andExpect(header().doesNotExist(HttpHeaders.ACCESS_CONTROL_ALLOW_ORIGIN))
                 .andExpect(header().doesNotExist(HttpHeaders.ACCESS_CONTROL_ALLOW_CREDENTIALS));
     }
@@ -159,7 +159,7 @@ class SecurityConfigIntegrationTest {
         mockMvc.perform(options(ADMIN)
                         .header(HttpHeaders.ORIGIN, "http://localhost:3000")
                         .header(HttpHeaders.ACCESS_CONTROL_REQUEST_METHOD, "HEAD"))
-                .andExpect(forbiddenJson(ADMIN))
+                .andExpect(forbiddenJson())
                 .andExpect(header().doesNotExist(HttpHeaders.ACCESS_CONTROL_ALLOW_ORIGIN));
     }
 
@@ -169,7 +169,7 @@ class SecurityConfigIntegrationTest {
                         .header(HttpHeaders.ORIGIN, "http://localhost:5173")
                         .header(HttpHeaders.ACCESS_CONTROL_REQUEST_METHOD, "POST")
                         .header(HttpHeaders.ACCESS_CONTROL_REQUEST_HEADERS, "X-Untrusted-Header"))
-                .andExpect(forbiddenJson(ADMIN))
+                .andExpect(forbiddenJson())
                 .andExpect(header().doesNotExist(HttpHeaders.ACCESS_CONTROL_ALLOW_ORIGIN))
                 .andExpect(header().doesNotExist(HttpHeaders.ACCESS_CONTROL_ALLOW_HEADERS));
     }
@@ -192,7 +192,7 @@ class SecurityConfigIntegrationTest {
                 .andExpect(header().stringValues(HttpHeaders.ACCESS_CONTROL_ALLOW_CREDENTIALS, "true"));
         mockMvc.perform(get(ADMIN).header(HttpHeaders.ORIGIN, origin)
                         .header(HttpHeaders.AUTHORIZATION, bearer))
-                .andExpect(forbiddenJson(ADMIN))
+                .andExpect(forbiddenJson())
                 .andExpect(header().stringValues(HttpHeaders.ACCESS_CONTROL_ALLOW_ORIGIN, origin))
                 .andExpect(header().stringValues(HttpHeaders.ACCESS_CONTROL_ALLOW_CREDENTIALS, "true"));
     }
@@ -200,7 +200,7 @@ class SecurityConfigIntegrationTest {
     @Test
     void rejectsActualCorsRequestFromUntrustedOrigin() throws Exception {
         mockMvc.perform(get(ME).header(HttpHeaders.ORIGIN, "https://untrusted.example"))
-                .andExpect(forbiddenJson(ME))
+                .andExpect(forbiddenJson())
                 .andExpect(header().doesNotExist(HttpHeaders.ACCESS_CONTROL_ALLOW_ORIGIN))
                 .andExpect(header().doesNotExist(HttpHeaders.ACCESS_CONTROL_ALLOW_CREDENTIALS));
     }
@@ -237,7 +237,7 @@ class SecurityConfigIntegrationTest {
     void returnsForbiddenForUnknownLocalUser() throws Exception {
         mockMvc.perform(get(ME).queryParam("private", "do-not-echo")
                         .header("Authorization", "Bearer " + token(UUID.randomUUID().toString())))
-                .andExpect(forbiddenJson(ME));
+                .andExpect(forbiddenJson());
     }
 
     @ParameterizedTest
@@ -246,7 +246,7 @@ class SecurityConfigIntegrationTest {
         LmsUserAccess user = saveUser(role, AccessStatus.SUSPENDED);
 
         mockMvc.perform(get(ME).header("Authorization", "Bearer " + token(user.getUserId().toString())))
-                .andExpect(forbiddenJson(ME));
+                .andExpect(forbiddenJson());
     }
 
     @ParameterizedTest
@@ -266,7 +266,7 @@ class SecurityConfigIntegrationTest {
                 LmsRole.ADMINISTRATOR, ADMIN).entrySet()) {
             mockMvc.perform(get(endpoint.getValue()).queryParam("private", "do-not-echo")
                             .header("Authorization", "Bearer " + token(user.getUserId().toString())))
-                    .andExpect(role == endpoint.getKey() ? status().isOk() : forbiddenJson(endpoint.getValue()));
+                    .andExpect(role == endpoint.getKey() ? status().isOk() : forbiddenJson());
         }
     }
 
@@ -280,20 +280,20 @@ class SecurityConfigIntegrationTest {
 
             user.setLmsRole(LmsRole.STUDENT);
             repository.saveAndFlush(user);
-            mockMvc.perform(get(ADMIN).header("Authorization", bearer)).andExpect(forbiddenJson(ADMIN));
+            mockMvc.perform(get(ADMIN).header("Authorization", bearer)).andExpect(forbiddenJson());
             mockMvc.perform(get(ME).header("Authorization", bearer)).andExpect(status().isOk())
                     .andExpect(content().string(user.getUserId() + "|ROLE_STUDENT"));
 
             user.setAccessStatus(AccessStatus.SUSPENDED);
             repository.saveAndFlush(user);
-            mockMvc.perform(get(ME).header("Authorization", bearer)).andExpect(forbiddenJson(ME));
+            mockMvc.perform(get(ME).header("Authorization", bearer)).andExpect(forbiddenJson());
 
             user.setAccessStatus(AccessStatus.ACTIVE);
             repository.saveAndFlush(user);
             mockMvc.perform(get(ME).header("Authorization", bearer)).andExpect(status().isOk());
 
             repository.deleteById(user.getUserId());
-            mockMvc.perform(get(ME).header("Authorization", bearer)).andExpect(forbiddenJson(ME));
+            mockMvc.perform(get(ME).header("Authorization", bearer)).andExpect(forbiddenJson());
         } finally {
             repository.deleteById(user.getUserId());
         }
@@ -305,7 +305,7 @@ class SecurityConfigIntegrationTest {
         LmsUserAccess user = saveUser(LmsRole.STUDENT, AccessStatus.SUSPENDED);
         mockMvc.perform(get(ME).accept(accept).queryParam("private", "do-not-echo")
                         .header(HttpHeaders.AUTHORIZATION, "Bearer " + token(user.getUserId().toString())))
-                .andExpect(forbiddenJson(ME));
+                .andExpect(forbiddenJson());
     }
 
     @ParameterizedTest
@@ -372,7 +372,7 @@ class SecurityConfigIntegrationTest {
         mockMvc.perform(get(ME).queryParam("private", "do-not-echo")
                         .header(HttpHeaders.AUTHORIZATION, "Bearer " + TOKENS.token(claims)))
                 .andExpect(unauthorizedJson())
-                .andExpect(header().string(HttpHeaders.WWW_AUTHENTICATE, "Bearer error=\"invalid_token\""));
+                .andExpect(header().string(HttpHeaders.WWW_AUTHENTICATE, "Bearer"));
     }
 
     @ParameterizedTest
@@ -421,7 +421,7 @@ class SecurityConfigIntegrationTest {
         mockMvc.perform(get(ME).queryParam("private", "do-not-echo")
                         .header(HttpHeaders.AUTHORIZATION, "Bearer " + TOKENS.token(claims)))
                 .andExpect(unauthorizedJson())
-                .andExpect(header().string(HttpHeaders.WWW_AUTHENTICATE, "Bearer error=\"invalid_token\""));
+                .andExpect(header().string(HttpHeaders.WWW_AUTHENTICATE, "Bearer"));
     }
 
     @ParameterizedTest
@@ -444,7 +444,7 @@ class SecurityConfigIntegrationTest {
 
         mockMvc.perform(get(ME).header(HttpHeaders.AUTHORIZATION, "Bearer " + TOKENS.token(claims)))
                 .andExpect(unauthorizedJson())
-                .andExpect(header().string(HttpHeaders.WWW_AUTHENTICATE, "Bearer error=\"invalid_token\""));
+                .andExpect(header().string(HttpHeaders.WWW_AUTHENTICATE, "Bearer"));
     }
 
     @ParameterizedTest
@@ -471,20 +471,17 @@ class SecurityConfigIntegrationTest {
                 .andExpect(unauthorizedJson());
     }
 
-    private ResultMatcher forbiddenJson(String path) {
+    private ResultMatcher forbiddenJson() {
         return result -> {
             status().isForbidden().match(result);
             content().contentType("application/json;charset=UTF-8").match(result);
             header().doesNotExist(HttpHeaders.WWW_AUTHENTICATE).match(result);
             JsonNode body = objectMapper.readTree(result.getResponse().getContentAsString());
-            assertThat(body.size()).isEqualTo(5);
-            assertThat(body.get("status").asInt()).isEqualTo(403);
-            assertThat(body.get("error").asString()).isEqualTo("Forbidden");
+            assertThat(body.size()).isEqualTo(3);
+            assertThat(body.get("code").asString()).isEqualTo("FORBIDDEN");
             assertThat(body.get("message").asString()).isEqualTo("Access to this resource is denied.");
-            assertThat(body.get("path").asString()).isEqualTo(path);
-            assertThat(body.get("timestamp").asString()).endsWith("Z");
-            assertThat(Instant.parse(body.get("timestamp").asString()))
-                    .isBetween(Instant.now().minusSeconds(60), Instant.now());
+            assertThat(body.get("details").isArray()).isTrue();
+            assertThat(body.get("details").isEmpty()).isTrue();
         };
     }
 
@@ -492,17 +489,14 @@ class SecurityConfigIntegrationTest {
         return result -> {
             status().isUnauthorized().match(result);
             content().contentType("application/json;charset=UTF-8").match(result);
-            header().string(HttpHeaders.WWW_AUTHENTICATE, startsWith("Bearer")).match(result);
+            header().string(HttpHeaders.WWW_AUTHENTICATE, "Bearer").match(result);
             JsonNode body = objectMapper.readTree(result.getResponse().getContentAsString());
-            assertThat(body.size()).isEqualTo(5);
-            assertThat(body.get("status").asInt()).isEqualTo(401);
-            assertThat(body.get("error").asString()).isEqualTo("Unauthorized");
+            assertThat(body.size()).isEqualTo(3);
+            assertThat(body.get("code").asString()).isEqualTo("UNAUTHORIZED");
             assertThat(body.get("message").asString()).isIn("A valid Bearer access token is required.",
                     "The Bearer access token is invalid or expired.");
-            assertThat(body.get("path").asString()).isEqualTo(ME);
-            assertThat(body.get("timestamp").asString()).endsWith("Z");
-            assertThat(Instant.parse(body.get("timestamp").asString()))
-                    .isBetween(Instant.now().minusSeconds(60), Instant.now());
+            assertThat(body.get("details").isArray()).isTrue();
+            assertThat(body.get("details").isEmpty()).isTrue();
         };
     }
 

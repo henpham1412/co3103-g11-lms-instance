@@ -131,9 +131,12 @@ class CorsConfigurationTest {
         assertThat(response.getStatus()).isEqualTo(status);
         assertThat(response.getContentType()).isEqualTo("application/json;charset=UTF-8");
         var body = new ObjectMapper().readTree(response.getContentAsString());
-        assertThat(body.size()).isEqualTo(5);
-        assertThat(body.get("status").asInt()).isEqualTo(status);
-        assertThat(body.get("path").asString()).isEqualTo("/probe");
+        assertThat(body.size()).isEqualTo(3);
+        assertThat(body.get("code").asString()).isEqualTo(status == 401 ? "UNAUTHORIZED" : "FORBIDDEN");
+        assertThat(body.get("message").asString()).isEqualTo(status == 401
+                ? "A valid Bearer access token is required." : "Access to this resource is denied.");
+        assertThat(body.get("details").isArray()).isTrue();
+        assertThat(body.get("details").isEmpty()).isTrue();
     }
 
     private AnnotationConfigWebApplicationContext context(String origins, boolean early) {

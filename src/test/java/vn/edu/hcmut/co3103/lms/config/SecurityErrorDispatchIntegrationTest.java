@@ -40,7 +40,6 @@ import java.net.http.HttpResponse;
 import java.sql.SQLException;
 import java.time.Clock;
 import java.time.Duration;
-import java.time.Instant;
 import java.util.List;
 import java.util.UUID;
 import java.util.concurrent.atomic.AtomicInteger;
@@ -158,7 +157,7 @@ class SecurityErrorDispatchIntegrationTest {
             var response = call(ME + "?trace=true&message=true&errors=true&exception=true&private=private-query",
                     token, accept);
 
-            assertSafeError(response, 500, "Internal Server Error", ME);
+            assertSafeError(response, 500, "INTERNAL_SERVER_ERROR", "An unexpected server error occurred.");
             assertThat(response.body()).doesNotContain(token);
             assertThat(controller.invocations).hasValue(1);
         }
@@ -187,7 +186,7 @@ class SecurityErrorDispatchIntegrationTest {
         assertThat(response.headers().firstValue(HttpHeaders.CONTENT_TYPE))
                 .contains("application/json;charset=UTF-8");
         assertThat(response.headers().firstValue(HttpHeaders.WWW_AUTHENTICATE)).contains("Bearer");
-        assertThat(objectMapper.readTree(response.body()).get("path").asString()).isEqualTo("/error");
+        assertErrorBody(response, "UNAUTHORIZED", "A valid Bearer access token is required.");
         assertThat(controller.invocations).hasValue(0);
     }
 
@@ -204,7 +203,7 @@ class SecurityErrorDispatchIntegrationTest {
             assertThat(response.headers().firstValue(HttpHeaders.CONTENT_TYPE))
                     .contains("application/json;charset=UTF-8");
             assertThat(response.headers().allValues(HttpHeaders.WWW_AUTHENTICATE)).isEmpty();
-            assertThat(objectMapper.readTree(response.body()).get("path").asString()).isEqualTo("/error");
+            assertErrorBody(response, "FORBIDDEN", "Access to this resource is denied.");
         }
         assertThat(controller.invocations).hasValue(0);
     }
@@ -214,15 +213,15 @@ class SecurityErrorDispatchIntegrationTest {
     @ValueSource(strings = {"application/json", "text/html", "application/xml", "*/*"})
     void directErrorRequestWithActiveLocalRoleHasSafeFallback(String accept) throws Exception {
         assertSafeError(call("/error", token(user.getUserId()), accept),
-                500, "Internal Server Error", "/error");
+                500, "INTERNAL_SERVER_ERROR", "An unexpected server error occurred.");
     }
 
     @ParameterizedTest
     @NullSource
     @ValueSource(strings = {"application/json", "text/html", "application/xml", "*/*"})
-    void missingRouteRetainsStatusAndOriginalPath(String accept) throws Exception {
+    void missingRouteReturnsNotFoundEnvelope(String accept) throws Exception {
         String path = "/test/security/error-dispatch/missing";
-        assertSafeError(call(path, token(user.getUserId()), accept), 404, "Not Found", path);
+        assertSafeError(call(path, token(user.getUserId()), accept), 404, "NOT_FOUND", "Not Found");
     }
 
     @ParameterizedTest
@@ -236,7 +235,7 @@ class SecurityErrorDispatchIntegrationTest {
                 .header(HttpHeaders.AUTHORIZATION, "Bearer " + token(user.getUserId())).build();
         try (var client = HttpClient.newHttpClient()) {
             var response = client.send(request, HttpResponse.BodyHandlers.ofString());
-            assertSafeError(response, 500, "Internal Server Error", ME);
+            assertSafeError(response, 500, "INTERNAL_SERVER_ERROR", "An unexpected server error occurred.");
             assertThat(response.headers().allValues(HttpHeaders.ACCESS_CONTROL_ALLOW_ORIGIN)).containsExactly(origin);
             assertThat(response.headers().allValues(HttpHeaders.ACCESS_CONTROL_ALLOW_CREDENTIALS)).containsExactly("true");
         }
@@ -244,22 +243,23 @@ class SecurityErrorDispatchIntegrationTest {
         assertThat(controller.invocations).hasValue(0);
     }
 
-    private void assertSafeError(HttpResponse<String> response, int status, String error, String path) {
+    private void assertSafeError(HttpResponse<String> response, int status, String code, String message) {
         assertThat(response.statusCode()).isEqualTo(status);
         assertThat(response.headers().allValues(HttpHeaders.WWW_AUTHENTICATE)).isEmpty();
         assertThat(response.headers().firstValue(HttpHeaders.CONTENT_TYPE))
                 .contains("application/json;charset=UTF-8");
         assertThat(response.headers().firstValue(HttpHeaders.CACHE_CONTROL).orElseThrow()).contains("no-store");
         assertThat(response.headers().allValues(HttpHeaders.SET_COOKIE)).isEmpty();
+        assertErrorBody(response, code, message);
+    }
+
+    private void assertErrorBody(HttpResponse<String> response, String code, String message) {
         var body = objectMapper.readTree(response.body());
-        assertThat(body.size()).isEqualTo(5);
-        assertThat(body.get("status").asInt()).isEqualTo(status);
-        assertThat(body.get("error").asString()).isEqualTo(error);
-        assertThat(body.get("message").asString()).isEqualTo(status >= 500
-                ? "An unexpected server error occurred." : error);
-        assertThat(body.get("path").asString()).isEqualTo(path);
-        assertThat(Instant.parse(body.get("timestamp").asString()))
-                .isBetween(Instant.now().minusSeconds(60), Instant.now());
+        assertThat(body.size()).isEqualTo(3);
+        assertThat(body.get("code").asString()).isEqualTo(code);
+        assertThat(body.get("message").asString()).isEqualTo(message);
+        assertThat(body.get("details").isArray()).isTrue();
+        assertThat(body.get("details").isEmpty()).isTrue();
         assertThat(response.body()).doesNotContain("private-db", "private-password", "SELECT", "lms_user_access",
                 "Exception", "private-query", "trace");
     }

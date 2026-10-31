@@ -10,7 +10,7 @@ import tools.jackson.databind.ObjectMapper;
 
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
-import java.time.Instant;
+import java.util.List;
 import java.util.Map;
 
 @Component
@@ -29,10 +29,8 @@ public final class JsonAccessDeniedHandler implements AccessDeniedHandler {
         response.setCharacterEncoding(StandardCharsets.UTF_8.name());
         response.setContentType(MediaType.APPLICATION_JSON_VALUE);
         objectMapper.writeValue(response.getOutputStream(), Map.of(
-                "timestamp", Instant.now().toString(),
-                "status", HttpServletResponse.SC_FORBIDDEN,
-                "error", "Forbidden",
+                "code", "FORBIDDEN",
                 "message", "Access to this resource is denied.",
-                "path", request.getRequestURI()));
+                "details", List.of()));
     }
 }
