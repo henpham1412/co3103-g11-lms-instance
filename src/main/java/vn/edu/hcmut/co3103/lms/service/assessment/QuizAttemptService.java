@@ -34,6 +34,7 @@ import java.time.OffsetDateTime;
 import java.math.BigDecimal;
 import java.util.List;
 import java.util.HashSet;
+import java.util.Optional;
 import java.util.Set;
 import java.util.UUID;
 
@@ -83,7 +84,7 @@ public class QuizAttemptService {
         for (QuizAttempt attempt : attempts) {
             if (!"IN_PROGRESS".equals(attempt.getStatus())) continue;
             OffsetDateTime endAt = calculateEndAt(attempt.getStartedAt(), quiz);
-            if (!now.isBefore(endAt)) {
+            if (hasReachedEndAt(endAt, now)) {
                 // The expiry worker will submit it; don't perform scheduler work in this request.
                 throw new ResponseStatusException(HttpStatus.CONFLICT, "QUIZ_NOT_AVAILABLE");
             }
@@ -116,9 +117,13 @@ public class QuizAttemptService {
         return !questionRepository.findByQuiz_IdOrderByOrderIndex(quiz.getId()).isEmpty();
     }
 
-    private OffsetDateTime calculateEndAt(OffsetDateTime startedAt, Quiz quiz) {
+    private static OffsetDateTime calculateEndAt(OffsetDateTime startedAt, Quiz quiz) {
         OffsetDateTime timeLimitEnd = startedAt.plusMinutes(quiz.getTimeLimitMinutes());
         return timeLimitEnd.isBefore(quiz.getDeadline()) ? timeLimitEnd : quiz.getDeadline();
+    }
+
+    static boolean hasReachedEndAt(OffsetDateTime endAt, OffsetDateTime now) {
+        return !now.isBefore(endAt);
     }
 
     private QuizAttemptStartResponse toResponse(QuizAttempt attempt, OffsetDateTime endAt, OffsetDateTime now) {
@@ -274,11 +279,7 @@ public class QuizAttemptService {
     }
 
     private QuizAttempt lockOwnedStudentAttempt(UUID attemptId, UUID studentId, String notFoundCode) {
-        QuizAttempt initial = attemptRepository.findById(attemptId)
-                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, notFoundCode));
-        quizRepository.findLockedById(initial.getQuiz().getId())
-                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, notFoundCode));
-        QuizAttempt attempt = attemptRepository.findLockedById(attemptId)
+        QuizAttempt attempt = findLockedAttemptAndQuiz(attemptId)
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, notFoundCode));
         if (!attempt.getClassMember().getStudentId().equals(studentId)) {
             throw new ResponseStatusException(HttpStatus.FORBIDDEN, "FORBIDDEN");
@@ -286,10 +287,20 @@ public class QuizAttemptService {
         return attempt;
     }
 
+    private Optional<QuizAttempt> findLockedAttemptAndQuiz(UUID attemptId) {
+        Optional<UUID> quizId = attemptRepository.findQuizIdByAttemptId(attemptId);
+        if (quizId.isEmpty() || quizRepository.findLockedById(quizId.get()).isEmpty()) {
+            return Optional.empty();
+        }
+        return attemptRepository.findLockedById(attemptId);
+    }
+
     private QuizAttempt requireEditableAttempt(UUID attemptId, UUID studentId) {
         QuizAttempt attempt = lockOwnedStudentAttempt(
                 attemptId, studentId, "ATTEMPT_OR_QUESTION_NOT_FOUND");
         if (!"IN_PROGRESS".equals(attempt.getStatus())) throw expiredAttempt();
+        OffsetDateTime endAt = calculateEndAt(attempt.getStartedAt(), attempt.getQuiz());
+        if (hasReachedEndAt(endAt, OffsetDateTime.now())) throw expiredAttempt();
         accessService.requireEligibleStudent(attempt.getQuiz().getActivity(), studentId);
         return attempt;
     }
@@ -306,17 +317,12 @@ public class QuizAttemptService {
 
     @Transactional
     public void expireIfDue(UUID attemptId) {
-        QuizAttempt initial = attemptRepository.findById(attemptId).orElse(null);
-        if (initial == null || !"IN_PROGRESS".equals(initial.getStatus())) return;
-
-        Quiz quiz = quizRepository.findLockedById(initial.getQuiz().getId()).orElse(null);
-        if (quiz == null) return;
-        QuizAttempt attempt = attemptRepository.findLockedById(attemptId).orElse(null);
+        QuizAttempt attempt = findLockedAttemptAndQuiz(attemptId).orElse(null);
         if (attempt == null || !"IN_PROGRESS".equals(attempt.getStatus())) return;
 
         OffsetDateTime now = OffsetDateTime.now();
-        OffsetDateTime endAt = calculateEndAt(attempt.getStartedAt(), quiz);
-        if (now.isBefore(endAt)) return;
+        OffsetDateTime endAt = calculateEndAt(attempt.getStartedAt(), attempt.getQuiz());
+        if (!hasReachedEndAt(endAt, now)) return;
 
         attempt.setStatus("SUBMITTED");
         attempt.setSubmittedAt(now);
