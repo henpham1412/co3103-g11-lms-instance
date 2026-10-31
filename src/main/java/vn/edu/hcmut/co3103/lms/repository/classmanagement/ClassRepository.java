@@ -27,6 +27,8 @@ public interface ClassRepository extends JpaRepository<Class, UUID> {
                    c.thumbnail_url AS "thumbnailUrl",
                    c.enrollment_policy AS "enrollmentPolicy",
                    c.status AS "status",
+                   c.created_at AS "createdAt",
+                   c.updated_at AS "updatedAt",
                    u.user_id AS "tutorId",
                    u.full_name AS "tutorName",
                    (SELECT COUNT(*)
@@ -66,6 +68,33 @@ public interface ClassRepository extends JpaRepository<Class, UUID> {
             Pageable pageable
     );
 
+    @Query(value = """
+            SELECT c.class_id AS "classId",
+                   c.class_code AS "classCode",
+                   c.title AS "title",
+                   c.description AS "description",
+                   c.prerequisites_description AS "prerequisitesDescription",
+                   c.thumbnail_url AS "thumbnailUrl",
+                   c.enrollment_policy AS "enrollmentPolicy",
+                   c.status AS "status",
+                   c.created_at AS "createdAt",
+                   c.updated_at AS "updatedAt",
+                   u.user_id AS "tutorId",
+                   u.full_name AS "tutorName",
+                   (SELECT COUNT(*)
+                    FROM class_member cm
+                    WHERE cm.class_id = c.class_id
+                      AND cm.status = 'ACTIVE') AS "activeMemberCount",
+                   c.max_capacity AS "maxCapacity"
+            FROM class c
+            JOIN lms_user_access u ON u.user_id = c.tutor_id
+            WHERE c.class_id = :classId
+              AND u.access_status = 'ACTIVE'
+              AND u.lms_role = 'TUTOR'
+            """,
+            nativeQuery = true
+    )
+    Optional<ClassCatalogRow> findDetailsByClassId(@Param("classId") UUID classId);
     boolean existsByClassCode(String classCode);
 
     Optional<Class> findByClassCode(String classCode);

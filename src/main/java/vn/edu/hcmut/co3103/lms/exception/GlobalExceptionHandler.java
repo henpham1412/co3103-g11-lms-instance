@@ -37,4 +37,15 @@ public class GlobalExceptionHandler {
 
         return ResponseEntity.status(exception.getStatusCode()).body(response);
     }
+
+    @ExceptionHandler(IllegalArgumentException.class)
+    public ResponseEntity<Map<String, String>> handleInvalidArgument(
+            IllegalArgumentException exception
+    ) {
+        Map<String, String> response = Map.of(
+                "error", "VALIDATION_ERROR",
+                "message", "The request contains an unsupported or invalid value."
+        );
+        return ResponseEntity.badRequest().body(response);
+    }
 }

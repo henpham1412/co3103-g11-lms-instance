@@ -7,6 +7,7 @@ import vn.edu.hcmut.co3103.lms.entity.ClassMember;
 import vn.edu.hcmut.co3103.lms.entity.ClassMember.MembershipStatus;
 
 import java.util.Optional;
+import java.util.List;
 import java.util.UUID;
 
 public interface ClassMemberRepository
@@ -40,6 +41,11 @@ public interface ClassMemberRepository
             UUID studentId,
             MembershipStatus status,
             Pageable pageable
+    );
+
+    List<ClassMember> findByStudentIdAndStatusInOrderByRequestedAtDesc(
+            UUID studentId,
+            java.util.Collection<MembershipStatus> statuses
     );
 
     long countByClassIdAndStatus(

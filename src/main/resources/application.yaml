@@ -20,3 +20,6 @@ spring:
         jwt:
           issuer-uri: ${CENTRAL_IDENTITY_ISSUER_URI:http://localhost:8080}
           jwk-set-uri: ${CENTRAL_IDENTITY_JWKS_URI:http://localhost:8080/.well-known/jwks.json}
+
+server:
+  port: ${LMS_PORT:8081}

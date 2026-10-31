@@ -1,6 +1,7 @@
 package vn.edu.hcmut.co3103.lms.repository.classmanagement;
 
 import java.util.UUID;
+import java.time.Instant;
 
 public interface ClassCatalogRow {
 
@@ -27,4 +28,8 @@ public interface ClassCatalogRow {
     Long getActiveMemberCount();
 
     Integer getMaxCapacity();
+
+    Instant getCreatedAt();
+
+    Instant getUpdatedAt();
 }
