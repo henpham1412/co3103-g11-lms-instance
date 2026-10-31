@@ -160,6 +160,14 @@ After PostgreSQL is available and the required datasource and security configura
 
 The application uses the server port and API configuration defined in its Spring Boot configuration. The final local URL and API base path will be recorded after those settings are confirmed.
 
+### 5.6 Local Learning-Material Storage
+
+The learning-content API stores uploaded files outside the repository. By default, files are written to `./var/lms-files`; set `LMS_LOCAL_STORAGE_DIRECTORY` to choose another directory. Keep this directory persistent and include it in deployment backups.
+
+For `DOCUMENT` and uploaded `VIDEO` materials, send multipart form data to `POST /api/v1/lessons/{lessonId}/materials` with a JSON `metadata` part and a `file` part. Documents are limited to 50 MiB (PDF, DOCX, PPTX); uploaded videos are limited to 200 MiB (MP4, WebM). The server checks file contents and serves stored files through the authenticated URL returned as `file_url`. Students must have active class membership and the material must be published; tutors must own the class.
+
+This local-storage implementation does not persist extra checksum/MIME/size metadata columns. The current database schema stores the generated file URL only. External `URL` and HTTPS video links are still submitted as JSON.
+
 ## 6. Maven Wrapper Configuration
 
 The repository uses the following settings in `.mvn/wrapper/maven-wrapper.properties`:

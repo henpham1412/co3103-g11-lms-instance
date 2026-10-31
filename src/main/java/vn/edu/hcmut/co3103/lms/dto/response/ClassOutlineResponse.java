@@ -2,7 +2,6 @@ package vn.edu.hcmut.co3103.lms.dto.response;
 
 import com.fasterxml.jackson.annotation.JsonProperty;
 import vn.edu.hcmut.co3103.lms.entity.Chapter;
-import vn.edu.hcmut.co3103.lms.entity.Lesson;
 import vn.edu.hcmut.co3103.lms.entity.Material;
 import java.time.Instant;
 import java.util.List;

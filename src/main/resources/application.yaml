@@ -1,4 +1,8 @@
 spring:
+  servlet:
+    multipart:
+      max-file-size: 200MB
+      max-request-size: 201MB
   application:
     name: co3103-g11-lms-instance
   datasource:
@@ -23,3 +27,8 @@ spring:
 
 server:
   port: ${LMS_PORT:8081}
+
+lms:
+  storage:
+    local:
+      directory: ${LMS_LOCAL_STORAGE_DIRECTORY:./var/lms-files}

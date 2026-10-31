@@ -11,4 +11,5 @@ public interface MaterialRepository extends JpaRepository<Material, UUID> {
     List<Material> findByLessonIdOrderBySequenceOrderAsc(UUID lessonId);
     List<Material> findByLessonIdAndStatusOrderBySequenceOrderAsc(UUID lessonId, Chapter.VisibilityStatus status);
     Optional<Material> findByMaterialIdAndLessonId(UUID materialId, UUID lessonId);
+    Optional<Material> findByFileUrl(String fileUrl);
 }

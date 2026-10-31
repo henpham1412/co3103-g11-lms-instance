@@ -41,6 +41,9 @@ build/
 *.log
 logs/
 
+### Local LMS uploads ###
+/var/lms-files/
+
 ### Operating system ###
 .DS_Store
 Thumbs.db

@@ -13,6 +13,7 @@ import vn.edu.hcmut.co3103.lms.domain.LmsUserAccess;
 import vn.edu.hcmut.co3103.lms.repository.LmsUserAccessRepository;
 
 import java.util.List;
+import java.util.Objects;
 import java.util.UUID;
 
 @Component
@@ -34,7 +35,7 @@ public final class LocalAccessJwtAuthenticationConverter implements Converter<Jw
         UUID userId = UUID.fromString(jwt.getSubject());
         List<GrantedAuthority> authorities = repository.findById(userId)
                 .filter(user -> user.getAccessStatus() == AccessStatus.ACTIVE)
-                .map(LmsUserAccess::getLmsRole)
+                .map(user -> Objects.requireNonNull(user, "User access must not be null").getLmsRole())
                 .map(role -> List.<GrantedAuthority>of(new SimpleGrantedAuthority("ROLE_" + role.name())))
                 .orElseGet(List::of);
 

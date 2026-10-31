@@ -2,7 +2,11 @@ package vn.edu.hcmut.co3103.lms.controller.learningcontent;
 
 import jakarta.validation.Valid;
 import org.springframework.http.HttpStatus;
+import org.springframework.http.HttpHeaders;
+import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
+import org.springframework.core.io.FileSystemResource;
+import org.springframework.core.io.Resource;
 import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.security.core.Authentication;
 import org.springframework.security.core.annotation.AuthenticationPrincipal;
@@ -15,7 +19,9 @@ import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.PutMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RequestPart;
 import org.springframework.web.bind.annotation.RestController;
+import org.springframework.web.multipart.MultipartFile;
 import org.springframework.web.server.ResponseStatusException;
 import vn.edu.hcmut.co3103.lms.dto.request.ChapterRequest;
 import vn.edu.hcmut.co3103.lms.dto.request.LessonRequest;
@@ -23,9 +29,6 @@ import vn.edu.hcmut.co3103.lms.dto.request.MaterialRequest;
 import vn.edu.hcmut.co3103.lms.dto.request.OrderUpdateRequest;
 import vn.edu.hcmut.co3103.lms.dto.response.ClassOutlineResponse;
 import vn.edu.hcmut.co3103.lms.dto.response.ContentItemResponse;
-import vn.edu.hcmut.co3103.lms.entity.Chapter;
-import vn.edu.hcmut.co3103.lms.entity.Lesson;
-import vn.edu.hcmut.co3103.lms.entity.Material;
 import vn.edu.hcmut.co3103.lms.service.learningcontent.ChapterService;
 
 import java.util.List;
@@ -142,12 +145,33 @@ public class ChapterController {
         return chapterService.listMaterials(lessonId, userId(jwt), isTutor(authentication));
     }
 
-    @PostMapping("/lessons/{lessonId}/materials")
+    @PostMapping(value = "/lessons/{lessonId}/materials", consumes = MediaType.APPLICATION_JSON_VALUE)
     @PreAuthorize("hasRole('TUTOR')")
     public ResponseEntity<ContentItemResponse.MaterialItem> createMaterial(@AuthenticationPrincipal Jwt jwt,
             @PathVariable UUID lessonId, @Valid @RequestBody MaterialRequest request) {
         return ResponseEntity.status(HttpStatus.CREATED)
                 .body(ContentItemResponse.MaterialItem.from(chapterService.createMaterial(lessonId, userId(jwt), request)));
+    }
+
+    @PostMapping(value = "/lessons/{lessonId}/materials", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
+    @PreAuthorize("hasRole('TUTOR')")
+    public ResponseEntity<ContentItemResponse.MaterialItem> uploadMaterial(@AuthenticationPrincipal Jwt jwt,
+            @PathVariable UUID lessonId, @Valid @RequestPart("metadata") MaterialRequest request,
+            @RequestPart("file") MultipartFile file) {
+        return ResponseEntity.status(HttpStatus.CREATED).body(ContentItemResponse.MaterialItem.from(
+                chapterService.createUploadedMaterial(lessonId, userId(jwt), request, file)));
+    }
+
+    @GetMapping("/materials/files/{fileKey}")
+    @PreAuthorize("hasAnyRole('STUDENT', 'TUTOR')")
+    public ResponseEntity<Resource> downloadMaterial(@AuthenticationPrincipal Jwt jwt, Authentication authentication,
+            @PathVariable String fileKey) {
+        ChapterService.DownloadableMaterial file = chapterService.getMaterialFile(fileKey, userId(jwt), isTutor(authentication));
+        return ResponseEntity.ok()
+                .contentType(MediaType.parseMediaType(file.contentType()))
+                .header(HttpHeaders.CONTENT_DISPOSITION,
+                        org.springframework.http.ContentDisposition.attachment().filename(file.downloadName()).build().toString())
+                .body(new FileSystemResource(file.path()));
     }
 
     @GetMapping("/materials/{materialId}")
