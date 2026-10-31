@@ -9,6 +9,8 @@ import vn.edu.hcmut.co3103.lms.entity.Class;
 import vn.edu.hcmut.co3103.lms.entity.Lesson;
 import vn.edu.hcmut.co3103.lms.entity.LmsUserAccess;
 import vn.edu.hcmut.co3103.lms.repository.LmsUserAccessRepository;
+import vn.edu.hcmut.co3103.lms.repository.classmanagement.ClassMemberRepository;
+import vn.edu.hcmut.co3103.lms.entity.ClassMember;
 import vn.edu.hcmut.co3103.lms.service.classmanagement.ClassMembershipService;
 
 import java.util.UUID;
@@ -17,13 +19,16 @@ import java.util.UUID;
 public class QuizConfigurationAccessService {
     private final LmsUserAccessRepository userAccessRepository;
     private final ClassMembershipService membershipService;
+    private final ClassMemberRepository classMemberRepository;
 
     public QuizConfigurationAccessService(
             LmsUserAccessRepository userAccessRepository,
-            ClassMembershipService membershipService
+            ClassMembershipService membershipService,
+            ClassMemberRepository classMemberRepository
     ) {
         this.userAccessRepository = userAccessRepository;
         this.membershipService = membershipService;
+        this.classMemberRepository = classMemberRepository;
     }
 
     public void requireCanView(Activity activity, UUID userId) {
@@ -59,6 +64,24 @@ public class QuizConfigurationAccessService {
         if (!"TUTOR".equals(user.getLmsRole()) || !targetClass.getTutorId().equals(userId)) {
             throw new ResponseStatusException(HttpStatus.FORBIDDEN, "FORBIDDEN");
         }
+    }
+
+    public ClassMember requireEligibleStudent(Activity activity, UUID userId) {
+        LmsUserAccess user = requireActiveUser(userId);
+        if (!"STUDENT".equals(user.getLmsRole())) {
+            throw new ResponseStatusException(HttpStatus.FORBIDDEN, "FORBIDDEN");
+        }
+        Class targetClass = activity.getLesson().getChapter().getClassField();
+        membershipService.requireActiveMembership(targetClass.getClassId(), userId);
+        ClassMember member = classMemberRepository.findByClassIdAndStudentId(targetClass.getClassId(), userId)
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.FORBIDDEN, "MEMBERSHIP_REQUIRED"));
+        if (targetClass.getStatus() != Class.ClassStatus.ACTIVE
+                || !"PUBLISHED".equals(activity.getLesson().getChapter().getStatus())
+                || !"PUBLISHED".equals(activity.getLesson().getStatus())
+                || !"PUBLISHED".equals(activity.getStatus())) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT, "QUIZ_NOT_AVAILABLE");
+        }
+        return member;
     }
 
     private LmsUserAccess requireActiveUser(UUID userId) {

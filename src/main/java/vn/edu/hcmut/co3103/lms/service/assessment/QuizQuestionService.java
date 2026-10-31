@@ -11,19 +11,13 @@ import vn.edu.hcmut.co3103.lms.dto.response.QuestionResponse;
 import vn.edu.hcmut.co3103.lms.entity.Question;
 import vn.edu.hcmut.co3103.lms.entity.QuestionOption;
 import vn.edu.hcmut.co3103.lms.entity.Quiz;
-import vn.edu.hcmut.co3103.lms.entity.QuizAttempt;
-import vn.edu.hcmut.co3103.lms.entity.AttemptAnswer;
-import vn.edu.hcmut.co3103.lms.repository.assessment.AttemptAnswerOptionRepository;
-import vn.edu.hcmut.co3103.lms.repository.assessment.AttemptAnswerRepository;
 import vn.edu.hcmut.co3103.lms.repository.assessment.QuestionOptionRepository;
 import vn.edu.hcmut.co3103.lms.repository.assessment.QuestionRepository;
 import vn.edu.hcmut.co3103.lms.repository.assessment.QuizAttemptRepository;
 import vn.edu.hcmut.co3103.lms.repository.assessment.QuizRepository;
 
 import java.math.BigDecimal;
-import java.math.RoundingMode;
 import java.util.*;
-import java.time.OffsetDateTime;
 import java.util.function.Function;
 import java.util.stream.Collectors;
 
@@ -34,13 +28,12 @@ public class QuizQuestionService {
     private final QuestionRepository questionRepository;
     private final QuestionOptionRepository optionRepository;
     private final QuizAttemptRepository attemptRepository;
-    private final AttemptAnswerRepository answerRepository;
-    private final AttemptAnswerOptionRepository selectedOptionRepository;
     private final QuizConfigurationAccessService accessService;
+    private final QuizGradingService gradingService;
 
     @Transactional
     public QuestionResponse addQuestion(UUID activityId, UUID userId, QuestionCreateRequest request) {
-        Quiz quiz = quizRepository.findByActivity_Id(activityId)
+        Quiz quiz = quizRepository.findLockedByActivity_Id(activityId)
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "QUIZ_NOT_FOUND"));
         accessService.requireOwningTutor(quiz.getActivity(), userId);
         if (attemptRepository.existsByQuiz_Id(quiz.getId())) {
@@ -80,10 +73,11 @@ public class QuizQuestionService {
     public QuestionResponse updateQuestion(UUID questionId, UUID userId, QuestionUpdateRequest request) {
         Question question = questionRepository.findById(questionId)
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "QUESTION_NOT_FOUND"));
-        accessService.requireOwningTutor(question.getQuiz().getActivity(), userId);
+        Quiz quiz = quizRepository.findLockedById(question.getQuiz().getId())
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "QUIZ_NOT_FOUND"));
+        accessService.requireOwningTutor(quiz.getActivity(), userId);
         if (request == null || !hasAnyField(request)) throw invalidQuestion();
 
-        Quiz quiz = question.getQuiz();
         boolean hasAttempts = attemptRepository.existsByQuiz_Id(quiz.getId());
         List<QuestionOption> existingOptions = optionRepository.findByQuestion_IdOrderByOrderIndex(questionId);
         List<QuestionUpdateRequest.Option> requestedOptions = request.optionsProvided()
@@ -136,8 +130,10 @@ public class QuizQuestionService {
     public void deleteQuestion(UUID questionId, UUID userId) {
         Question question = questionRepository.findById(questionId)
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "QUESTION_NOT_FOUND"));
-        accessService.requireOwningTutor(question.getQuiz().getActivity(), userId);
-        if (attemptRepository.existsByQuiz_Id(question.getQuiz().getId())) {
+        Quiz quiz = quizRepository.findLockedById(question.getQuiz().getId())
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "QUIZ_NOT_FOUND"));
+        accessService.requireOwningTutor(quiz.getActivity(), userId);
+        if (attemptRepository.existsByQuiz_Id(quiz.getId())) {
             throw lockedQuestion();
         }
 
@@ -199,36 +195,7 @@ public class QuizQuestionService {
     }
 
     private void recalculateSubmittedAttempts(Quiz quiz) {
-        List<Question> quizQuestions = questionRepository.findByQuiz_IdOrderByOrderIndex(quiz.getId());
-        BigDecimal totalEarnable = quizQuestions.stream().map(Question::getPointsAwarded)
-                .reduce(BigDecimal.ZERO, BigDecimal::add);
-        Map<UUID, Set<UUID>> correctOptions = quizQuestions.stream().collect(Collectors.toMap(
-                Question::getId,
-                question -> optionRepository.findByQuestion_IdOrderByOrderIndex(question.getId()).stream()
-                        .filter(QuestionOption::getIsCorrect).map(QuestionOption::getId).collect(Collectors.toSet())
-        ));
-
-        for (QuizAttempt attempt : attemptRepository.findByQuiz_IdAndStatus(quiz.getId(), "SUBMITTED")) {
-            BigDecimal scored = BigDecimal.ZERO;
-            for (Question question : quizQuestions) {
-                AttemptAnswer answer = answerRepository.findByAttempt_IdAndQuestion_Id(
-                        attempt.getId(), question.getId()).orElse(null);
-                if (answer == null) continue;
-                Set<UUID> selected = selectedOptionRepository.findByAnswer_Id(answer.getId()).stream()
-                        .map(answerOption -> answerOption.getOption().getId()).collect(Collectors.toSet());
-                boolean correct = !selected.isEmpty() && selected.equals(correctOptions.get(question.getId()));
-                BigDecimal earned = selected.isEmpty() ? BigDecimal.ZERO
-                        : correct ? question.getPointsAwarded() : question.getPointsDeducted().negate();
-                answer.setIsCorrect(correct);
-                answer.setPointsEarned(earned);
-                scored = scored.add(earned);
-            }
-            BigDecimal percentage = totalEarnable.signum() <= 0 ? BigDecimal.ZERO
-                    : scored.multiply(BigDecimal.valueOf(100))
-                            .divide(totalEarnable, 2, RoundingMode.HALF_UP).max(BigDecimal.ZERO);
-            attempt.setScore(percentage);
-            attempt.setGradedAt(OffsetDateTime.now());
-        }
+        gradingService.recalculateSubmittedAttempts(quiz);
     }
 
     private QuestionResponse toResponse(Question question, List<QuestionOption> options) {

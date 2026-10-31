@@ -37,7 +37,7 @@ public class QuizService {
             UUID userId,
             QuizSettingsUpdateRequest request
     ) {
-        Quiz quiz = quizRepository.findByActivity_Id(activityId)
+        Quiz quiz = quizRepository.findLockedByActivity_Id(activityId)
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "QUIZ_NOT_FOUND"));
         accessService.requireOwningTutor(quiz.getActivity(), userId);
         validateUpdate(request, quiz);
@@ -74,6 +74,7 @@ public class QuizService {
                 || gradingMethod == null
                 || !Set.of("HIGHEST", "AVERAGE", "LAST").contains(gradingMethod)
                 || deadline == null
+                || (request.isDeadlineProvided() && !deadline.isAfter(OffsetDateTime.now()))
                 || (opening != null && !opening.isBefore(deadline))
                 || (requiredScore != null && (requiredScore.compareTo(BigDecimal.ZERO) < 0
                 || requiredScore.compareTo(BigDecimal.valueOf(100)) > 0))) {
