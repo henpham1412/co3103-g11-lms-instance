@@ -10,6 +10,7 @@ import org.springframework.web.bind.annotation.PutMapping;
 import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
+import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.ResponseStatus;
 import org.springframework.http.HttpStatus;
 import org.springframework.web.bind.annotation.RequestMapping;
@@ -17,6 +18,7 @@ import org.springframework.web.bind.annotation.RestController;
 import vn.edu.hcmut.co3103.lms.dto.response.QuizAttemptStartResponse;
 import vn.edu.hcmut.co3103.lms.dto.response.QuizAttemptResultResponse;
 import vn.edu.hcmut.co3103.lms.dto.response.QuizAttemptStateResponse;
+import vn.edu.hcmut.co3103.lms.dto.response.QuizAttemptListResponse;
 import vn.edu.hcmut.co3103.lms.dto.request.SaveAnswerRequest;
 import vn.edu.hcmut.co3103.lms.service.assessment.QuizAttemptService;
 
@@ -36,6 +38,16 @@ public class QuizAttemptController {
         QuizAttemptService.StartResult result = attemptService.startOrResume(
                 quizId, UUID.fromString(jwt.getSubject()));
         return ResponseEntity.status(result.status()).body(result.body());
+    }
+
+    @GetMapping("/quizzes/{quizId}/attempts")
+    public QuizAttemptListResponse listAttempts(
+            @PathVariable UUID quizId,
+            @RequestParam(defaultValue = "1") int page,
+            @RequestParam(defaultValue = "20") int size,
+            @AuthenticationPrincipal Jwt jwt
+    ) {
+        return attemptService.listAttempts(quizId, UUID.fromString(jwt.getSubject()), page, size);
     }
 
     @PutMapping("/quiz-attempts/{attemptId}/answers/{questionId}")

@@ -2,6 +2,9 @@ package vn.edu.hcmut.co3103.lms.service.assessment;
 
 import lombok.RequiredArgsConstructor;
 import org.springframework.http.HttpStatus;
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.PageRequest;
+import org.springframework.data.domain.Sort;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.server.ResponseStatusException;
@@ -9,6 +12,7 @@ import vn.edu.hcmut.co3103.lms.dto.response.QuizAttemptStartResponse;
 import vn.edu.hcmut.co3103.lms.dto.request.SaveAnswerRequest;
 import vn.edu.hcmut.co3103.lms.dto.response.QuizAttemptResultResponse;
 import vn.edu.hcmut.co3103.lms.dto.response.QuizAttemptStateResponse;
+import vn.edu.hcmut.co3103.lms.dto.response.QuizAttemptListResponse;
 import vn.edu.hcmut.co3103.lms.entity.Activity;
 import vn.edu.hcmut.co3103.lms.entity.AttemptAnswer;
 import vn.edu.hcmut.co3103.lms.entity.AttemptAnswerOption;
@@ -44,6 +48,27 @@ public class QuizAttemptService {
     private final QuizGradingService gradingService;
     private final AttemptAnswerRepository answerRepository;
     private final AttemptAnswerOptionRepository selectedOptionRepository;
+
+    @Transactional(readOnly = true)
+    public QuizAttemptListResponse listAttempts(UUID quizId, UUID tutorId, int page, int size) {
+        if (page < 1 || size < 1 || size > 100) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "INVALID_QUERY_PARAMETER");
+        }
+        Quiz quiz = quizRepository.findById(quizId)
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "QUIZ_NOT_FOUND"));
+        accessService.requireOwningTutor(quiz.getActivity(), tutorId);
+
+        Page<QuizAttempt> result = attemptRepository.findByQuiz_Id(quizId,
+                PageRequest.of(page - 1, size, Sort.by(Sort.Order.desc("startedAt"), Sort.Order.desc("id"))));
+        List<QuizAttemptListResponse.Item> items = result.getContent().stream()
+                .map(attempt -> new QuizAttemptListResponse.Item(
+                        attempt.getId(), attempt.getClassMember().getStudentId(), attempt.getAttemptNumber(),
+                        attempt.getStatus(), attempt.getStartedAt(), attempt.getSubmittedAt(),
+                        attempt.getAutoSubmitted(), attempt.getScore()))
+                .toList();
+        return new QuizAttemptListResponse(items, result.getNumber() + 1, result.getSize(),
+                result.getTotalElements(), result.getTotalPages());
+    }
 
     @Transactional
     public StartResult startOrResume(UUID quizId, UUID studentId) {
