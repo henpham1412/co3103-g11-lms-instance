@@ -24,7 +24,7 @@ class BootstrapMigrationH2Test {
     void createV2EquivalentSchema() throws SQLException {
         url = "jdbc:h2:mem:" + UUID.randomUUID();
         connection = DriverManager.getConnection(url, "sa", "");
-        // V1/V2 use PostgreSQL syntax. Include the legacy constraint to verify V3 cleanup on native H2.
+        // Native H2 approximation of final V2; V1/V2 themselves use PostgreSQL syntax.
         execute("""
                 CREATE TABLE lms_user_access (
                     user_id UUID PRIMARY KEY,
@@ -34,8 +34,7 @@ class BootstrapMigrationH2Test {
                     access_status VARCHAR(30) NOT NULL DEFAULT 'ACTIVE',
                     last_login_at TIMESTAMP WITH TIME ZONE,
                     created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP,
-                    updated_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP,
-                    CONSTRAINT uq_lms_user_access_email UNIQUE (email)
+                    updated_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP
                 )
                 """);
     }
@@ -46,8 +45,7 @@ class BootstrapMigrationH2Test {
     }
 
     @Test
-    void migratesWithoutLegacyEmailConstraint() throws SQLException {
-        execute("ALTER TABLE lms_user_access DROP CONSTRAINT uq_lms_user_access_email");
+    void preservesDuplicateEmailProjectionsWhenMigratingV2EquivalentSchema() throws SQLException {
         insertUser(UUID.randomUUID());
         insertUser(UUID.randomUUID());
 
@@ -119,20 +117,22 @@ class BootstrapMigrationH2Test {
     @ParameterizedTest
     @CsvSource({
             "ADMINISTRATOR, ACTIVE, true",
-            "ADMINISTRATOR, SUSPENDED, false",
+            "ADMINISTRATOR, SUSPENDED, true",
             "STUDENT, ACTIVE, false",
             "STUDENT, SUSPENDED, false",
             "TUTOR, ACTIVE, false",
             "TUTOR, SUSPENDED, false"
     })
-    void migrationSealsSetupOnlyForExistingActiveAdministrators(String role, String status,
-                                                               boolean completed) throws SQLException {
+    void migrationSealsSetupForAnyExistingAdministrator(String role, String status,
+                                                          boolean completed) throws SQLException {
         // Seed two users before V3 to also verify that it still inserts exactly one setup row.
-        for (int i = 0; i < 2; i++) {
-            UUID id = UUID.randomUUID();
+        UUID selected = new UUID(0, 1);
+        // Reverse insertion order and tie creation times to exercise the UUID tie-breaker.
+        for (int i = 2; i > 0; i--) {
+            UUID id = new UUID(0, i);
             try (var statement = connection.prepareStatement("""
-                    INSERT INTO lms_user_access (user_id, full_name, email, lms_role, access_status)
-                    VALUES (?, 'Existing User', ?, ?, ?)
+                    INSERT INTO lms_user_access (user_id, full_name, email, lms_role, access_status, created_at)
+                    VALUES (?, 'Existing User', ?, ?, ?, TIMESTAMP WITH TIME ZONE '2020-01-01 00:00:00+00')
                     """)) {
                 statement.setObject(1, id);
                 statement.setString(2, id + "@example.com");
@@ -154,7 +154,27 @@ class BootstrapMigrationH2Test {
             } else {
                 assertThat(result.getObject("completed_at")).isNull();
             }
-            assertThat(result.getObject("bootstrapped_by")).isNull();
+            assertThat(result.getObject("bootstrapped_by", UUID.class)).isEqualTo(completed ? selected : null);
+            assertThat(result.next()).isFalse();
+        }
+    }
+
+    @Test
+    void selectsOldestAdministratorBeforeUuidRegardlessOfStatus() throws SQLException {
+        execute("""
+                INSERT INTO lms_user_access (user_id, full_name, email, lms_role, access_status, created_at)
+                VALUES ('00000000-0000-0000-0000-000000000001', 'New Admin', 'shared@example.com',
+                        'ADMINISTRATOR', 'ACTIVE', TIMESTAMP WITH TIME ZONE '2021-01-01 00:00:00+00'),
+                       ('00000000-0000-0000-0000-000000000002', 'Old Admin', 'shared@example.com',
+                        'ADMINISTRATOR', 'SUSPENDED', TIMESTAMP WITH TIME ZONE '2020-01-01 00:00:00+00')
+                """);
+        migrateV3();
+        try (var statement = connection.createStatement();
+             var result = statement.executeQuery("SELECT * FROM lms_setup_state")) {
+            assertThat(result.next()).isTrue();
+            assertThat(result.getBoolean("is_completed")).isTrue();
+            assertThat(result.getObject("bootstrapped_by", UUID.class))
+                    .isEqualTo(new UUID(0, 2));
             assertThat(result.next()).isFalse();
         }
     }

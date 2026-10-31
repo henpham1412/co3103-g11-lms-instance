@@ -20,6 +20,7 @@ import vn.edu.hcmut.co3103.lms.domain.LmsUserAccess;
 
 import java.time.Instant;
 import java.time.temporal.ChronoUnit;
+import java.util.List;
 import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -171,6 +172,8 @@ class LmsUserAccessRepositoryTest {
 
         assertThat(repository.countByLmsRole(LmsRole.ADMINISTRATOR)).isZero();
         assertThat(repository.existsByLmsRole(LmsRole.ADMINISTRATOR)).isFalse();
+        repository.saveAndFlush(newUser(LmsRole.TUTOR, AccessStatus.SUSPENDED));
+        assertThat(repository.findFirstByLmsRoleOrderByCreatedAtAscUserIdAsc(LmsRole.ADMINISTRATOR)).isEmpty();
     }
 
     @Test
@@ -240,6 +243,26 @@ class LmsUserAccessRepositoryTest {
         assertThat(jdbcTemplate.queryForObject(
                 "SELECT full_name FROM lms_user_access WHERE user_id = ?",
                 String.class, userId)).isEqualTo(fullName).hasSize(150);
+    }
+
+    @ParameterizedTest
+    @EnumSource(AccessStatus.class)
+    void selectsAdministratorByCreationTimeAndUuidRegardlessOfStatus(AccessStatus status) {
+        repository.deleteAllInBatch();
+        Instant oldest = Instant.parse("2020-01-01T00:00:00Z");
+        UUID selected = new UUID(0, 2);
+        repository.saveAllAndFlush(List.of(
+                new LmsUserAccess(new UUID(0, 1), "New Admin", "same@example.com", LmsRole.ADMINISTRATOR,
+                        AccessStatus.ACTIVE, null, oldest.plusSeconds(1), oldest),
+                new LmsUserAccess(new UUID(0, 3), "Tied Admin", "same@example.com", LmsRole.ADMINISTRATOR,
+                        AccessStatus.ACTIVE, null, oldest, oldest),
+                new LmsUserAccess(selected, "Old Admin", "same@example.com", LmsRole.ADMINISTRATOR,
+                        status, null, oldest, oldest),
+                new LmsUserAccess(new UUID(0, 0), "Student", "same@example.com", LmsRole.STUDENT,
+                        AccessStatus.ACTIVE, null, oldest.minusSeconds(1), oldest)));
+        entityManager.clear();
+        assertThat(repository.findFirstByLmsRoleOrderByCreatedAtAscUserIdAsc(LmsRole.ADMINISTRATOR))
+                .get().extracting(LmsUserAccess::getUserId).isEqualTo(selected);
     }
 
     private LmsUserAccess newUser(LmsRole role, AccessStatus status) {

@@ -4,7 +4,7 @@ Approved implementation specification for the LMS-2 security architecture, dated
 This contract records the task's decisions against DOC-01 (bootstrap), DOC-04
 section 2.1.5 (local identity projection), DOC-05 (authentication and HTTP errors),
 and the LMS-2 research report. It defines required behavior, architectural guarantees,
-and verified implementation components.
+and implementation components.
 
 ## JWT identity and security
 
@@ -70,14 +70,25 @@ and verified implementation components.
   safe explanation, never an exception message, stack trace, or SQL.
   Recovery requires a fresh successful local-access lookup with no authority fallback.
 - `email` and `full_name` are display copies of Central Identity information.
-  The identity key is `user_id`, never email. Local email is **not unique** and
-  must not have a unique database constraint (DOC-04 section 2.1.5).
+  The identity key is `user_id`, never email (DOC-04 section 2.1.5).
+  Local email is **not unique** in the LMS schema; Central Identity's email
+  uniqueness applies to its separate identity database.
   Upgrades from V1 must preserve duplicate email projections through V2 and V3.
 
 ## CORS and OPTIONS
 
-- Only `http://localhost:3000` and `http://localhost:5173` are allowed cross-origin
-  browser clients. Allowed methods and headers remain explicitly listed.
+- `lms.allowed-origins`, backed by `LMS_ALLOWED_ORIGINS`, defines exact allowed
+  browser origins. Defaults are `http://localhost:3000,http://localhost:5173`.
+  An override replaces the defaults; comma-separated entries are trimmed and
+  deduplicated. For example, `LMS_ALLOWED_ORIGINS=https://portal.example.edu`.
+- Startup rejects blank entries, wildcards, literal `null`, non-HTTP(S) schemes,
+  missing hosts, invalid ports, userinfo, paths (including a trailing slash),
+  queries, and fragments. Allowed methods and headers remain explicitly listed;
+  credentials are enabled and preflight max age is 3600 seconds.
+- SecurityConfig installs exactly one JsonCorsFilter before Bearer authentication,
+  explicitly disabling the default CORS configurer to avoid duplicate processing.
+  Allowed-origin actual requests retain CORS headers on authentication,
+  authorization, and server errors; they still require valid local authorization.
 - Allowed preflights and ordinary OPTIONS requests return HTTP 200 before Bearer
   authentication or local-access lookup, including during a database outage.
 - CORS denials, including invalid origins and rejected preflight methods or
@@ -94,14 +105,22 @@ and verified implementation components.
 - A dedicated singleton `lms_setup_state` row is created ahead of bootstrap.
   Bootstrap acquires a database-level pessimistic lock using
   `SELECT ... FOR UPDATE` on that row. A missing row must fail closed.
-- Checking setup state, checking existing active administrators, creating or
+- Checking setup state, checking existing administrators, creating or
   activating the initial local administrator, and marking setup complete occur
   within the same transaction. Concurrent processes serialize on the same row;
   an in-memory lock or a count of administrators alone is insufficient.
-- Setup is strictly run-once: once any active administrator exists or setup is
-  marked complete, bootstrap is permanently locked out. Existing installations
-  with an active administrator must be recorded as complete. Later suspension,
-  demotion, or deletion of administrators does not reopen bootstrap.
+- Setup is strictly run-once: any existing Administrator (ACTIVE or SUSPENDED)
+  blocks bootstrap, as required by DOC-04 section 2.1.5. Existing installations
+  are sealed with a selected administrator's UUID before the nontransactional
+  runner reports refusal. Later suspension, demotion, or deletion does not reopen
+  setup. Same-UUID retries also refuse without changing closure metadata.
+- `bootstrapped_by` records the initialized account or, during reconciliation,
+  an existing administrator ordered by `created_at` then `user_id`. It is not an
+  authenticated operator identity or proof of the historically first administrator.
+  Deletion nulls only this FK; completion and its timestamp persist.
+- GLOBAL protects participating initialization transactions. Future provisioning
+  paths must lock GLOBAL before affected user rows; arbitrary external user-table
+  writes are outside this guarantee and must be quiescent during initial setup.
 - Failed initialization rolls back both the user change and completion marker.
   Successful initialization persists the completion marker across restarts.
 
@@ -132,8 +151,8 @@ envelope takes precedence for security and servlet errors in this implementation
 
 ## Implementation and component structure
 
-The LMS-2 security implementation is structured into three cohesive functional modules,
-fully verified by automated integration tests and security audits:
+The LMS-2 security implementation has the following components. Unit/native-H2
+coverage and PostgreSQL/servlet integration coverage are separate verification gates:
 
 1. **Central Identity JWT Validation & Claim Contract (`6e1dbc5`):**
    - Implements RS256 token verification against Central Identity JWKS.
@@ -150,10 +169,11 @@ fully verified by automated integration tests and security audits:
 3. **Run-Once Administrator Bootstrap & Database Locking (`b5724ae`, `0e061f1`):**
    - Provides trusted non-web CLI `AdminBootstrapRunner` (`--spring.main.web-application-type=none`), strictly detached from and disabled during web HTTP startup.
    - Enforces database-level pessimistic lock (`SELECT ... FOR UPDATE` via `PESSIMISTIC_WRITE`) on singleton table `lms_setup_state` to serialize concurrent bootstrap attempts across multi-instance deployments.
-   - Enforces permanent run-once guarantee: records setup completion in database migration if an active administrator already exists; subsequent suspension, demotion, or deletion cannot reopen bootstrap.
+   - Enforces permanent run-once guarantee: records setup completion in database migration with a selected UUID if any administrator already exists (ACTIVE or SUSPENDED); subsequent suspension, demotion, or deletion cannot reopen bootstrap.
    - Completely rolls back both user updates and setup completion markers upon any initialization failure.
 
 4. **Flyway Database Migration (`V3__create_lms_setup_state.sql`):**
-   - Seeds the singleton `lms_setup_state` record.
-   - Aligns schema with DOC-04 §2.1.5: removes the unique constraint on local email projection, preserving canonical `user_id` UUID as the sole identity key.
-   - Fully compatible with both PostgreSQL and H2.
+   - Creates and seeds the singleton `lms_setup_state`, recording an existing administrator's UUID on closure.
+   - V1 permits duplicate local emails; V2 widens columns without adding uniqueness; V3 adds setup state. UUID remains the identity key, consistent with DOC-04 section 2.1.5.
+   - Native H2 tests execute V3 from a final-V2-equivalent fixture. PostgreSQL tests exercise actual migration history and transaction locking; H2 results do not replace those checks.
+   - Rewriting feature-branch V3 assumes it has not been applied to retained deployments; an applied checksum requires an explicit forward-migration decision, never automatic Flyway repair.

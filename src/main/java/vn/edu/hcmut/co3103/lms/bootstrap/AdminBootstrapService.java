@@ -37,9 +37,10 @@ public class AdminBootstrapService {
         if (state.isCompleted()) {
             throw new IllegalStateException("Administrator setup is already complete.");
         }
-        if (users.existsByLmsRoleAndAccessStatus(LmsRole.ADMINISTRATOR, AccessStatus.ACTIVE)) {
-            state.complete(null);
-            // Return normally so this permanent lockout commits before the CLI reports refusal.
+        var existingAdmin = users.findFirstByLmsRoleOrderByCreatedAtAscUserIdAsc(LmsRole.ADMINISTRATOR);
+        if (existingAdmin.isPresent()) {
+            state.complete(existingAdmin.get().getUserId());
+            // Commit this seal before the nontransactional runner reports refusal.
             return Outcome.EXISTING_ADMINISTRATOR;
         }
 

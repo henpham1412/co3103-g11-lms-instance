@@ -36,7 +36,7 @@ class AdminBootstrapRunnerTest {
         when(service.bootstrap(id, null, null))
                 .thenReturn(AdminBootstrapService.Outcome.EXISTING_ADMINISTRATOR);
         assertThatThrownBy(runner::run).isInstanceOf(IllegalStateException.class)
-                .hasMessageContaining("active administrator");
+                .hasMessageContaining("administrator");
         verify(service).bootstrap(id, null, null);
     }
 

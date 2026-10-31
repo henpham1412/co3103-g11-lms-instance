@@ -9,6 +9,7 @@ import lombok.Getter;
 import lombok.NoArgsConstructor;
 
 import java.time.Instant;
+import java.util.Objects;
 import java.util.UUID;
 
 @Entity
@@ -32,7 +33,12 @@ public class LmsSetupState {
     @Column(name = "bootstrapped_by")
     private UUID bootstrappedBy;
 
+    // Records the local administrator associated with closure, not the deployment operator.
     public void complete(UUID userId) {
+        if (completed) {
+            throw new IllegalStateException("Administrator setup is already complete.");
+        }
+        Objects.requireNonNull(userId, "Administrator identity is required to complete setup.");
         completed = true;
         completedAt = Instant.now();
         bootstrappedBy = userId;

@@ -4,6 +4,7 @@ import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.CsvSource;
 import org.junit.jupiter.params.provider.ValueSource;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.autoconfigure.ImportAutoConfiguration;
@@ -82,33 +83,43 @@ class AdminBootstrapIntegrationTest {
         assertThat(state.getBootstrappedBy()).isEqualTo(id);
     }
 
-    @Test
-    void refusesSecondInvocationWithoutChangingStateOrUsers() {
+    @ParameterizedTest
+    @ValueSource(booleans = {false, true})
+    void refusesSecondInvocationWithoutChangingStateOrUsers(boolean sameIdentity) {
         UUID first = UUID.randomUUID();
         service.bootstrap(first, "First", "first@example.com");
         Instant completedAt = state().getCompletedAt();
-        UUID second = UUID.randomUUID();
+        UUID second = sameIdentity ? first : UUID.randomUUID();
         assertThatThrownBy(() -> service.bootstrap(second, "Second", "second@example.com"))
                 .isInstanceOf(IllegalStateException.class).hasMessageContaining("already complete");
-        assertThat(users.findById(second)).isEmpty();
+        if (!sameIdentity) assertThat(users.findById(second)).isEmpty();
+        assertThat(users.findById(first).orElseThrow().getFullName()).isEqualTo("First");
+        assertThat(users.findById(first).orElseThrow().getEmail()).isEqualTo("first@example.com");
         assertThat(users.count()).isEqualTo(1);
         assertThat(state().getCompletedAt()).isEqualTo(completedAt);
         assertThat(state().getBootstrappedBy()).isEqualTo(first);
     }
 
-    @Test
-    void existingActiveAdminCommitsLockoutEvenThoughRunnerFails() {
-        LmsUserAccess existing = saveUser(LmsRole.ADMINISTRATOR, AccessStatus.ACTIVE);
-        UUID candidate = UUID.randomUUID();
+    @ParameterizedTest
+    @CsvSource({"ACTIVE, false", "ACTIVE, true", "SUSPENDED, false", "SUSPENDED, true"})
+    void existingAdministratorCommitsLockoutEvenThoughRunnerFails(AccessStatus status, boolean sameIdentity) {
+        LmsUserAccess existing = saveUser(LmsRole.ADMINISTRATOR, status);
+        UUID candidate = sameIdentity ? existing.getUserId() : UUID.randomUUID();
         var runner = new AdminBootstrapRunner(service, new MockEnvironment()
                 .withProperty("lms.bootstrap.admin.user-id", candidate.toString()));
         assertThatThrownBy(runner::run).isInstanceOf(IllegalStateException.class)
-                .hasMessageContaining("active administrator");
+                .hasMessageContaining("An administrator already exists");
         assertThat(state().isCompleted()).isTrue();
         assertThat(state().getCompletedAt()).isNotNull();
-        assertThat(state().getBootstrappedBy()).isNull();
-        assertThat(users.findById(candidate)).isEmpty();
+        assertThat(state().getBootstrappedBy()).isEqualTo(existing.getUserId());
+        Instant completedAt = state().getCompletedAt();
+        if (!sameIdentity) assertThat(users.findById(candidate)).isEmpty();
+        assertThat(users.findById(existing.getUserId()).orElseThrow())
+                .usingRecursiveComparison().isEqualTo(existing);
         users.deleteById(existing.getUserId());
+        assertThat(state().isCompleted()).isTrue();
+        assertThat(state().getBootstrappedBy()).isNull();
+        assertThat(state().getCompletedAt()).isEqualTo(completedAt);
         assertThatThrownBy(() -> service.bootstrap(candidate, "Admin", "admin@example.com"))
                 .isInstanceOf(IllegalStateException.class).hasMessageContaining("already complete");
     }
@@ -147,12 +158,20 @@ class AdminBootstrapIntegrationTest {
     }
 
     @Test
-    void suspendedAdministratorDoesNotBlockFirstBootstrap() {
-        LmsUserAccess suspended = saveUser(LmsRole.ADMINISTRATOR, AccessStatus.SUSPENDED);
-        assertThat(service.bootstrap(suspended.getUserId(), null, null))
-                .isEqualTo(AdminBootstrapService.Outcome.CREATED);
-        assertThat(users.findById(suspended.getUserId()).orElseThrow().getAccessStatus())
-                .isEqualTo(AccessStatus.ACTIVE);
+    void selectsExistingAdministratorByCreationTimeThenUuid() {
+        Instant oldest = Instant.parse("2020-01-01T00:00:00Z");
+        UUID selected = new UUID(0, 2);
+        users.saveAllAndFlush(List.of(
+                new LmsUserAccess(new UUID(0, 1), "New Admin", "same@example.com", LmsRole.ADMINISTRATOR,
+                        AccessStatus.ACTIVE, null, oldest.plusSeconds(1), oldest),
+                new LmsUserAccess(new UUID(0, 3), "Tied Admin", "same@example.com", LmsRole.ADMINISTRATOR,
+                        AccessStatus.ACTIVE, null, oldest, oldest),
+                new LmsUserAccess(selected, "Old Admin", "same@example.com", LmsRole.ADMINISTRATOR,
+                        AccessStatus.SUSPENDED, null, oldest, oldest)));
+        assertThat(service.bootstrap(UUID.randomUUID(), "Candidate", "candidate@example.com"))
+                .isEqualTo(AdminBootstrapService.Outcome.EXISTING_ADMINISTRATOR);
+        assertThat(state().getBootstrappedBy()).isEqualTo(selected);
+        assertThat(users.count()).isEqualTo(3);
     }
 
     @Test
@@ -213,9 +232,11 @@ class AdminBootstrapIntegrationTest {
         assertThat(state().getCompletedAt()).isNull();
     }
 
-    @Test
-    void concurrentTransactionsBlockOnDatabaseLockAndOnlyOneSucceeds() throws Exception {
+    @ParameterizedTest
+    @ValueSource(booleans = {false, true})
+    void concurrentTransactionsBlockOnDatabaseLockAndOnlyOneSucceeds(boolean sameIdentity) throws Exception {
         int contenders = 6;
+        UUID sharedId = UUID.randomUUID();
         CountDownLatch enteredTransactions = new CountDownLatch(contenders);
         List<Future<UUID>> attempts = new ArrayList<>();
         var executor = Executors.newFixedThreadPool(contenders);
@@ -224,7 +245,7 @@ class AdminBootstrapIntegrationTest {
                 states.lockGlobalState().orElseThrow();
                 for (int i = 0; i < contenders; i++) {
                     attempts.add(executor.submit(() -> {
-                        UUID id = UUID.randomUUID();
+                        UUID id = sameIdentity ? sharedId : UUID.randomUUID();
                         try {
                             return new TransactionTemplate(transactions).execute(transaction -> {
                                 enteredTransactions.countDown();
@@ -258,6 +279,51 @@ class AdminBootstrapIntegrationTest {
             assertThat(users.count()).isEqualTo(1);
             assertThat(state().isCompleted()).isTrue();
             assertThat(state().getBootstrappedBy()).isEqualTo(winners.getFirst());
+        } finally {
+            executor.shutdownNow();
+            assertThat(executor.awaitTermination(10, TimeUnit.SECONDS)).isTrue();
+        }
+    }
+
+    @ParameterizedTest
+    @ValueSource(booleans = {false, true})
+    void waitingBootstrapObservesRollbackOrParticipatingAdminWriter(boolean rollback) throws Exception {
+        UUID holderId = UUID.randomUUID();
+        UUID waitingId = UUID.randomUUID();
+        CountDownLatch enteredTransaction = new CountDownLatch(1);
+        List<Future<AdminBootstrapService.Outcome>> attempts = new ArrayList<>();
+        var executor = Executors.newSingleThreadExecutor();
+        try {
+            new TransactionTemplate(transactions).executeWithoutResult(status -> {
+                states.lockGlobalState().orElseThrow();
+                if (rollback) {
+                    service.bootstrap(holderId, "Rolled Back Admin", "rollback@example.com");
+                    states.flush();
+                } else {
+                    users.saveAndFlush(new LmsUserAccess(holderId, "External Admin", "external@example.com",
+                            LmsRole.ADMINISTRATOR, AccessStatus.SUSPENDED, null, null, null));
+                }
+                attempts.add(executor.submit(() -> new TransactionTemplate(transactions).execute(waiting -> {
+                    enteredTransaction.countDown();
+                    return service.bootstrap(waitingId, "Waiting Admin", "waiting@example.com");
+                })));
+                try {
+                    assertThat(enteredTransaction.await(10, TimeUnit.SECONDS)).isTrue();
+                    assertThatThrownBy(() -> attempts.getFirst().get(100, TimeUnit.MILLISECONDS))
+                            .isInstanceOf(TimeoutException.class);
+                } catch (InterruptedException interrupted) {
+                    Thread.currentThread().interrupt();
+                    throw new AssertionError(interrupted);
+                }
+                if (rollback) status.setRollbackOnly();
+            });
+            assertThat(attempts.getFirst().get(15, TimeUnit.SECONDS)).isEqualTo(rollback
+                    ? AdminBootstrapService.Outcome.CREATED : AdminBootstrapService.Outcome.EXISTING_ADMINISTRATOR);
+            assertThat(users.count()).isEqualTo(1);
+            assertThat(users.existsById(holderId)).isEqualTo(!rollback);
+            assertThat(users.existsById(waitingId)).isEqualTo(rollback);
+            assertThat(state().isCompleted()).isTrue();
+            assertThat(state().getBootstrappedBy()).isEqualTo(rollback ? waitingId : holderId);
         } finally {
             executor.shutdownNow();
             assertThat(executor.awaitTermination(10, TimeUnit.SECONDS)).isTrue();

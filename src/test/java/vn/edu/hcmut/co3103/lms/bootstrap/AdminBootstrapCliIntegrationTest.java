@@ -3,7 +3,7 @@ package vn.edu.hcmut.co3103.lms.bootstrap;
 import org.flywaydb.core.Flyway;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
-import org.junit.jupiter.params.provider.ValueSource;
+import org.junit.jupiter.params.provider.CsvSource;
 import org.springframework.boot.WebApplicationType;
 import org.springframework.boot.builder.SpringApplicationBuilder;
 import org.springframework.context.ConfigurableApplicationContext;
@@ -82,12 +82,14 @@ class AdminBootstrapCliIntegrationTest {
         }
 
         // The runner fails application startup only after the transactional service has rejected it.
-        assertThatThrownBy(() -> {
-            try (var ignored = application(schema).run("--lms.bootstrap.admin.enabled=true",
-                    "--lms.bootstrap.admin.user-id=" + UUID.randomUUID())) {
-                throw new AssertionError("Repeated bootstrap must fail startup");
-            }
-        }).isInstanceOf(IllegalStateException.class).hasStackTraceContaining("already complete");
+        for (UUID candidate : List.of(id, UUID.randomUUID())) {
+            assertThatThrownBy(() -> {
+                try (var ignored = application(schema).run("--lms.bootstrap.admin.enabled=true",
+                        "--lms.bootstrap.admin.user-id=" + candidate)) {
+                    throw new AssertionError("Repeated bootstrap must fail startup");
+                }
+            }).isInstanceOf(IllegalStateException.class).hasStackTraceContaining("already complete");
+        }
 
         try (ConfigurableApplicationContext context = application(schema).run()) {
             assertThat(context.getBeansOfType(AdminBootstrapRunner.class)).isEmpty();
@@ -104,8 +106,9 @@ class AdminBootstrapCliIntegrationTest {
     }
 
     @ParameterizedTest
-    @ValueSource(strings = {"suspend", "demote", "delete"})
-    void upgradeSealsExistingAdministratorBeforeAnyCliInvocation(String change) {
+    @CsvSource({"ACTIVE, suspend", "ACTIVE, demote", "ACTIVE, delete",
+            "SUSPENDED, suspend", "SUSPENDED, demote", "SUSPENDED, delete"})
+    void upgradeSealsExistingAdministratorBeforeAnyCliInvocation(AccessStatus status, String change) {
         String schema = "bootstrap_upgrade_" + UUID.randomUUID().toString().replace("-", "");
         UUID existingId = UUID.randomUUID();
         UUID candidateId = UUID.randomUUID();
@@ -117,7 +120,7 @@ class AdminBootstrapCliIntegrationTest {
             assertThat(context.getBeansOfType(AdminBootstrapRunner.class)).isEmpty();
             context.getBean(LmsUserAccessRepository.class).saveAndFlush(new LmsUserAccess(existingId,
                     "Existing Admin", "existing@example.com", LmsRole.ADMINISTRATOR,
-                    AccessStatus.ACTIVE, null, null, null));
+                    status, null, null, null));
         }
 
         Instant beforeMigration = Instant.now().minusSeconds(1);
@@ -128,7 +131,7 @@ class AdminBootstrapCliIntegrationTest {
             var state = context.getBean(LmsSetupStateRepository.class).findById(LmsSetupState.GLOBAL_ID).orElseThrow();
             assertThat(state.isCompleted()).isTrue();
             assertThat(state.getCompletedAt()).isBetween(beforeMigration, Instant.now());
-            assertThat(state.getBootstrappedBy()).isNull();
+            assertThat(state.getBootstrappedBy()).isEqualTo(existingId);
             completedAt = state.getCompletedAt();
 
             var users = context.getBean(LmsUserAccessRepository.class);
@@ -158,10 +161,43 @@ class AdminBootstrapCliIntegrationTest {
             var state = states.findById(LmsSetupState.GLOBAL_ID).orElseThrow();
             assertThat(state.isCompleted()).isTrue();
             assertThat(state.getCompletedAt()).isEqualTo(completedAt);
-            assertThat(state.getBootstrappedBy()).isNull();
+            assertThat(state.getBootstrappedBy()).isEqualTo(change.equals("delete") ? null : existingId);
             assertThat(users.findById(candidateId)).isEmpty();
             assertThat(users.existsByLmsRoleAndAccessStatus(LmsRole.ADMINISTRATOR, AccessStatus.ACTIVE)).isFalse();
             assertThat(users.count()).isEqualTo(change.equals("delete") ? 0 : 1);
+            states.deleteAllInBatch();
+            users.deleteAllInBatch();
+        }
+    }
+
+    @Test
+    void upgradeSelectsOneExistingAdministratorDeterministically() {
+        String schema = "bootstrap_multiple_" + UUID.randomUUID().toString().replace("-", "");
+        UUID selected = new UUID(0, 2);
+        Instant oldest = Instant.parse("2020-01-01T00:00:00Z");
+        List<LmsUserAccess> existing;
+        try (var context = application(schema).properties("spring.flyway.target=2",
+                "spring.jpa.hibernate.ddl-auto=none").run()) {
+            var users = context.getBean(LmsUserAccessRepository.class);
+            users.saveAllAndFlush(List.of(
+                    new LmsUserAccess(new UUID(0, 1), "New Admin", "same@example.com", LmsRole.ADMINISTRATOR,
+                            AccessStatus.ACTIVE, null, oldest.plusSeconds(1), oldest),
+                    new LmsUserAccess(new UUID(0, 3), "Tied Admin", "same@example.com", LmsRole.ADMINISTRATOR,
+                            AccessStatus.ACTIVE, null, oldest, oldest),
+                    new LmsUserAccess(selected, "Old Admin", "same@example.com", LmsRole.ADMINISTRATOR,
+                            AccessStatus.SUSPENDED, null, oldest, oldest)));
+            existing = users.findAll();
+        }
+        try (var context = application(schema).run()) {
+            context.getBean(Flyway.class).validate();
+            var states = context.getBean(LmsSetupStateRepository.class);
+            var users = context.getBean(LmsUserAccessRepository.class);
+            assertThat(states.findAll()).singleElement().satisfies(state -> {
+                assertThat(state.isCompleted()).isTrue();
+                assertThat(state.getBootstrappedBy()).isEqualTo(selected);
+            });
+            assertThat(users.findAll()).usingRecursiveFieldByFieldElementComparator()
+                    .containsExactlyInAnyOrderElementsOf(existing);
             states.deleteAllInBatch();
             users.deleteAllInBatch();
         }

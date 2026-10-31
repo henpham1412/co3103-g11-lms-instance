@@ -29,7 +29,7 @@ public class AdminBootstrapRunner implements CommandLineRunner {
                 environment.getProperty("lms.bootstrap.admin.full-name"),
                 environment.getProperty("lms.bootstrap.admin.email"));
         if (outcome == AdminBootstrapService.Outcome.EXISTING_ADMINISTRATOR) {
-            throw new IllegalStateException("An active administrator already exists; bootstrap is permanently closed.");
+            throw new IllegalStateException("An administrator already exists; bootstrap is permanently closed.");
         }
     }
 }

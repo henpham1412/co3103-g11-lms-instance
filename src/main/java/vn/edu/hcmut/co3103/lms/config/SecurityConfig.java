@@ -27,7 +27,9 @@ import vn.edu.hcmut.co3103.lms.security.jwt.ClaimValidatingJwtDecoder;
 import vn.edu.hcmut.co3103.lms.security.jwt.JwtSubjectValidator;
 import vn.edu.hcmut.co3103.lms.security.jwt.LocalAccessJwtAuthenticationConverter;
 
+import java.net.URI;
 import java.time.Clock;
+import java.util.Arrays;
 import java.util.List;
 
 @Configuration
@@ -55,9 +57,11 @@ public class SecurityConfig {
     }
 
     @Bean
-    CorsConfigurationSource corsConfigurationSource() {
+    CorsConfigurationSource corsConfigurationSource(
+            @Value("${lms.allowed-origins:http://localhost:3000,http://localhost:5173}") String allowedOrigins) {
         CorsConfiguration configuration = new CorsConfiguration();
-        configuration.setAllowedOrigins(List.of("http://localhost:3000", "http://localhost:5173"));
+        configuration.setAllowedOrigins(Arrays.stream(allowedOrigins.split(",", -1))
+                .map(String::trim).map(SecurityConfig::validateOrigin).distinct().toList());
         configuration.setAllowedMethods(List.of("GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS"));
         configuration.setAllowedHeaders(List.of("Authorization", "Content-Type", "Accept", "Origin",
                 "X-Requested-With", "Access-Control-Request-Method", "Access-Control-Request-Headers"));
@@ -69,12 +73,31 @@ public class SecurityConfig {
         return source;
     }
 
+    private static String validateOrigin(String origin) {
+        URI uri;
+        try {
+            uri = URI.create(origin);
+        } catch (IllegalArgumentException invalid) {
+            throw new IllegalArgumentException("lms.allowed-origins must contain valid HTTP(S) origins.", invalid);
+        }
+        if (!("http".equalsIgnoreCase(uri.getScheme()) || "https".equalsIgnoreCase(uri.getScheme()))
+                || uri.getHost() == null || uri.getRawUserInfo() != null
+                || !uri.getRawPath().isEmpty() || uri.getRawQuery() != null || uri.getRawFragment() != null
+                || origin.contains("*") || uri.getRawAuthority().endsWith(":")
+                || (uri.getPort() != -1 && (uri.getPort() < 1 || uri.getPort() > 65535))) {
+            throw new IllegalArgumentException("lms.allowed-origins must contain HTTP(S) origins with a host, "
+                    + "an optional port (1-65535), and no userinfo, path, query, fragment, or wildcard.");
+        }
+        return origin;
+    }
+
     @Bean
     SecurityFilterChain securityFilterChain(HttpSecurity http, JsonAuthenticationEntryPoint entryPoint,
                                            JsonAccessDeniedHandler accessDeniedHandler,
                                            LocalAccessJwtAuthenticationConverter jwtAuthenticationConverter,
                                            CorsConfigurationSource corsConfigurationSource) {
         http.csrf(AbstractHttpConfigurer::disable)
+                .cors(AbstractHttpConfigurer::disable)
                 .addFilterAt(new JsonCorsFilter(corsConfigurationSource, accessDeniedHandler), CorsFilter.class)
                 .sessionManagement(session -> session
                         .sessionCreationPolicy(SessionCreationPolicy.STATELESS)

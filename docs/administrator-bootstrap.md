@@ -34,24 +34,47 @@ initialization exits unsuccessfully.
 
 Flyway V3 creates and seeds the singleton `GLOBAL` row before bootstrap. Within
 one transaction the service locks it with `PESSIMISTIC_WRITE` (`SELECT ... FOR
-UPDATE`), checks completion and active administrators, writes `ADMINISTRATOR` /
+UPDATE`), checks completion and existing administrators, writes `ADMINISTRATOR` /
 `ACTIVE` local access, and marks setup complete. Concurrent CLI processes wait
 on the same database lock. Only the first eligible initialization can succeed.
 A missing setup row or an already-completed setup fails closed.
 
-If an active administrator already exists, the transaction commits completion
-without changing any user. The runner then reports refusal outside that
-transaction, preserving the permanent lockout. A suspended administrator alone
-does not block a first bootstrap. Any initialization failure rolls back user and
-setup changes together.
+If any administrator already exists (ACTIVE or SUSPENDED), bootstrap refuses,
+consistent with DOC-04 section 2.1.5. The transaction first locks the selected
+administrator and commits completion with that account's UUID without changing
+any user. The nontransactional runner then reports refusal, preserving the permanent
+lockout. This committed seal is distinct from an initialization failure, which rolls
+back user and setup changes together. Retrying even the same UUID after completion
+fails without changing the stored UUID, timestamp, or user.
+
+`bootstrapped_by` identifies the local administrator associated with closure, not
+the authenticated deployment operator. New initialization records the initialized
+account. Reconciliation and migration select an existing administrator by ascending
+`created_at`, then `user_id`; this is a stable representative, not proof of the
+historically first administrator. `completed_at` records when setup was closed.
+
+The GLOBAL lock serializes participating initialization transactions only. Any
+future provisioning path must lock GLOBAL before affected user rows and respect
+completed setup. It does not serialize arbitrary manual user-table writes. Keep
+external administrator writers quiescent during migration and initial setup.
 
 The completion marker survives application restarts, suspension, demotion, and
 deletion of administrators. Deleting the recorded administrator clears only the
 nullable `bootstrapped_by` reference. Bootstrap is not an administrator recovery
 mechanism; it does not recreate a missing setup row or reset completed setup.
 
-V2 preserves non-unique email projections per DOC-04 §2.1.5, and V3 defensively
-drops any legacy unique email constraint if present. Automated tests run V3 on
-PostgreSQL and native H2 (starting from a V2-equivalent schema, since the historical
-migrations use PostgreSQL syntax), and verify locking, rollback, restart persistence,
-duplicate email migration paths, and web/CLI boundaries.
+V1 already permits duplicate local email copies. V2 widens columns without adding
+uniqueness. V3 introduces and seeds setup state, sealing it with an existing
+administrator's UUID regardless of access status. This follows DOC-04 section
+2.1.5's UUID identity/display-copy model; Central Identity's unique email is a
+separate schema rule.
+
+Native H2 tests execute V3 from an approximation of the final V2 schema. PostgreSQL
+tests cover the real V1-to-V3 migration history, locking, rollback, restart
+persistence, duplicate emails, and web/CLI boundaries. Passing H2 tests alone does
+not establish PostgreSQL concurrency or full servlet integration correctness.
+
+The revised V3 is intended for the unmerged feature-branch migration path. If a
+retained database applied an earlier V3, its checksum differs: preserve the applied
+migration and plan an explicit forward migration before upgrading that database.
+Do not automatically repair Flyway history or reset completed setup.

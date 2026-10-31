@@ -225,6 +225,25 @@ class SecurityErrorDispatchIntegrationTest {
         assertSafeError(call(path, token(user.getUserId()), accept), 404, "Not Found", path);
     }
 
+    @ParameterizedTest
+    @ValueSource(strings = {"http://localhost:3000", "http://localhost:5173"})
+    void allowedOriginRetainsCorsHeadersOnSafeDatabaseFailure(String origin) throws Exception {
+        doThrow(new DataAccessResourceFailureException(PRIVATE_DETAILS))
+                .when(repository).findById(user.getUserId());
+        var request = HttpRequest.newBuilder(URI.create("http://127.0.0.1:" + port + ME))
+                .timeout(Duration.ofSeconds(10)).GET()
+                .header(HttpHeaders.ORIGIN, origin)
+                .header(HttpHeaders.AUTHORIZATION, "Bearer " + token(user.getUserId())).build();
+        try (var client = HttpClient.newHttpClient()) {
+            var response = client.send(request, HttpResponse.BodyHandlers.ofString());
+            assertSafeError(response, 500, "Internal Server Error", ME);
+            assertThat(response.headers().allValues(HttpHeaders.ACCESS_CONTROL_ALLOW_ORIGIN)).containsExactly(origin);
+            assertThat(response.headers().allValues(HttpHeaders.ACCESS_CONTROL_ALLOW_CREDENTIALS)).containsExactly("true");
+        }
+        verify(repository).findById(user.getUserId());
+        assertThat(controller.invocations).hasValue(0);
+    }
+
     private void assertSafeError(HttpResponse<String> response, int status, String error, String path) {
         assertThat(response.statusCode()).isEqualTo(status);
         assertThat(response.headers().allValues(HttpHeaders.WWW_AUTHENTICATE)).isEmpty();

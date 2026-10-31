@@ -112,8 +112,8 @@ class SecurityConfigIntegrationTest {
                         .header(HttpHeaders.ACCESS_CONTROL_REQUEST_METHOD, method)
                         .header(HttpHeaders.ACCESS_CONTROL_REQUEST_HEADERS, headers))
                 .andExpect(status().isOk())
-                .andExpect(header().string(HttpHeaders.ACCESS_CONTROL_ALLOW_ORIGIN, origin))
-                .andExpect(header().string(HttpHeaders.ACCESS_CONTROL_ALLOW_CREDENTIALS, "true"))
+                .andExpect(header().stringValues(HttpHeaders.ACCESS_CONTROL_ALLOW_ORIGIN, origin))
+                .andExpect(header().stringValues(HttpHeaders.ACCESS_CONTROL_ALLOW_CREDENTIALS, "true"))
                 .andExpect(header().string(HttpHeaders.ACCESS_CONTROL_MAX_AGE, "3600"))
                 .andExpect(result -> {
                     var response = result.getResponse();
@@ -138,7 +138,7 @@ class SecurityConfigIntegrationTest {
                         .header(HttpHeaders.ACCESS_CONTROL_REQUEST_METHOD, "POST")
                         .header(HttpHeaders.AUTHORIZATION, "Bearer invalid-token"))
                 .andExpect(status().isOk())
-                .andExpect(header().string(HttpHeaders.ACCESS_CONTROL_ALLOW_ORIGIN, origin))
+                .andExpect(header().stringValues(HttpHeaders.ACCESS_CONTROL_ALLOW_ORIGIN, origin))
                 .andExpect(header().doesNotExist(HttpHeaders.WWW_AUTHENTICATE));
     }
 
@@ -179,8 +179,8 @@ class SecurityConfigIntegrationTest {
     void retainsAuthenticationAndLocalAuthorizationForCorsRequests(String origin) throws Exception {
         mockMvc.perform(get(ME).header(HttpHeaders.ORIGIN, origin))
                 .andExpect(unauthorizedJson())
-                .andExpect(header().string(HttpHeaders.ACCESS_CONTROL_ALLOW_ORIGIN, origin))
-                .andExpect(header().string(HttpHeaders.ACCESS_CONTROL_ALLOW_CREDENTIALS, "true"));
+                .andExpect(header().stringValues(HttpHeaders.ACCESS_CONTROL_ALLOW_ORIGIN, origin))
+                .andExpect(header().stringValues(HttpHeaders.ACCESS_CONTROL_ALLOW_CREDENTIALS, "true"));
 
         LmsUserAccess user = saveUser(LmsRole.STUDENT, AccessStatus.ACTIVE);
         String bearer = "Bearer " + token(user.getUserId().toString());
@@ -188,13 +188,13 @@ class SecurityConfigIntegrationTest {
                         .header(HttpHeaders.AUTHORIZATION, bearer))
                 .andExpect(status().isOk())
                 .andExpect(content().string(user.getUserId() + "|ROLE_STUDENT"))
-                .andExpect(header().string(HttpHeaders.ACCESS_CONTROL_ALLOW_ORIGIN, origin))
-                .andExpect(header().string(HttpHeaders.ACCESS_CONTROL_ALLOW_CREDENTIALS, "true"));
+                .andExpect(header().stringValues(HttpHeaders.ACCESS_CONTROL_ALLOW_ORIGIN, origin))
+                .andExpect(header().stringValues(HttpHeaders.ACCESS_CONTROL_ALLOW_CREDENTIALS, "true"));
         mockMvc.perform(get(ADMIN).header(HttpHeaders.ORIGIN, origin)
                         .header(HttpHeaders.AUTHORIZATION, bearer))
                 .andExpect(forbiddenJson(ADMIN))
-                .andExpect(header().string(HttpHeaders.ACCESS_CONTROL_ALLOW_ORIGIN, origin))
-                .andExpect(header().string(HttpHeaders.ACCESS_CONTROL_ALLOW_CREDENTIALS, "true"));
+                .andExpect(header().stringValues(HttpHeaders.ACCESS_CONTROL_ALLOW_ORIGIN, origin))
+                .andExpect(header().stringValues(HttpHeaders.ACCESS_CONTROL_ALLOW_CREDENTIALS, "true"));
     }
 
     @Test

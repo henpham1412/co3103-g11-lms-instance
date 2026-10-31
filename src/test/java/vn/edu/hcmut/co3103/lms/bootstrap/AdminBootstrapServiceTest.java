@@ -8,6 +8,7 @@ import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.EnumSource;
 import org.junit.jupiter.params.provider.NullAndEmptySource;
 import org.junit.jupiter.params.provider.ValueSource;
 import vn.edu.hcmut.co3103.lms.domain.AccessStatus;
@@ -58,7 +59,7 @@ class AdminBootstrapServiceTest {
         var order = inOrder(states, state, users);
         order.verify(states).lockGlobalState();
         order.verify(state).isCompleted();
-        order.verify(users).existsByLmsRoleAndAccessStatus(LmsRole.ADMINISTRATOR, AccessStatus.ACTIVE);
+        order.verify(users).findFirstByLmsRoleOrderByCreatedAtAscUserIdAsc(LmsRole.ADMINISTRATOR);
         order.verify(users).findById(userId);
         order.verify(users).saveAndFlush(argThat(user -> user.getUserId().equals(userId)
                 && user.getLmsRole() == LmsRole.ADMINISTRATOR
@@ -84,13 +85,25 @@ class AdminBootstrapServiceTest {
         verify(states, never()).save(any());
     }
 
-    @Test
-    void recordsExistingAdminWithoutThrowingAwayTheCompletionTransaction() {
-        when(users.existsByLmsRoleAndAccessStatus(LmsRole.ADMINISTRATOR, AccessStatus.ACTIVE))
-                .thenReturn(true);
+    @ParameterizedTest
+    @EnumSource(AccessStatus.class)
+    void recordsExistingAdminWithoutThrowingAwayTheCompletionTransaction(AccessStatus status) {
+        LmsUserAccess existing = new LmsUserAccess(UUID.randomUUID(), "Existing Admin", "existing@example.com",
+                LmsRole.ADMINISTRATOR, status, null, null, null);
+        when(users.findFirstByLmsRoleOrderByCreatedAtAscUserIdAsc(LmsRole.ADMINISTRATOR))
+                .thenReturn(Optional.of(existing));
         assertThat(service.bootstrap(userId, null, null))
                 .isEqualTo(AdminBootstrapService.Outcome.EXISTING_ADMINISTRATOR);
-        verify(state).complete(null);
+        var order = inOrder(states, state, users);
+        order.verify(states).lockGlobalState();
+        order.verify(state).isCompleted();
+        order.verify(users).findFirstByLmsRoleOrderByCreatedAtAscUserIdAsc(LmsRole.ADMINISTRATOR);
+        order.verify(state).complete(existing.getUserId());
+        assertThat(existing.getLmsRole()).isEqualTo(LmsRole.ADMINISTRATOR);
+        assertThat(existing.getAccessStatus()).isEqualTo(status);
+        assertThat(existing.getFullName()).isEqualTo("Existing Admin");
+        assertThat(existing.getEmail()).isEqualTo("existing@example.com");
+        verifyNoMoreInteractions(users);
         verify(users, never()).findById(any());
         verify(users, never()).saveAndFlush(any());
     }
