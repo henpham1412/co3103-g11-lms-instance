@@ -129,11 +129,6 @@ public class ChapterService {
         Class target = requireClassAccess(chapter.getClassId(), tutorId, true);
         ensureClassEditable(target);
         try {
-            List<Lesson> lessons = lessonRepository.findByChapterIdOrderBySequenceOrderAsc(chapterId);
-            for (Lesson lesson : lessons) {
-                materialRepository.deleteAll(materialRepository.findByLessonIdOrderBySequenceOrderAsc(lesson.getLessonId()));
-            }
-            lessonRepository.deleteAll(lessons);
             chapterRepository.delete(chapter);
             chapterRepository.flush();
         } catch (DataIntegrityViolationException exception) {
@@ -209,7 +204,6 @@ public class ChapterService {
         Class target = requireClassAccess(chapter.getClassId(), tutorId, true);
         ensureClassEditable(target);
         try {
-            materialRepository.deleteAll(materialRepository.findByLessonIdOrderBySequenceOrderAsc(lessonId));
             lessonRepository.delete(lesson);
             lessonRepository.flush();
         } catch (DataIntegrityViolationException exception) {
