@@ -6,19 +6,30 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.server.ResponseStatusException;
 import vn.edu.hcmut.co3103.lms.dto.response.QuizAttemptStartResponse;
+import vn.edu.hcmut.co3103.lms.dto.request.SaveAnswerRequest;
+import vn.edu.hcmut.co3103.lms.dto.response.QuizAttemptResultResponse;
 import vn.edu.hcmut.co3103.lms.entity.Activity;
+import vn.edu.hcmut.co3103.lms.entity.AttemptAnswer;
+import vn.edu.hcmut.co3103.lms.entity.AttemptAnswerOption;
+import vn.edu.hcmut.co3103.lms.entity.AttemptAnswerOptionId;
 import vn.edu.hcmut.co3103.lms.entity.ClassMember;
 import vn.edu.hcmut.co3103.lms.entity.Question;
+import vn.edu.hcmut.co3103.lms.entity.QuestionOption;
 import vn.edu.hcmut.co3103.lms.entity.Quiz;
 import vn.edu.hcmut.co3103.lms.entity.QuizAttempt;
 import vn.edu.hcmut.co3103.lms.repository.assessment.QuestionOptionRepository;
 import vn.edu.hcmut.co3103.lms.repository.assessment.QuestionRepository;
+import vn.edu.hcmut.co3103.lms.repository.assessment.AttemptAnswerRepository;
+import vn.edu.hcmut.co3103.lms.repository.assessment.AttemptAnswerOptionRepository;
 import vn.edu.hcmut.co3103.lms.repository.assessment.QuizAttemptRepository;
 import vn.edu.hcmut.co3103.lms.repository.assessment.QuizRepository;
 
 import java.time.Duration;
 import java.time.OffsetDateTime;
+import java.math.BigDecimal;
 import java.util.List;
+import java.util.HashSet;
+import java.util.Set;
 import java.util.UUID;
 
 @Service
@@ -30,6 +41,8 @@ public class QuizAttemptService {
     private final QuestionOptionRepository optionRepository;
     private final QuizConfigurationAccessService accessService;
     private final QuizGradingService gradingService;
+    private final AttemptAnswerRepository answerRepository;
+    private final AttemptAnswerOptionRepository selectedOptionRepository;
 
     @Transactional
     public StartResult startOrResume(UUID quizId, UUID studentId) {
@@ -100,6 +113,107 @@ public class QuizAttemptService {
         return new QuizAttemptStartResponse.Question(question.getId(), question.getQuestionType(),
                 question.getContent(), question.getPointsAwarded(), question.getPointsDeducted(),
                 question.getOrderIndex(), options);
+    }
+
+    @Transactional
+    public void saveAnswer(UUID attemptId, UUID questionId, UUID studentId, SaveAnswerRequest request) {
+        QuizAttempt attempt = lockOwnedStudentAttempt(attemptId, studentId, "ATTEMPT_OR_QUESTION_NOT_FOUND");
+        if (!"IN_PROGRESS".equals(attempt.getStatus())) throw expiredAttempt();
+        accessService.requireEligibleStudent(attempt.getQuiz().getActivity(), studentId);
+
+        Question question = questionRepository.findByIdAndQuiz_Id(questionId, attempt.getQuiz().getId())
+                .orElseThrow(() -> new ResponseStatusException(
+                        HttpStatus.NOT_FOUND, "ATTEMPT_OR_QUESTION_NOT_FOUND"));
+        if (request == null || request.selectedOptionIds() == null || request.selectedOptionIds().isEmpty()) {
+            throw invalidAnswer();
+        }
+        List<UUID> selectedIds = request.selectedOptionIds();
+        Set<UUID> distinctIds = new HashSet<>(selectedIds);
+        if (distinctIds.size() != selectedIds.size()
+                || (("MCQ_SINGLE".equals(question.getQuestionType())
+                || "TRUE_FALSE".equals(question.getQuestionType())) && selectedIds.size() != 1)) {
+            throw invalidAnswer();
+        }
+        List<QuestionOption> options = optionRepository.findAllById(distinctIds);
+        if (options.size() != distinctIds.size()
+                || options.stream().anyMatch(option -> !option.getQuestion().getId().equals(questionId))) {
+            throw invalidAnswer();
+        }
+
+        AttemptAnswer answer = answerRepository.findByAttempt_IdAndQuestion_Id(attemptId, questionId)
+                .orElseGet(AttemptAnswer::new);
+        answer.setAttempt(attempt);
+        answer.setQuestion(question);
+        answer.setIsCorrect(false);
+        answer.setPointsEarned(BigDecimal.ZERO);
+        AttemptAnswer savedAnswer = answerRepository.saveAndFlush(answer);
+
+        List<AttemptAnswerOption> previous = selectedOptionRepository.findByAnswer_Id(savedAnswer.getId());
+        if (!previous.isEmpty()) selectedOptionRepository.deleteAll(previous);
+        selectedOptionRepository.flush();
+
+        List<AttemptAnswerOption> selectedLinks = options.stream().map(option -> {
+            AttemptAnswerOptionId id = new AttemptAnswerOptionId();
+            id.setAnswerId(savedAnswer.getId());
+            id.setOptionId(option.getId());
+            AttemptAnswerOption link = new AttemptAnswerOption();
+            link.setId(id);
+            link.setAnswer(savedAnswer);
+            link.setOption(option);
+            return link;
+        }).toList();
+        selectedOptionRepository.saveAll(selectedLinks);
+    }
+
+    @Transactional
+    public void clearAnswer(UUID attemptId, UUID questionId, UUID studentId) {
+        QuizAttempt attempt = lockOwnedStudentAttempt(attemptId, studentId, "ATTEMPT_OR_QUESTION_NOT_FOUND");
+        if (!"IN_PROGRESS".equals(attempt.getStatus())) throw expiredAttempt();
+        accessService.requireEligibleStudent(attempt.getQuiz().getActivity(), studentId);
+        if (questionRepository.findByIdAndQuiz_Id(questionId, attempt.getQuiz().getId()).isEmpty()) {
+            throw new ResponseStatusException(HttpStatus.NOT_FOUND, "ATTEMPT_OR_QUESTION_NOT_FOUND");
+        }
+        answerRepository.findByAttempt_IdAndQuestion_Id(attemptId, questionId)
+                .ifPresent(answerRepository::delete);
+    }
+
+    @Transactional
+    public QuizAttemptResultResponse submit(UUID attemptId, UUID studentId) {
+        QuizAttempt attempt = lockOwnedStudentAttempt(attemptId, studentId, "ATTEMPT_NOT_FOUND");
+        accessService.requireEligibleStudent(attempt.getQuiz().getActivity(), studentId);
+        if (!"SUBMITTED".equals(attempt.getStatus())) {
+            OffsetDateTime now = OffsetDateTime.now();
+            OffsetDateTime endAt = calculateEndAt(attempt.getStartedAt(), attempt.getQuiz());
+            attempt.setAutoSubmitted(!now.isBefore(endAt));
+            attempt.setStatus("SUBMITTED");
+            attempt.setSubmittedAt(now);
+            gradingService.gradeAttempt(attempt);
+        }
+        BigDecimal requiredScore = attempt.getQuiz().getRequiredScore();
+        Boolean passed = requiredScore == null ? null : attempt.getScore().compareTo(requiredScore) >= 0;
+        return new QuizAttemptResultResponse(attempt.getId(), attempt.getStatus(), attempt.getAutoSubmitted(),
+                attempt.getScore(), requiredScore, passed, attempt.getSubmittedAt());
+    }
+
+    private QuizAttempt lockOwnedStudentAttempt(UUID attemptId, UUID studentId, String notFoundCode) {
+        QuizAttempt initial = attemptRepository.findById(attemptId)
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, notFoundCode));
+        quizRepository.findLockedById(initial.getQuiz().getId())
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, notFoundCode));
+        QuizAttempt attempt = attemptRepository.findLockedById(attemptId)
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, notFoundCode));
+        if (!attempt.getClassMember().getStudentId().equals(studentId)) {
+            throw new ResponseStatusException(HttpStatus.FORBIDDEN, "FORBIDDEN");
+        }
+        return attempt;
+    }
+
+    private ResponseStatusException invalidAnswer() {
+        return new ResponseStatusException(HttpStatus.BAD_REQUEST, "INVALID_ANSWER");
+    }
+
+    private ResponseStatusException expiredAttempt() {
+        return new ResponseStatusException(HttpStatus.CONFLICT, "ATTEMPT_ALREADY_SUBMITTED_OR_EXPIRED");
     }
 
     public record StartResult(HttpStatus status, QuizAttemptStartResponse body) {}
