@@ -14,6 +14,7 @@ import vn.edu.hcmut.co3103.lms.domain.AccessStatus;
 import vn.edu.hcmut.co3103.lms.domain.LmsUserAccess;
 import vn.edu.hcmut.co3103.lms.repository.LmsUserAccessRepository;
 
+import java.nio.charset.StandardCharsets;
 import java.time.Clock;
 import java.time.Instant;
 import java.util.List;
@@ -78,8 +79,11 @@ public final class LocalAccessJwtAuthenticationConverter implements Converter<Jw
             return null; // Older/minimal identity tokens must not erase the local display copy.
         }
         Object value = jwt.getClaims().get(name);
+        // PostgreSQL text rejects NUL; malformed UTF-16 must not be silently replaced during encoding.
         if (!(value instanceof String text)
-                || !validator.validateValue(LmsUserAccess.class, name, text).isEmpty()) {
+                || !validator.validateValue(LmsUserAccess.class, name, text).isEmpty()
+                || text.indexOf('\0') >= 0
+                || !StandardCharsets.UTF_8.newEncoder().canEncode(text)) {
             throw new OAuth2AuthenticationException("invalid_token");
         }
         return text;

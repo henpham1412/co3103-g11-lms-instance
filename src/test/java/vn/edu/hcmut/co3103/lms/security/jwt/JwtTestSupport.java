@@ -119,13 +119,30 @@ public final class JwtTestSupport implements AutoCloseable {
                 Stream.of(Arguments.of("cnf", Map.of())));
     }
 
+    public static Stream<Arguments> unpreservableDisplayClaims() {
+        return Stream.of("fullName", "email").flatMap(name -> Stream.of(
+                "\u0000name", "na\u0000me", "name\u0000",
+                "\uD800name", "na\uD800me", "name\uDBFF",
+                "\uDC00name", "na\uDFFFme", "name\uDFFF",
+                "name\uDC00\uD800", "name\uD800\uDBFF", "name\uDC00\uDFFF")
+                .map(value -> Arguments.of(name, name.equals("email") ? value + "@example.test" : value)));
+    }
+
+    public String token(String claimsJson) throws JOSEException {
+        return token(new Payload(claimsJson), JWSAlgorithm.RS256);
+    }
+
     public String token(Map<String, Object> claims) throws JOSEException {
         return token(claims, JWSAlgorithm.RS256);
     }
 
     public String token(Map<String, Object> claims, JWSAlgorithm algorithm) throws JOSEException {
+        return token(new Payload(claims), algorithm);
+    }
+
+    private String token(Payload payload, JWSAlgorithm algorithm) throws JOSEException {
         JWSObject token = new JWSObject(new JWSHeader.Builder(algorithm).keyID(key.getKeyID()).build(),
-                new Payload(claims));
+                payload);
         if (JWSAlgorithm.HS256.equals(algorithm)) {
             // Deliberately use public-key material as an HMAC secret to test algorithm confusion.
             token.sign(new MACSigner(key.toRSAPublicKey().getEncoded()));

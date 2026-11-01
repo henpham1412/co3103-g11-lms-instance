@@ -29,6 +29,7 @@ import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.test.context.DynamicPropertyRegistry;
 import org.springframework.test.context.DynamicPropertySource;
 import org.springframework.test.context.bean.override.mockito.MockitoSpyBean;
+import tools.jackson.core.json.JsonWriteFeature;
 import tools.jackson.databind.JsonNode;
 import tools.jackson.databind.ObjectMapper;
 import vn.edu.hcmut.co3103.lms.domain.AccessStatus;
@@ -262,16 +263,38 @@ class AdminUserHttpRegressionTest {
 
     @ParameterizedTest
     @MethodSource("invalidDisplayClaims")
+    @MethodSource("vn.edu.hcmut.co3103.lms.security.jwt.JwtTestSupport#unpreservableDisplayClaims")
     void malformedDisplayClaimCannotPartiallySynchronizeIdentity(String name, Object value) throws Exception {
         var claims = TOKENS.claims();
         claims.put("sub", target.getUserId().toString());
         claims.put("fullName", "Must Not Persist");
         claims.put("email", "must-not-persist@example.test");
         claims.put(name, value);
-        var response = sendToken("GET", USERS, null, TOKENS.token(claims));
+        // Preserve lone surrogates as JSON escapes instead of replacing them during UTF-8 encoding.
+        String claimsJson = mapper.writer().with(JsonWriteFeature.ESCAPE_NON_ASCII).writeValueAsString(claims);
+        var response = sendToken("GET", USERS, null, TOKENS.token(claimsJson));
         error(response, 401, "UNAUTHORIZED");
         assertThat(response.headers().firstValue("WWW-Authenticate")).contains("Bearer");
         assertUnchanged();
+    }
+
+    @Test
+    void validUnicodeDisplayClaimsArePreservedInDatabase() throws Exception {
+        String fullName = "Nguyễn \uD83D\uDE00 \uD840\uDC00";
+        String email = "nguyễn@example.test";
+        var claims = TOKENS.claims();
+        claims.put("sub", admin.getUserId().toString());
+        claims.put("fullName", fullName);
+        claims.put("email", email);
+
+        json(sendToken("GET", USERS, null, TOKENS.token(claims)), 200);
+
+        var stored = users.findById(admin.getUserId()).orElseThrow();
+        assertThat(stored.getFullName()).isEqualTo(fullName);
+        assertThat(stored.getEmail()).isEqualTo(email);
+        assertThat(stored).usingRecursiveComparison()
+                .ignoringFields("fullName", "email", "lastSyncedProfileIat", "updatedAt").isEqualTo(admin);
+        assertThat(auditLogs.count()).isZero();
     }
 
     @ParameterizedTest

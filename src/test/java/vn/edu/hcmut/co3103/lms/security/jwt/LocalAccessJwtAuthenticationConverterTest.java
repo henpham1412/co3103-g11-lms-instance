@@ -5,6 +5,7 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.EnumSource;
+import org.junit.jupiter.params.provider.MethodSource;
 import org.junit.jupiter.params.provider.NullAndEmptySource;
 import org.junit.jupiter.params.provider.ValueSource;
 import org.springframework.dao.DataAccessResourceFailureException;
@@ -132,6 +133,33 @@ class LocalAccessJwtAuthenticationConverterTest {
         assertThatThrownBy(() -> converter.convert(jwt(List.of(USER_ID.toString()))))
                 .isInstanceOf(OAuth2AuthenticationException.class);
         verifyNoInteractions(repository);
+    }
+
+    @ParameterizedTest
+    @MethodSource("vn.edu.hcmut.co3103.lms.security.jwt.JwtTestSupport#unpreservableDisplayClaims")
+    void rejectsUnpreservableDisplayClaimBeforeDatabaseLookup(String name, String value) {
+        var token = Jwt.withTokenValue("invalid-display-token").header("alg", "RS256")
+                .subject(USER_ID.toString()).issuedAt(JwtTestSupport.NOW)
+                .claim("fullName", "Valid Name").claim("email", "valid@example.test")
+                .claim(name, value).build();
+
+        assertThatThrownBy(() -> converter.convert(token))
+                .isInstanceOfSatisfying(OAuth2AuthenticationException.class,
+                        exception -> assertThat(exception.getError().getErrorCode()).isEqualTo("invalid_token"));
+        verifyNoInteractions(repository);
+    }
+
+    @Test
+    void preservesValidUnicodeDisplayClaimsIncludingSurrogatePairs() {
+        String fullName = "Nguyễn \uD83D\uDE00 \uD840\uDC00";
+        String email = "nguyễn@example.test";
+        when(repository.findById(USER_ID)).thenReturn(Optional.of(user(LmsRole.TUTOR, AccessStatus.ACTIVE)));
+        var token = Jwt.withTokenValue("unicode-token").header("alg", "RS256")
+                .subject(USER_ID.toString()).issuedAt(JwtTestSupport.NOW)
+                .claim("fullName", fullName).claim("email", email).build();
+
+        assertThat(converter.convert(token).isAuthenticated()).isTrue();
+        verify(repository).synchronizeIdentity(USER_ID, fullName, email, JwtTestSupport.NOW, JwtTestSupport.NOW);
     }
 
     @Test
