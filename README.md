@@ -206,7 +206,11 @@ Do not modify these shared settings locally unless the team agrees to update the
 
 ## 7. API Overview
 
-All LMS API endpoints use the `/api/v1` prefix and are served by the current LMS instance.
+DOC-05 describes the general `/api/v1` API prefix. The implemented LMS-13 user
+administration endpoints use `/api/admin/users`; see the
+[UC7.1 endpoint and verification guide](docs/admin-user-management.md) and its
+[Postman collection](docs/postman/LMS-13_AdminUserManagement.postman_collection.json).
+All LMS endpoints are served by the current LMS instance.
 
 Protected endpoints require a valid Bearer access token:
 
