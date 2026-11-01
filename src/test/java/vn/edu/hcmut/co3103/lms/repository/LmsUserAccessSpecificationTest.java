@@ -17,11 +17,13 @@ import org.springframework.data.jpa.repository.JpaSpecificationExecutor;
 import vn.edu.hcmut.co3103.lms.domain.AccessStatus;
 import vn.edu.hcmut.co3103.lms.domain.LmsRole;
 import vn.edu.hcmut.co3103.lms.domain.LmsUserAccess;
+import vn.edu.hcmut.co3103.lms.exception.AdminAccessValidationException;
 
 import java.util.Locale;
 import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.*;
 
@@ -49,6 +51,14 @@ class LmsUserAccessSpecificationTest {
 
         verify(builder).and(new Predicate[0]);
         verifyNoInteractions(root);
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {"\0", "a\0b", " \t\0\n "})
+    void rejectsNulBeforeCreatingTheDatabasePredicate(String query) {
+        assertThatThrownBy(() -> LmsUserAccessSpecification.filter(query, LmsRole.TUTOR, AccessStatus.ACTIVE))
+                .isInstanceOf(AdminAccessValidationException.class);
+        verifyNoInteractions(root, builder);
     }
 
     @ParameterizedTest

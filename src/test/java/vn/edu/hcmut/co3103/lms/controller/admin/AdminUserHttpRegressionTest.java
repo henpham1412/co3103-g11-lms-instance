@@ -1,5 +1,9 @@
 package vn.edu.hcmut.co3103.lms.controller.admin;
 
+import ch.qos.logback.classic.Level;
+import ch.qos.logback.classic.Logger;
+import ch.qos.logback.classic.spi.ILoggingEvent;
+import ch.qos.logback.core.read.ListAppender;
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
@@ -9,6 +13,7 @@ import org.junit.jupiter.params.provider.Arguments;
 import org.junit.jupiter.params.provider.CsvSource;
 import org.junit.jupiter.params.provider.MethodSource;
 import org.junit.jupiter.params.provider.ValueSource;
+import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.test.context.SpringBootTest;
@@ -247,6 +252,54 @@ class AdminUserHttpRegressionTest {
         assertThat(last.path("total_items").asInt()).isEqualTo(2);
         assertThat(last.path("total_pages").asInt()).isEqualTo(2);
         assertThat(last.path("last").asBoolean()).isTrue();
+    }
+
+    static Stream<Arguments> nulSearchQueries() {
+        return Stream.of(USERS, "/api/admin/users").flatMap(route ->
+                Stream.of("%00", "a%00b", "%20%09%00%0A", "%00a%00").flatMap(query ->
+                        Stream.of("", "&lms_role=STUDENT&access_status=ACTIVE",
+                                "&role=STUDENT&status=ACTIVE&page=1&size=2000&sort=created_at,desc",
+                                "&lms_role=TUTOR&access_status=SUSPENDED&page=2147483647&size=1")
+                                .map(filters -> Arguments.of(route, query + filters))));
+    }
+
+    @ParameterizedTest
+    @MethodSource("nulSearchQueries")
+    void nulSearchReturnsValidationErrorWithoutMutationOrServerErrorLog(String route, String query) throws Exception {
+        var before = jdbc.queryForList("SELECT * FROM admin_user_http_test.lms_user_access ORDER BY user_id");
+        long auditsBefore = auditLogs.count();
+        Logger logger = (Logger) LoggerFactory.getLogger(org.slf4j.Logger.ROOT_LOGGER_NAME);
+        var logs = new ListAppender<ILoggingEvent>();
+        logs.start();
+        logger.addAppender(logs);
+        try {
+            var response = send("GET", route + "?q=" + query, null, "application/json", admin.getUserId());
+            error(response, 400, "VALIDATION_ERROR");
+            assertThat(mapper.readTree(response.body())).isEqualTo(mapper.readTree("""
+                    {"code":"VALIDATION_ERROR","message":"Validation failed","details":[]}
+                    """));
+            var recovered = json(send("GET", route + "?q=Administrator", null,
+                    "application/json", admin.getUserId()), 200);
+            assertThat(recovered.path("total_items").asInt()).isEqualTo(1);
+            assertThat(jdbc.queryForList("SELECT * FROM admin_user_http_test.lms_user_access ORDER BY user_id"))
+                    .isEqualTo(before);
+            assertThat(auditLogs.count()).isEqualTo(auditsBefore);
+            assertThat(logs.list).noneMatch(event -> event.getLevel().isGreaterOrEqual(Level.ERROR));
+            assertThat(logs.list).extracting(ILoggingEvent::getFormattedMessage)
+                    .noneMatch(message -> message.contains("22021") || message.contains("invalid byte sequence"));
+        } finally {
+            logger.detachAppender(logs);
+            logs.stop();
+        }
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {USERS, "/api/admin/users"})
+    void literalPercentEncodedTextIsNotDecodedTwice(String route) throws Exception {
+        var literal = saveUser("Literal a%00b", LmsRole.STUDENT, AccessStatus.ACTIVE);
+        var result = json(send("GET", route + "?q=a%2500b", null, "application/json", admin.getUserId()), 200);
+        assertThat(result.path("total_items").asInt()).isEqualTo(1);
+        assertThat(result.path("items").get(0).path("user_id").asText()).isEqualTo(literal.getUserId().toString());
     }
 
     @ParameterizedTest

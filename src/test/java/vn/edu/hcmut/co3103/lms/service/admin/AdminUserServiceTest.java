@@ -164,6 +164,18 @@ class AdminUserServiceTest {
         verifyNoInteractions(users, states);
     }
 
+    @ParameterizedTest
+    @ValueSource(strings = {"\0", "a\0b", "\0alice", "alice\0", " \t\0\n ", "a\0\0b"})
+    void rejectsNulSearchBeforeQueryingUsers(String query) {
+        for (Pageable pageable : List.of(PageRequest.of(0, 2000), Pageable.unpaged())) {
+            assertThatThrownBy(() -> service().getUsers(query, null, null, pageable))
+                    .isInstanceOf(AdminAccessValidationException.class);
+            assertThatThrownBy(() -> service().getUsers(query, LmsRole.TUTOR, AccessStatus.ACTIVE, pageable))
+                    .isInstanceOf(AdminAccessValidationException.class);
+        }
+        verifyNoInteractions(users, states, auditLogs);
+    }
+
     @Test
     void acceptsMaximumSupportedOffset() {
         var pageable = PageRequest.of(Integer.MAX_VALUE, 1);

@@ -11,6 +11,7 @@ import vn.edu.hcmut.co3103.lms.domain.AuditLog;
 import vn.edu.hcmut.co3103.lms.domain.LmsRole;
 import vn.edu.hcmut.co3103.lms.domain.LmsUserAccess;
 import vn.edu.hcmut.co3103.lms.dto.admin.AdminUserPageResponse;
+import vn.edu.hcmut.co3103.lms.dto.admin.AdminUserQueryValidation;
 import vn.edu.hcmut.co3103.lms.dto.admin.AdminUserResponse;
 import vn.edu.hcmut.co3103.lms.dto.admin.UpdateUserAccessRequest;
 import vn.edu.hcmut.co3103.lms.exception.AdminAccessValidationException;
@@ -43,6 +44,7 @@ public class AdminUserService {
 
     @Transactional(readOnly = true)
     public AdminUserPageResponse getUsers(String query, LmsRole role, AccessStatus status, Pageable pageable) {
+        AdminUserQueryValidation.requireValidSearchQuery(query);
         if (pageable.isPaged() && pageable.getOffset() > Integer.MAX_VALUE) {
             throw new AdminAccessValidationException();
         }

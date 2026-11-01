@@ -42,8 +42,10 @@ class LmsUserAccessRepositoryTest {
 
     @Test
     void createsReadsUpdatesAndDeletesUserAccess() {
-        LmsUserAccess user = newUser(LmsRole.STUDENT, AccessStatus.ACTIVE);
-        Instant beforeSave = Instant.now().truncatedTo(ChronoUnit.MICROS);
+        Instant originalTime = Instant.parse("2020-01-01T00:00:00Z");
+        LmsUserAccess user = new LmsUserAccess(UUID.randomUUID(), "Test User",
+                UUID.randomUUID() + "@example.com", LmsRole.STUDENT,
+                AccessStatus.ACTIVE, null, originalTime, originalTime);
         repository.saveAndFlush(user);
         entityManager.clear();
 
@@ -54,10 +56,11 @@ class LmsUserAccessRepositoryTest {
         assertThat(stored.getLmsRole()).isEqualTo(LmsRole.STUDENT);
         assertThat(stored.getAccessStatus()).isEqualTo(AccessStatus.ACTIVE);
         assertThat(stored.getLastLoginAt()).isNull();
-        assertTimestampBetween(stored.getCreatedAt(), beforeSave, Instant.now());
+        assertThat(stored.getCreatedAt()).isEqualTo(originalTime);
         assertThat(stored.getUpdatedAt()).isEqualTo(stored.getCreatedAt());
         Instant createdAt = stored.getCreatedAt();
 
+        Instant beforeUpdate = Instant.now();
         stored.setFullName("Updated Name");
         stored.setEmail("updated-" + user.getEmail());
         stored.setLmsRole(LmsRole.TUTOR);
@@ -70,11 +73,24 @@ class LmsUserAccessRepositoryTest {
         assertThat(updated.getLmsRole()).isEqualTo(LmsRole.TUTOR);
         assertThat(updated.getCreatedAt()).isEqualTo(createdAt);
         assertThat(updated.getUpdatedAt()).isAfter(createdAt);
+        assertTimestampBetween(updated.getUpdatedAt(), beforeUpdate, Instant.now());
 
         repository.delete(updated);
         repository.flush();
         entityManager.clear();
         assertThat(repository.findById(user.getUserId())).isEmpty();
+    }
+
+    @Test
+    void generatesCreationAndUpdateTimestampsWhenAbsent() {
+        LmsUserAccess user = newUser(LmsRole.STUDENT, AccessStatus.ACTIVE);
+        Instant beforeSave = Instant.now();
+        repository.saveAndFlush(user);
+        entityManager.clear();
+
+        LmsUserAccess stored = repository.findById(user.getUserId()).orElseThrow();
+        assertTimestampBetween(stored.getCreatedAt(), beforeSave, Instant.now());
+        assertThat(stored.getUpdatedAt()).isEqualTo(stored.getCreatedAt());
     }
 
     @ParameterizedTest

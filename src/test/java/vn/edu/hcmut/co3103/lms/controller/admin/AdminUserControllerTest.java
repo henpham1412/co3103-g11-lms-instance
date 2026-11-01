@@ -214,6 +214,19 @@ class AdminUserControllerTest {
         verifyNoInteractions(service);
     }
 
+    @ParameterizedTest
+    @ValueSource(strings = {"\0", "a\0b", "\0alice", "alice\0", " \t\0\n ", "a\0\0b"})
+    void rejectsNulSearchBeforeCallingTheService(String query) throws Exception {
+        for (String route : List.of(USERS, "/api/v1/admin/users")) {
+            mockMvc.perform(get(route).param("q", query)
+                            .param("lms_role", "TUTOR").param("access_status", "ACTIVE")
+                            .param("page", "1").param("size", "2000"))
+                    .andExpect(status().isBadRequest())
+                    .andExpect(errorEnvelope("VALIDATION_ERROR", "Validation failed"));
+        }
+        verifyNoInteractions(service);
+    }
+
     @Test
     void returnsNotFoundForAnUnknownUser() throws Exception {
         when(service.updateUserAccess(USER_ID, new UpdateUserAccessRequest(LmsRole.TUTOR, null), ADMIN_ID))

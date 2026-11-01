@@ -5,6 +5,7 @@ import org.springframework.data.jpa.domain.Specification;
 import vn.edu.hcmut.co3103.lms.domain.AccessStatus;
 import vn.edu.hcmut.co3103.lms.domain.LmsRole;
 import vn.edu.hcmut.co3103.lms.domain.LmsUserAccess;
+import vn.edu.hcmut.co3103.lms.dto.admin.AdminUserQueryValidation;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -17,6 +18,7 @@ public final class LmsUserAccessSpecification {
     }
 
     public static Specification<LmsUserAccess> filter(String q, LmsRole lmsRole, AccessStatus accessStatus) {
+        AdminUserQueryValidation.requireValidSearchQuery(q);
         return (root, query, builder) -> {
             List<Predicate> filters = new ArrayList<>();
             if (q != null && !q.isBlank()) {

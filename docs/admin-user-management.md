@@ -49,6 +49,11 @@ nonnumeric, or out-of-range values return `400 VALIDATION_ERROR`. The effective
 offset `(page - 1) * size` cannot exceed `2147483647`. Invalid sorts and repeated
 scalar query parameters also return `400 VALIDATION_ERROR`.
 
+Search text containing U+0000 (NUL), including `q=%00` and `q=a%00b`, returns
+`400 VALIDATION_ERROR` before repository access. The controller, service, and
+specification factory share this validation. Literal text `%00` remains searchable
+by encoding the percent sign (`q=%2500`); values are not decoded twice.
+
 Example: `GET /api/v1/admin/users?page=1&size=12&sort=created_at,desc`:
 
 ```json
@@ -146,7 +151,7 @@ DOC-05 §1.8. Unrelated application validation retains its existing error mappin
 
 ## Verification
 
-Use JDK 25 and a **disposable PostgreSQL database**. Set `DB_URL`, `DB_USERNAME`,
+Use JDK 25 and a **disposable PostgreSQL 18.6 database**. Set `DB_URL`, `DB_USERNAME`,
 and `DB_PASSWORD`; the test user needs schema-creation permission. Tests apply
 Flyway migrations and use isolated schemas, including concurrency and failure
 injection. Signed JWT/JWKS fixtures run locally; Central Identity is not required.

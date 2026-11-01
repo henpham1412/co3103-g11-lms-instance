@@ -22,6 +22,7 @@ import org.springframework.web.bind.annotation.RestController;
 import vn.edu.hcmut.co3103.lms.domain.AccessStatus;
 import vn.edu.hcmut.co3103.lms.domain.LmsRole;
 import vn.edu.hcmut.co3103.lms.dto.admin.AdminUserPageResponse;
+import vn.edu.hcmut.co3103.lms.dto.admin.AdminUserQueryValidation;
 import vn.edu.hcmut.co3103.lms.dto.admin.AdminUserResponse;
 import vn.edu.hcmut.co3103.lms.dto.admin.UpdateUserAccessRequest;
 import vn.edu.hcmut.co3103.lms.exception.AdminAccessValidationException;
@@ -55,11 +56,13 @@ public class AdminUserController {
             @RequestParam MultiValueMap<String, String> parameters,
             @RequestHeader HttpHeaders headers) throws HttpMediaTypeNotAcceptableException {
         requireAcceptableJsonResponse(headers);
+        String query = singleParameter(parameters, "q");
+        AdminUserQueryValidation.requireValidSearchQuery(query);
         var role = UpdateUserAccessRequest.namedEnum(aliasedParameter(parameters, "lms_role", "role"), LmsRole.class);
         var status = UpdateUserAccessRequest.namedEnum(
                 aliasedParameter(parameters, "access_status", "status"), AccessStatus.class);
         return ResponseEntity.ok().contentType(JSON_UTF8)
-                .body(service.getUsers(singleParameter(parameters, "q"), role, status, pageable(parameters)));
+                .body(service.getUsers(query, role, status, pageable(parameters)));
     }
 
     @GetMapping("/{userId}")
