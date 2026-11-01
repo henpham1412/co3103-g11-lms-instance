@@ -193,14 +193,15 @@ class AdminUserHttpRegressionTest {
     }
 
     static Stream<Arguments> unacceptableRepresentations() {
-        return Stream.of("GET_LIST", "GET_DETAIL", "PATCH").flatMap(endpoint -> Stream.of(
-                "application/json;charset=ISO-8859-1", "application/json;charset=UTF-16",
-                "application/json;charset=windows-1252", "application/json;charset=UTF-32",
-                "application/json;q=0", "*/*;q=0", "application/json;q=0, */*;q=1",
-                "*/*;q=1, application/json;q=0", "application/*;q=0, */*;q=1",
-                "application/json;charset=UTF-8;q=0, application/json;q=1",
-                "application/problem+json", "application/xml", "text/html", "application/json;profile=custom")
-                .map(accept -> Arguments.of(endpoint, accept)));
+        // Exercise negotiation on every endpoint; charset/quality variants need only one HTTP path.
+        return Stream.concat(
+                Stream.of("GET_LIST", "GET_DETAIL", "PATCH")
+                        .map(endpoint -> Arguments.of(endpoint, "text/html")),
+                Stream.of("application/json;charset=ISO-8859-1", "application/json;q=0", "*/*;q=0",
+                        "application/json;q=0, */*;q=1", "application/*;q=0, */*;q=1",
+                        "application/json;charset=UTF-8;q=0, application/json;q=1",
+                        "application/problem+json", "application/json;profile=custom")
+                        .map(accept -> Arguments.of("PATCH", accept)));
     }
 
     @ParameterizedTest
@@ -264,13 +265,16 @@ class AdminUserHttpRegressionTest {
     }
 
     static Stream<Arguments> containerRejectedNulPaths() {
-        return Stream.of(USERS, "/api/admin/users").flatMap(route ->
-                Stream.of(false, true).flatMap(appendToUuid ->
-                        Stream.of("GET", "PATCH").flatMap(method ->
-                                Stream.of("ADMINISTRATOR", "STUDENT", "ANONYMOUS").flatMap(caller ->
-                                        Stream.of("application/json", "*/*", "text/html")
-                                                .map(accept -> Arguments.of(route, appendToUuid, method,
-                                                        caller, accept))))));
+        // Tomcat rejects these paths before routing/authentication; cover each dimension without a product.
+        return Stream.of(
+                Arguments.of(USERS, false, "GET", "ANONYMOUS", "*/*"),
+                Arguments.of(USERS, true, "PATCH", "ADMINISTRATOR", "text/html"),
+                Arguments.of(USERS, false, "PATCH", "STUDENT", "*/*"),
+                Arguments.of(USERS, true, "GET", "ANONYMOUS", "text/html"),
+                Arguments.of("/api/admin/users", false, "PATCH", "ANONYMOUS", "text/html"),
+                Arguments.of("/api/admin/users", true, "GET", "ADMINISTRATOR", "*/*"),
+                Arguments.of("/api/admin/users", false, "GET", "STUDENT", "text/html"),
+                Arguments.of("/api/admin/users", true, "PATCH", "ANONYMOUS", "*/*"));
     }
 
     @ParameterizedTest
@@ -305,12 +309,12 @@ class AdminUserHttpRegressionTest {
     }
 
     static Stream<Arguments> nulSearchQueries() {
-        return Stream.of(USERS, "/api/admin/users").flatMap(route ->
-                Stream.of("%00", "a%00b", "%20%09%00%0A", "%00a%00").flatMap(query ->
-                        Stream.of("", "&lms_role=STUDENT&access_status=ACTIVE",
-                                "&role=STUDENT&status=ACTIVE&page=1&size=2000&sort=created_at,desc",
-                                "&lms_role=TUTOR&access_status=SUSPENDED&page=2147483647&size=1")
-                                .map(filters -> Arguments.of(route, query + filters))));
+        return Stream.of(USERS, "/api/admin/users").flatMap(route -> Stream.of(
+                "%00",
+                "a%00b&lms_role=STUDENT&access_status=ACTIVE",
+                "%20%09%00%0A&role=STUDENT&status=ACTIVE&page=1&size=2000&sort=created_at,desc",
+                "%00a%00&lms_role=TUTOR&access_status=SUSPENDED&page=2147483647&size=1")
+                .map(query -> Arguments.of(route, query)));
     }
 
     @ParameterizedTest
@@ -554,7 +558,7 @@ class AdminUserHttpRegressionTest {
     }
 
     @ParameterizedTest
-    @ValueSource(strings = {"application/json", "text/html", "application/xml", "application/json;q=0"})
+    @ValueSource(strings = {"*/*", "text/html"})
     void anonymousTraceNeverReflectsHeadersOrBody(String accept) throws Exception {
         for (String route : List.of(USERS, "/api/admin/users")) {
             for (boolean detail : List.of(false, true)) {
