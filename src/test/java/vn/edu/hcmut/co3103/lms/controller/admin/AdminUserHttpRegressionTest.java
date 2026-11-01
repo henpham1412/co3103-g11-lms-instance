@@ -8,6 +8,7 @@ import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.extension.ExtendWith;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.Arguments;
 import org.junit.jupiter.params.provider.CsvSource;
@@ -18,6 +19,8 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.test.context.TestConfiguration;
+import org.springframework.boot.test.system.CapturedOutput;
+import org.springframework.boot.test.system.OutputCaptureExtension;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Import;
 import org.springframework.context.annotation.Primary;
@@ -34,6 +37,10 @@ import vn.edu.hcmut.co3103.lms.repository.LmsUserAccessRepository;
 import vn.edu.hcmut.co3103.lms.security.jwt.JwtTestSupport;
 
 import java.net.URI;
+import java.net.Socket;
+import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
@@ -55,10 +62,12 @@ import static org.assertj.core.api.Assertions.assertThat;
 // No test-owned transaction: Tomcat completes each request, then assertions read committed state.
 @SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT, properties = {
         "spring.jpa.hibernate.ddl-auto=validate",
+        "logging.file.name=target/pii-http-regression.log",
         "spring.flyway.schemas=admin_user_http_test",
         "spring.jpa.properties.hibernate.default_schema=admin_user_http_test"
 })
 @Import(AdminUserHttpRegressionTest.JwtClockConfiguration.class)
+@ExtendWith(OutputCaptureExtension.class)
 class AdminUserHttpRegressionTest {
     private static final String USERS = "/api/v1/admin/users";
     private static final Instant ORIGINAL_TIME = Instant.parse("2025-01-01T00:00:00Z");
@@ -506,6 +515,156 @@ class AdminUserHttpRegressionTest {
             assertUnchanged();
         } finally {
             jdbc.execute("ALTER TABLE admin_user_http_test.audit_logs DROP CONSTRAINT reject_test_audit");
+        }
+    }
+
+    static Stream<Arguments> rejectedResourceMethods() {
+        return Stream.of(USERS, "/api/admin/users").flatMap(route -> Stream.of(false, true)
+                .flatMap(detail -> Stream.of("TRACE", "POST", "PUT", "DELETE", "PATCH")
+                        .filter(method -> !detail || !method.equals("PATCH"))
+                        .map(method -> Arguments.of(route, detail, method))));
+    }
+
+    @ParameterizedTest
+    @MethodSource("rejectedResourceMethods")
+    void rejectedMethodsAdvertiseOnlySupportedResourceMethods(String route, boolean detail, String method)
+            throws Exception {
+        String path = route + (detail ? "/" + target.getUserId() : "");
+        var before = jdbc.queryForList("SELECT * FROM admin_user_http_test.lms_user_access ORDER BY user_id");
+        var response = send(method, path, "{\"private\":\"method-body@example.test\"}",
+                "application/json", admin.getUserId());
+        error(response, 405, "METHOD_NOT_ALLOWED");
+        assertThat(mapper.readTree(response.body())).isEqualTo(mapper.readTree("""
+                {"code":"METHOD_NOT_ALLOWED","message":"Method Not Allowed","details":[]}
+                """));
+        assertThat(response.headers().allValues("Allow"))
+                .containsExactly(detail ? "GET, HEAD, PATCH, OPTIONS" : "GET, HEAD, OPTIONS");
+        assertThat(response.body()).doesNotContain("method-body", "Authorization", "Bearer");
+        assertThat(jdbc.queryForList("SELECT * FROM admin_user_http_test.lms_user_access ORDER BY user_id"))
+                .isEqualTo(before);
+        assertUnchanged();
+        var head = send("HEAD", path, null, "application/json", admin.getUserId());
+        assertThat(head.statusCode()).isEqualTo(200);
+        assertThat(head.body()).isEmpty();
+        assertThat(send("OPTIONS", path, null, "application/json", null).statusCode()).isEqualTo(200);
+        if (detail) {
+            json(send("PATCH", path, "{\"lms_role\":\"TUTOR\"}", "application/json", admin.getUserId()), 200);
+            assertThat(auditLogs.count()).isEqualTo(1);
+        }
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {"application/json", "text/html", "application/xml", "application/json;q=0"})
+    void anonymousTraceNeverReflectsHeadersOrBody(String accept) throws Exception {
+        for (String route : List.of(USERS, "/api/admin/users")) {
+            for (boolean detail : List.of(false, true)) {
+                String path = route + (detail ? "/" + target.getUserId() : "");
+                var anonymous = send("TRACE", path, null, accept, null);
+                error(anonymous, 405, "METHOD_NOT_ALLOWED");
+                assertThat(anonymous.headers().allValues("Allow"))
+                        .containsExactly(detail ? "GET, HEAD, PATCH, OPTIONS" : "GET, HEAD, OPTIONS");
+                var request = HttpRequest.newBuilder(URI.create("http://127.0.0.1:" + port + path))
+                        .timeout(Duration.ofSeconds(15)).header("Accept", accept)
+                        .header("Authorization", "Bearer TRACE_SECRET_MARKER")
+                        .header("X-Private", "TRACE_HEADER_MARKER")
+                        .method("TRACE", HttpRequest.BodyPublishers.ofString("TRACE_BODY_MARKER")).build();
+                var response = CLIENT.send(request, HttpResponse.BodyHandlers.ofString());
+                error(response, 405, "METHOD_NOT_ALLOWED");
+                assertThat(response.headers().allValues("Allow"))
+                        .containsExactly(detail ? "GET, HEAD, PATCH, OPTIONS" : "GET, HEAD, OPTIONS");
+                assertThat(response.body()).doesNotContain("TRACE_SECRET_MARKER", "TRACE_HEADER_MARKER",
+                        "TRACE_BODY_MARKER", "Authorization", "<html");
+            }
+        }
+        assertUnchanged();
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {USERS, "/api/admin/users"})
+    void malformedRequestAndMediaTypeNeverLogPii(String route, CapturedOutput output) throws Exception {
+        String raw;
+        try (var socket = new Socket("127.0.0.1", port)) {
+            socket.setSoTimeout(15000);
+            socket.getOutputStream().write(("GET " + route + "?q=[RAW_NAME_MARKER_raw@example.test HTTP/1.1\r\n"
+                    + "Host: localhost\r\nAuthorization: Bearer RAW_TOKEN_MARKER\r\nConnection: close\r\n\r\n")
+                    .getBytes(StandardCharsets.US_ASCII));
+            raw = new String(socket.getInputStream().readAllBytes(), StandardCharsets.UTF_8);
+        }
+        assertThat(raw).startsWith("HTTP/1.1 400");
+        assertThat(mapper.readTree(rawBody(raw))).isEqualTo(mapper.readTree("""
+                {"code":"BAD_REQUEST","message":"Bad Request","details":[]}
+                """));
+        assertThat(raw.toLowerCase()).contains("content-type: application/json");
+        assertThat(raw)
+                .doesNotContain("RAW_NAME_MARKER", "raw@example.test", "RAW_TOKEN_MARKER", "<html");
+
+        var claims = TOKENS.claims();
+        claims.put("sub", admin.getUserId().toString());
+        claims.put("name", "MEDIA_TOKEN_NAME_MARKER");
+        String token = TOKENS.token(claims);
+        var request = HttpRequest.newBuilder(URI.create("http://127.0.0.1:" + port + route + "/" + target.getUserId()))
+                .timeout(Duration.ofSeconds(15)).header("Authorization", "Bearer " + token)
+                .header("Content-Type", "text/plain;note=\"MEDIA_NAME_MARKER media@example.test\"")
+                .method("PATCH", HttpRequest.BodyPublishers.ofString("{}"))
+                .build();
+        var response = CLIENT.send(request, HttpResponse.BodyHandlers.ofString());
+        error(response, 415, "UNSUPPORTED_MEDIA_TYPE");
+        assertThat(mapper.readTree(response.body())).isEqualTo(mapper.readTree("""
+                {"code":"UNSUPPORTED_MEDIA_TYPE","message":"Unsupported Media Type","details":[]}
+                """));
+        assertUnchanged();
+        json(send("GET", route, null, "application/json", admin.getUserId()), 200);
+        assertNoLogPii(output, "RAW_NAME_MARKER", "raw@example.test", "RAW_TOKEN_MARKER",
+                "MEDIA_NAME_MARKER", "media@example.test", "MEDIA_TOKEN_NAME_MARKER", token);
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {USERS, "/api/admin/users"})
+    void databaseFailureDoesNotLogIdentityProjection(String route, CapturedOutput output) throws Exception {
+        jdbc.update("UPDATE admin_user_http_test.lms_user_access SET full_name = ?, email = ? WHERE user_id = ?",
+                "DATABASE_NAME_MARKER", "database-pii@example.test", target.getUserId());
+        target = users.findById(target.getUserId()).orElseThrow();
+        jdbc.execute("ALTER TABLE admin_user_http_test.lms_user_access ADD CONSTRAINT reject_test_role CHECK (lms_role <> 'TUTOR')");
+        try {
+            var response = send("PATCH", route + "/" + target.getUserId(), "{\"lms_role\":\"TUTOR\"}",
+                    "application/json", admin.getUserId());
+            error(response, 500, "INTERNAL_SERVER_ERROR");
+            assertThat(mapper.readTree(response.body())).isEqualTo(mapper.readTree("""
+                    {"code":"INTERNAL_SERVER_ERROR","message":"An unexpected server error occurred.","details":[]}
+                    """));
+            assertUnchanged();
+        } finally {
+            jdbc.execute("ALTER TABLE admin_user_http_test.lms_user_access DROP CONSTRAINT reject_test_role");
+        }
+        assertNoLogPii(output, "DATABASE_NAME_MARKER", "database-pii@example.test", "Failing row contains", "Detail: Key");
+        assertThat(output.getAll()).contains("23514");
+        json(send("PATCH", route + "/" + target.getUserId(), "{\"lms_role\":\"TUTOR\"}",
+                "application/json", admin.getUserId()), 200);
+        assertThat(auditLogs.count()).isEqualTo(1);
+    }
+
+    private void assertNoLogPii(CapturedOutput output, String... markers) throws Exception {
+        assertThat(output.getAll()).doesNotContain(markers);
+        assertThat(Files.readString(Path.of("target/pii-http-regression.log"))).doesNotContain(markers);
+    }
+
+    private String rawBody(String response) {
+        int split = response.indexOf("\r\n\r\n");
+        String body = response.substring(split + 4);
+        if (!response.substring(0, split).toLowerCase().contains("transfer-encoding: chunked")) {
+            return body;
+        }
+        var decoded = new StringBuilder();
+        int cursor = 0;
+        while (true) {
+            int end = body.indexOf("\r\n", cursor);
+            int size = Integer.parseInt(body.substring(cursor, end).split(";", 2)[0], 16);
+            if (size == 0) {
+                return decoded.toString();
+            }
+            cursor = end + 2;
+            decoded.append(body, cursor, cursor + size);
+            cursor += size + 2;
         }
     }
 

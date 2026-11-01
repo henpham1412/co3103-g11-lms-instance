@@ -141,6 +141,7 @@ writers must honor the same locking order. See [administrator-bootstrap.md](admi
 | 401 | `UNAUTHORIZED` | Missing or invalid JWT; includes `WWW-Authenticate: Bearer` |
 | 403 | `FORBIDDEN` | Caller lacks active local administrator access |
 | 404 | `LOCAL_USER_NOT_FOUND` | Target has no local record |
+| 405 | `METHOD_NOT_ALLOWED` | Unsupported resource method, including TRACE |
 | 406 | `NOT_ACCEPTABLE` | No acceptable UTF-8 JSON response representation |
 | 409 | `INVALID_ROLE_OR_STATUS_TRANSITION` | Transition would remove the last active administrator |
 | 415 | `UNSUPPORTED_MEDIA_TYPE` | Unsupported request content type |
@@ -148,6 +149,22 @@ writers must honor the same locking order. See [administrator-bootstrap.md](admi
 
 All error responses contain `code`, `message`, and `details` as required by
 DOC-05 §1.8. Unrelated application validation retains its existing error mapping.
+
+Rejected methods advertise `Allow: GET, HEAD, OPTIONS` for the collection and
+`Allow: GET, HEAD, PATCH, OPTIONS` for a detail resource, on both prefixes. The
+container discovers these methods from MVC mappings before rendering a TRACE
+error. TRACE stays disabled and never reflects request headers or bodies. CORS
+method policy remains separate from resource method discovery.
+
+Console output and the optional `logging.file.name`/`logging.file.path` rolling
+file use the sanitizers in `logback-spring.xml`. Parser and JDBC diagnostics omit
+request/vendor text; throwable output retains types and code locations but drops
+messages from the complete cause/suppressed-exception graph. Logs retain time,
+level, logger, thread, and available SQLSTATE. Unsupported media types are handled
+with a fixed response before Spring's default resolver can log their parameters.
+Custom appenders must use `%safeMessage` and `%safeThrowable`; raw `%msg`, `%ex`,
+MDC, structured arguments, or replacement logging configurations bypass this
+boundary. Application logs must not deliberately include profiles or credentials.
 
 ## Verification
 
@@ -157,13 +174,18 @@ Flyway migrations and use isolated schemas, including concurrency and failure
 injection. Signed JWT/JWKS fixtures run locally; Central Identity is not required.
 
 ```powershell
-./mvnw.cmd test
+.\mvnw.cmd clean verify
 ```
 
 `AdminUserHttpRegressionTest` uses a real servlet server and request-owned
 transactions. It verifies DOC-05 round trips, charset/media rejection before
 commit, read-only projections, item authorization, exact domain codes,
 pagination boundaries, audit content and database-induced audit rollback.
+It also verifies exact 405 method advertisements, TRACE non-reflection, and the
+absence of synthetic identity/token markers in rendered console and file output
+after malformed targets, media-type errors, and row-constraint failures. Failed
+updates preserve the complete user record and create no success audit; recovery
+is verified after removing the test constraint.
 Deterministic PostgreSQL lock barriers verify queued requests cannot undo a
 committed suspension/demotion or change another user, and only the revocation
 is audited. Controller tests also prove invalid semantic queries and negotiation
