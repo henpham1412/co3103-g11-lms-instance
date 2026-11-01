@@ -53,10 +53,13 @@ account. Reconciliation and migration select an existing administrator by ascend
 `created_at`, then `user_id`; this is a stable representative, not proof of the
 historically first administrator. `completed_at` records when setup was closed.
 
-The GLOBAL lock serializes participating initialization transactions only. Any
-future provisioning path must lock GLOBAL before affected user rows and respect
-completed setup. It does not serialize arbitrary manual user-table writes. Keep
-external administrator writers quiescent during migration and initial setup.
+The GLOBAL lock serializes bootstrap and access updates through `AdminUserService`.
+Access updates acquire it before reading the target or counting active administrators
+so concurrent demotions or suspensions cannot remove the last active administrator.
+They preserve the setup completion marker. Any future provisioning path must lock
+GLOBAL before affected user rows and respect completed setup. This lock does not
+serialize arbitrary manual user-table writes. Keep external administrator writers
+quiescent during migration and initial setup.
 
 The completion marker survives application restarts, suspension, demotion, and
 deletion of administrators. Deleting the recorded administrator clears only the
