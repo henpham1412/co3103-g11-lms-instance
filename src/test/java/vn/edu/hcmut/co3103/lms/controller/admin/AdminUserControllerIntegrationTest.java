@@ -126,11 +126,11 @@ class AdminUserControllerIntegrationTest {
 
     @ParameterizedTest
     @ValueSource(strings = {"noSuchProperty", "role", "id", "userId.noSuchProperty"})
-    void rejectsUnknownSortWithBadRequest(String property) throws Exception {
+    void rejectsUnknownSortWithValidationError(String property) throws Exception {
         mockMvc.perform(get(USERS).header(HttpHeaders.AUTHORIZATION, bearer(admin.getUserId()))
                         .param("sort", "createdAt,desc", property + ",asc"))
                 .andExpect(status().isBadRequest())
-                .andExpect(errorEnvelope("BAD_REQUEST", "Bad Request"));
+                .andExpect(errorEnvelope("VALIDATION_ERROR", "Validation failed"));
     }
 
     @ParameterizedTest
@@ -145,11 +145,11 @@ class AdminUserControllerIntegrationTest {
 
     @ParameterizedTest
     @CsvSource({"2147483647, 20", "1073741825, 2"})
-    void rejectsPageOffsetOverflowWithBadRequest(String page, String size) throws Exception {
+    void rejectsPageOffsetOverflowWithValidationError(String page, String size) throws Exception {
         mockMvc.perform(get(USERS).header(HttpHeaders.AUTHORIZATION, bearer(admin.getUserId()))
                         .param("page", page).param("size", size))
                 .andExpect(status().isBadRequest())
-                .andExpect(errorEnvelope("BAD_REQUEST", "Bad Request"));
+                .andExpect(errorEnvelope("VALIDATION_ERROR", "Validation failed"));
     }
 
     @ParameterizedTest

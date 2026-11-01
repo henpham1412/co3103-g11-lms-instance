@@ -24,6 +24,7 @@ import vn.edu.hcmut.co3103.lms.domain.LmsRole;
 import vn.edu.hcmut.co3103.lms.dto.admin.AdminUserPageResponse;
 import vn.edu.hcmut.co3103.lms.dto.admin.AdminUserResponse;
 import vn.edu.hcmut.co3103.lms.dto.admin.UpdateUserAccessRequest;
+import vn.edu.hcmut.co3103.lms.exception.AdminAccessValidationException;
 import vn.edu.hcmut.co3103.lms.service.admin.AdminUserService;
 
 import java.nio.charset.StandardCharsets;
@@ -83,21 +84,25 @@ public class AdminUserController {
 
     private static Pageable pageable(MultiValueMap<String, String> parameters) {
         int page = positiveInteger(singleParameter(parameters, "page"), 1);
-        int size = Math.min(positiveInteger(singleParameter(parameters, "size"), 20), 2000);
-        if ((long) (page - 1) * size > Integer.MAX_VALUE) {
-            throw new IllegalArgumentException("Page offset exceeds the supported maximum");
+        int size = positiveInteger(singleParameter(parameters, "size"), 20);
+        if (size > 2000 || (long) (page - 1) * size > Integer.MAX_VALUE) {
+            throw new AdminAccessValidationException();
         }
         List<String> sorts = parameters.getOrDefault("sort", List.of("created_at,desc"));
         List<Sort.Order> orders = sorts.stream().map(value -> {
             String[] parts = value.split(",", -1);
             if (parts.length > 2 || parts[0].isBlank()) {
-                throw new IllegalArgumentException("Invalid sort");
+                throw new AdminAccessValidationException();
             }
             String property = SORT_PROPERTIES.getOrDefault(parts[0], parts[0]);
             if (!SORT_PROPERTIES.containsValue(property)) {
-                throw new IllegalArgumentException("Unsupported sort property");
+                throw new AdminAccessValidationException();
             }
-            return new Sort.Order(parts.length == 1 ? Sort.Direction.ASC : Sort.Direction.fromString(parts[1]), property);
+            try {
+                return new Sort.Order(parts.length == 1 ? Sort.Direction.ASC : Sort.Direction.fromString(parts[1]), property);
+            } catch (IllegalArgumentException invalidDirection) {
+                throw new AdminAccessValidationException();
+            }
         }).toList();
         return PageRequest.of(page - 1, size, Sort.by(orders));
     }
@@ -107,11 +112,16 @@ public class AdminUserController {
             return fallback;
         }
         if (!value.matches("[0-9]+")) {
-            throw new IllegalArgumentException("Expected a positive integer");
+            throw new AdminAccessValidationException();
         }
-        int parsed = Integer.parseInt(value);
+        int parsed;
+        try {
+            parsed = Integer.parseInt(value);
+        } catch (NumberFormatException overflow) {
+            throw new AdminAccessValidationException();
+        }
         if (parsed < 1) {
-            throw new IllegalArgumentException("Expected a positive integer");
+            throw new AdminAccessValidationException();
         }
         return parsed;
     }
@@ -119,14 +129,14 @@ public class AdminUserController {
     private static String singleParameter(MultiValueMap<String, String> parameters, String name) {
         List<String> values = parameters.get(name);
         if (values != null && values.size() != 1) {
-            throw new IllegalArgumentException("Repeated parameter");
+            throw new AdminAccessValidationException();
         }
         return values == null ? null : values.getFirst();
     }
 
     private static String aliasedParameter(MultiValueMap<String, String> parameters, String name, String alias) {
         if (parameters.containsKey(name) && parameters.containsKey(alias)) {
-            throw new IllegalArgumentException("Ambiguous filter");
+            throw new AdminAccessValidationException();
         }
         return singleParameter(parameters, parameters.containsKey(name) ? name : alias);
     }

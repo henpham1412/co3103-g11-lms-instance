@@ -141,10 +141,11 @@ class AdminUserServiceIntegrationTest {
     @Test
     void rollsBackFlushedChangesWhenTheTransactionFails() {
         var target = saveUser("Student", LmsRole.STUDENT, AccessStatus.ACTIVE);
+        var admin = saveUser("Admin", LmsRole.ADMINISTRATOR, AccessStatus.ACTIVE);
 
         assertThatThrownBy(() -> new TransactionTemplate(transactions).executeWithoutResult(transaction -> {
             service.updateUserAccess(target.getUserId(),
-                    new UpdateUserAccessRequest(LmsRole.TUTOR, AccessStatus.SUSPENDED), target.getUserId());
+                    new UpdateUserAccessRequest(LmsRole.TUTOR, AccessStatus.SUSPENDED), admin.getUserId());
             throw new IllegalStateException("failure after flush");
         })).isInstanceOf(IllegalStateException.class).hasMessage("failure after flush");
 

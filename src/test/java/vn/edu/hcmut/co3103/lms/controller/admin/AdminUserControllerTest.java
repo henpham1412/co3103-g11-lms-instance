@@ -250,11 +250,11 @@ class AdminUserControllerTest {
 
     @ParameterizedTest
     @CsvSource({"page,-1", "page,0", "page,abc", "page,2147483648", "page,1.5", "page,''",
-            "size,-1", "size,0", "size,abc", "size,2147483648", "size,1.5", "size,''"})
+            "size,-1", "size,0", "size,abc", "size,2147483648", "size,1.5", "size,''", "size,2001"})
     void invalidPaginationIsRejectedBeforeQuery(String parameter, String value) throws Exception {
         mockMvc.perform(get("/api/v1/admin/users").param(parameter, value))
                 .andExpect(status().isBadRequest())
-                .andExpect(errorEnvelope("BAD_REQUEST", "Bad Request"));
+                .andExpect(errorEnvelope("VALIDATION_ERROR", "Validation failed"));
         verifyNoInteractions(service);
     }
 
@@ -262,7 +262,24 @@ class AdminUserControllerTest {
     void overflowingOffsetIsRejectedBeforeQuery() throws Exception {
         mockMvc.perform(get("/api/v1/admin/users").param("page", "2147483647").param("size", "2"))
                 .andExpect(status().isBadRequest())
-                .andExpect(errorEnvelope("BAD_REQUEST", "Bad Request"));
+                .andExpect(errorEnvelope("VALIDATION_ERROR", "Validation failed"));
+        verifyNoInteractions(service);
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {"sort=unknown,asc", "sort=created_at,banana", "sort=", "sort=,asc",
+            "sort=created_at,", "sort=created_at,asc,desc", "sort=full_name,asc&sort=unknown,asc",
+            "page=1&page=1", "size=1&size=2", "q=one&q=two",
+            "lms_role=TUTOR&role=TUTOR", "lms_role=TUTOR&role=STUDENT",
+            "lms_role=TUTOR&lms_role=STUDENT", "role=TUTOR&role=TUTOR",
+            "access_status=ACTIVE&status=ACTIVE", "access_status=ACTIVE&status=SUSPENDED",
+            "access_status=ACTIVE&access_status=SUSPENDED", "status=ACTIVE&status=ACTIVE"})
+    void adminQueryValidationUsesDoc05CodeBeforeQuery(String query) throws Exception {
+        for (String route : List.of("/api/v1/admin/users", USERS)) {
+            mockMvc.perform(get(route + "?" + query))
+                    .andExpect(status().isBadRequest())
+                    .andExpect(errorEnvelope("VALIDATION_ERROR", "Validation failed"));
+        }
         verifyNoInteractions(service);
     }
 

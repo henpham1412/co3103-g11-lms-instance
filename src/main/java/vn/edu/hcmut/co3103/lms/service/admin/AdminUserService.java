@@ -1,6 +1,7 @@
 package vn.edu.hcmut.co3103.lms.service.admin;
 
 import org.springframework.data.domain.Pageable;
+import org.springframework.security.access.AccessDeniedException;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import vn.edu.hcmut.co3103.lms.domain.AccessStatus;
@@ -10,6 +11,7 @@ import vn.edu.hcmut.co3103.lms.domain.LmsUserAccess;
 import vn.edu.hcmut.co3103.lms.dto.admin.AdminUserPageResponse;
 import vn.edu.hcmut.co3103.lms.dto.admin.AdminUserResponse;
 import vn.edu.hcmut.co3103.lms.dto.admin.UpdateUserAccessRequest;
+import vn.edu.hcmut.co3103.lms.exception.AdminAccessValidationException;
 import vn.edu.hcmut.co3103.lms.exception.LastAdminProtectionException;
 import vn.edu.hcmut.co3103.lms.exception.UserNotFoundException;
 import vn.edu.hcmut.co3103.lms.repository.LmsSetupStateRepository;
@@ -40,11 +42,11 @@ public class AdminUserService {
     @Transactional(readOnly = true)
     public AdminUserPageResponse getUsers(String query, LmsRole role, AccessStatus status, Pageable pageable) {
         if (pageable.isPaged() && pageable.getOffset() > Integer.MAX_VALUE) {
-            throw new IllegalArgumentException("Page offset exceeds the supported maximum");
+            throw new AdminAccessValidationException();
         }
         for (var order : pageable.getSort()) {
             if (!SORTABLE_PROPERTIES.contains(order.getProperty())) {
-                throw new IllegalArgumentException("Unsupported sort property");
+                throw new AdminAccessValidationException();
             }
         }
         var page = users.findAll(LmsUserAccessSpecification.filter(query, role, status), pageable)
@@ -63,9 +65,14 @@ public class AdminUserService {
     @Transactional
     public AdminUserResponse updateUserAccess(UUID userId, UpdateUserAccessRequest request, UUID currentAdminUserId) {
         // Share bootstrap's database lock so concurrent updates cannot remove the final active admins.
-        // Acquire it before loading the target to observe changes committed by a preceding updater.
+        // Load the actor and target only after locking to observe a preceding updater's committed changes.
         states.lockGlobalState()
                 .orElseThrow(() -> new IllegalStateException("Administrator setup state is missing."));
+        users.findById(currentAdminUserId)
+                .filter(actor -> actor.getLmsRole() == LmsRole.ADMINISTRATOR
+                        && actor.getAccessStatus() == AccessStatus.ACTIVE)
+                .orElseThrow(() -> new AccessDeniedException(
+                        "Access denied: acting administrator is no longer active with administrator role"));
         LmsUserAccess target = users.findById(userId)
                 .orElseThrow(() -> new UserNotFoundException("User not found"));
 

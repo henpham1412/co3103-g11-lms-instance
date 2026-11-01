@@ -38,7 +38,11 @@ import java.time.Instant;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
+import java.util.concurrent.TimeUnit;
 import java.util.stream.Stream;
+import javax.sql.DataSource;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -60,6 +64,7 @@ class AdminUserHttpRegressionTest {
     @Autowired private AuditLogRepository auditLogs;
     @Autowired private ObjectMapper mapper;
     @Autowired private JdbcTemplate jdbc;
+    @Autowired private DataSource dataSource;
     private LmsUserAccess admin;
     private LmsUserAccess target;
 
@@ -164,11 +169,22 @@ class AdminUserHttpRegressionTest {
     }
 
     @ParameterizedTest
-    @CsvSource({"page=-1", "page=0", "page=abc", "page=2147483648", "page=1.5", "page=",
+    @ValueSource(strings = {"page=-1", "page=0", "page=abc", "page=2147483648", "page=1.5", "page=",
             "size=-1", "size=0", "size=abc", "size=2147483648", "size=1.5", "size=",
-            "page=2147483647&size=20", "page=1073741825&size=2", "page=1&page=2", "size=1&size=2"})
-    void invalidPaginationIsRejected(String query) throws Exception {
-        error(send("GET", USERS + "?" + query, null, "application/json", admin.getUserId()), 400, "BAD_REQUEST");
+            "size=2001", "size=99999", "page=2147483647&size=20", "page=1073741825&size=2",
+            "page=1&page=2", "size=1&size=2", "q=one&q=two",
+            "sort=unknown,asc", "sort=created_at,banana", "sort=", "sort=,asc",
+            "sort=created_at,", "sort=created_at,asc,desc", "sort=full_name,asc&sort=unknown,asc",
+            "lms_role=TUTOR&role=TUTOR", "lms_role=TUTOR&role=STUDENT",
+            "lms_role=TUTOR&lms_role=STUDENT", "role=TUTOR&role=TUTOR",
+            "access_status=ACTIVE&status=ACTIVE", "access_status=ACTIVE&status=SUSPENDED",
+            "access_status=ACTIVE&access_status=SUSPENDED", "status=ACTIVE&status=ACTIVE"})
+    void adminQueryValidationUsesDoc05Code(String query) throws Exception {
+        for (String route : List.of(USERS, "/api/admin/users")) {
+            error(send("GET", route + "?" + query, null, "application/json", admin.getUserId()),
+                    400, "VALIDATION_ERROR");
+        }
+        assertUnchanged();
     }
 
     @Test
@@ -176,8 +192,8 @@ class AdminUserHttpRegressionTest {
         var defaults = json(send("GET", USERS, null, "application/json", admin.getUserId()), 200);
         assertThat(defaults.path("page").asInt()).isEqualTo(1);
         assertThat(defaults.path("size").asInt()).isEqualTo(20);
-        var capped = json(send("GET", USERS + "?size=99999", null, "application/json", admin.getUserId()), 200);
-        assertThat(capped.path("size").asInt()).isEqualTo(2000);
+        var maximum = json(send("GET", USERS + "?size=2000", null, "application/json", admin.getUserId()), 200);
+        assertThat(maximum.path("size").asInt()).isEqualTo(2000);
         var last = json(send("GET", USERS + "?page=2147483647&size=1", null,
                 "application/json", admin.getUserId()), 200);
         assertThat(last.path("page").asLong()).isEqualTo(Integer.MAX_VALUE);
@@ -246,6 +262,71 @@ class AdminUserHttpRegressionTest {
                 409, "INVALID_ROLE_OR_STATUS_TRANSITION");
         assertThat(users.findById(admin.getUserId()).orElseThrow()).usingRecursiveComparison().isEqualTo(admin);
         assertUnchanged();
+    }
+
+    @ParameterizedTest
+    @CsvSource({"STUDENT,ACTIVE,true", "ADMINISTRATOR,SUSPENDED,true",
+            "STUDENT,ACTIVE,false", "ADMINISTRATOR,SUSPENDED,false"})
+    void queuedRevokedAdministratorCannotRestoreOwnAccessOrMutateAnotherUser(
+            LmsRole revokedRole, AccessStatus revokedStatus, boolean self) throws Exception {
+        var revoked = saveUser("Queued administrator", LmsRole.ADMINISTRATOR, AccessStatus.ACTIVE);
+        String revocation = mapper.writeValueAsString(Map.of(
+                "lms_role", revokedRole.name(), "access_status", revokedStatus.name()));
+        UUID targetId = self ? revoked.getUserId() : target.getUserId();
+
+        try (var executor = Executors.newFixedThreadPool(2)) {
+            Future<HttpResponse<String>> first;
+            Future<HttpResponse<String>> queued;
+            // Closing the connection releases the barrier even if scheduling assertions fail.
+            try (var barrier = dataSource.getConnection()) {
+                barrier.setAutoCommit(false);
+                try (var statement = barrier.createStatement()) {
+                    statement.execute("SELECT id FROM admin_user_http_test.lms_setup_state WHERE id = 'GLOBAL' FOR UPDATE");
+                }
+                first = executor.submit(() -> send("PATCH", USERS + "/" + revoked.getUserId(),
+                        revocation, "application/json", admin.getUserId()));
+                awaitBlockedUpdates(1);
+                queued = executor.submit(() -> send("PATCH", USERS + "/" + targetId,
+                        "{\"lms_role\":\"ADMINISTRATOR\",\"access_status\":\"ACTIVE\"}",
+                        "application/json", revoked.getUserId()));
+                // Both HTTP requests have authenticated against the still-active committed actor.
+                awaitBlockedUpdates(2);
+                assertThat(first.isDone()).isFalse();
+                assertThat(queued.isDone()).isFalse();
+                barrier.commit();
+            }
+            json(first.get(15, TimeUnit.SECONDS), 200);
+            error(queued.get(15, TimeUnit.SECONDS), 403, "FORBIDDEN");
+        }
+
+        var stored = users.findById(revoked.getUserId()).orElseThrow();
+        assertThat(stored.getLmsRole()).isEqualTo(revokedRole);
+        assertThat(stored.getAccessStatus()).isEqualTo(revokedStatus);
+        assertThat(users.findById(target.getUserId()).orElseThrow()).usingRecursiveComparison().isEqualTo(target);
+        error(send("GET", USERS, null, "application/json", revoked.getUserId()), 403, "FORBIDDEN");
+        assertThat(auditLogs.findAll()).singleElement().satisfies(event -> {
+            assertThat(event.getActorId()).isEqualTo(admin.getUserId());
+            assertThat(event.getEntityId()).isEqualTo(revoked.getUserId());
+            assertThat(mapper.readTree(event.getDetails()).path("after"))
+                    .isEqualTo(mapper.readTree(revocation));
+        });
+    }
+
+    private void awaitBlockedUpdates(int expected) throws InterruptedException {
+        long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(10);
+        do {
+            int blocked = jdbc.queryForObject("""
+                    SELECT count(*) FROM pg_stat_activity
+                    WHERE datname = current_database() AND pid <> pg_backend_pid()
+                      AND wait_event_type = 'Lock'
+                      AND query LIKE '%admin_user_http_test.lms_setup_state%'
+                    """, Integer.class);
+            if (blocked == expected) {
+                return;
+            }
+            Thread.sleep(20);
+        } while (System.nanoTime() < deadline);
+        throw new AssertionError("Expected " + expected + " HTTP updates waiting on the GLOBAL lock");
     }
 
     @Test

@@ -34,19 +34,20 @@ responses always use the standard JSON envelope, including negotiation failures.
 | `lms_role` | `STUDENT`, `TUTOR`, `ADMINISTRATOR`; legacy alias `role` |
 | `access_status` | `ACTIVE`, `SUSPENDED`; legacy alias `status` |
 | `page` | Positive integer, default `1` |
-| `size` | Positive integer, default `20`, capped at `2000` |
+| `size` | Integer in `1..2000`, default `20`; larger values are rejected |
 | `sort` | Allowed property plus optional `asc`/`desc`; repeat for multiple orders; default `created_at,desc` |
 
 Allowed sorts: `user_id`, `full_name`, `email`, `lms_role`, `access_status`,
 `last_login_at`, `created_at`, `updated_at`. Their existing Java-style aliases
 (`userId`, `fullName`, `lmsRole`, etc.) also work. Unknown/nested properties and
 invalid directions are rejected. Supplying a filter and its alias together is
-ambiguous and returns `400 BAD_REQUEST`.
+ambiguous and returns `400 VALIDATION_ERROR`, even when both values are identical.
 
-Supplied page/size values must be decimal integers in `1..2147483647`; omitted
-values alone use defaults. Empty, repeated, negative, zero, nonnumeric, or
-overflowing values return `400 BAD_REQUEST`. The effective offset
-`(page - 1) * min(size, 2000)` cannot exceed `2147483647`.
+Supplied page values must be decimal integers in `1..2147483647` and size values
+in `1..2000`; omitted values alone use defaults. Empty, repeated, negative, zero,
+nonnumeric, or out-of-range values return `400 VALIDATION_ERROR`. The effective
+offset `(page - 1) * size` cannot exceed `2147483647`. Invalid sorts and repeated
+scalar query parameters also return `400 VALIDATION_ERROR`.
 
 Example: `GET /api/v1/admin/users?page=1&size=12&sort=created_at,desc`:
 
@@ -100,9 +101,12 @@ when another active administrator remains.
 
 The service transaction:
 
-1. Takes bootstrap's singleton `GLOBAL` pessimistic database lock before reading
-   the target or counting active administrators.
-2. Validates the target and transition, then flushes the access change so the
+1. Takes bootstrap's singleton `GLOBAL` pessimistic database lock, then reloads
+   the acting administrator and requires an existing ACTIVE ADMINISTRATOR.
+   A missing, demoted, or suspended actor receives `403 FORBIDDEN` before any
+   target access or audit write, including requests authenticated before waiting
+   on the lock.
+2. Loads and validates the target and transition, then flushes the access change so the
    response includes its updated timestamp.
 3. Writes one `LMS_USER_ACCESS_UPDATED` event for an actual change, in the same
    transaction, and commits both records together.
@@ -127,8 +131,8 @@ writers must honor the same locking order. See [administrator-bootstrap.md](admi
 
 | HTTP | Code | Trigger |
 | --- | --- | --- |
-| 400 | `BAD_REQUEST` | Invalid pagination, sort, UUID, ambiguous/repeated query, or malformed JSON |
-| 400 | `VALIDATION_ERROR` | Invalid access enum or unsupported/ambiguous PATCH field |
+| 400 | `BAD_REQUEST` | Invalid UUID, missing body, whole-body null, or malformed JSON |
+| 400 | `VALIDATION_ERROR` | Invalid pagination, sort, ambiguous/repeated query, access enum, or unsupported/ambiguous PATCH field |
 | 401 | `UNAUTHORIZED` | Missing or invalid JWT; includes `WWW-Authenticate: Bearer` |
 | 403 | `FORBIDDEN` | Caller lacks active local administrator access |
 | 404 | `LOCAL_USER_NOT_FOUND` | Target has no local record |
@@ -155,8 +159,10 @@ injection. Signed JWT/JWKS fixtures run locally; Central Identity is not require
 transactions. It verifies DOC-05 round trips, charset/media rejection before
 commit, read-only projections, item authorization, exact domain codes,
 pagination boundaries, audit content and database-induced audit rollback.
-Controller tests also prove invalid pagination/negotiation never calls the
-service. Service integration tests verify locking, concurrency, audit counts
+Deterministic PostgreSQL lock barriers verify queued requests cannot undo a
+committed suspension/demotion or change another user, and only the revocation
+is audited. Controller tests also prove invalid semantic queries and negotiation
+never call the service. Service integration tests verify locking, concurrency, audit counts
 and rollback after flush. The full suite must report zero failures/errors/skips.
 
 The updated [Postman collection](postman/LMS-13_AdminUserManagement.postman_collection.json)

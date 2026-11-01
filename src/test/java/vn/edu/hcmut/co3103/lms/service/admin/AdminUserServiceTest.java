@@ -12,12 +12,14 @@ import org.springframework.data.domain.PageImpl;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.data.domain.Sort;
 import org.springframework.data.jpa.domain.Specification;
+import org.springframework.security.access.AccessDeniedException;
 import vn.edu.hcmut.co3103.lms.domain.AccessStatus;
 import vn.edu.hcmut.co3103.lms.domain.LmsRole;
 import vn.edu.hcmut.co3103.lms.domain.LmsSetupState;
 import vn.edu.hcmut.co3103.lms.domain.LmsUserAccess;
 import vn.edu.hcmut.co3103.lms.dto.admin.AdminUserResponse;
 import vn.edu.hcmut.co3103.lms.dto.admin.UpdateUserAccessRequest;
+import vn.edu.hcmut.co3103.lms.exception.AdminAccessValidationException;
 import vn.edu.hcmut.co3103.lms.exception.LastAdminProtectionException;
 import vn.edu.hcmut.co3103.lms.exception.UserNotFoundException;
 import vn.edu.hcmut.co3103.lms.repository.LmsSetupStateRepository;
@@ -107,7 +109,7 @@ class AdminUserServiceTest {
         var pageable = PageRequest.of(0, 20, Sort.by("createdAt", property));
 
         assertThatThrownBy(() -> service().getUsers(null, null, null, pageable))
-                .isInstanceOf(IllegalArgumentException.class);
+                .isInstanceOf(AdminAccessValidationException.class);
 
         verifyNoInteractions(users, states);
     }
@@ -117,7 +119,7 @@ class AdminUserServiceTest {
         var pageable = PageRequest.of(Integer.MAX_VALUE, 20);
 
         assertThatThrownBy(() -> service().getUsers(null, null, null, pageable))
-                .isInstanceOf(IllegalArgumentException.class);
+                .isInstanceOf(AdminAccessValidationException.class);
 
         verifyNoInteractions(users, states);
     }
@@ -148,13 +150,14 @@ class AdminUserServiceTest {
                                                        LmsRole role, AccessStatus status,
                                                        LmsRole expectedRole, AccessStatus expectedStatus) {
         var target = stubTarget(initialRole, initialStatus);
+        UUID actor = stubActor();
         when(users.saveAndFlush(target)).thenAnswer(invocation -> {
             target.setUpdatedAt(UPDATED_AT.plusSeconds(1));
             return target;
         });
 
         var result = service().updateUserAccess(target.getUserId(), new UpdateUserAccessRequest(role, status),
-                UUID.randomUUID());
+                actor);
 
         assertThat(result).isEqualTo(new AdminUserResponse(target.getUserId(), expectedRole, expectedStatus,
                 CREATED_AT, UPDATED_AT.plusSeconds(1), "Existing User", "existing@example.com", CREATED_AT));
@@ -163,6 +166,7 @@ class AdminUserServiceTest {
         assertThat(target.getLastLoginAt()).isEqualTo(CREATED_AT);
         var order = inOrder(states, users);
         order.verify(states).lockGlobalState();
+        order.verify(users).findById(actor);
         order.verify(users).findById(target.getUserId());
         order.verify(users).saveAndFlush(target);
         verify(users, never()).countByLmsRoleAndAccessStatus(any(), any());
@@ -171,13 +175,15 @@ class AdminUserServiceTest {
     @Test
     void rejectsAnUnknownUserWithoutSavingOrCountingAdministrators() {
         stubLock();
+        UUID actor = stubActor();
         UUID missingId = UUID.randomUUID();
         when(users.findById(missingId)).thenReturn(Optional.empty());
 
         assertThatThrownBy(() -> service().updateUserAccess(missingId,
-                new UpdateUserAccessRequest(LmsRole.TUTOR, null), UUID.randomUUID()))
+                new UpdateUserAccessRequest(LmsRole.TUTOR, null), actor))
                 .isInstanceOf(UserNotFoundException.class);
 
+        verify(users).findById(actor);
         verify(users).findById(missingId);
         verifyNoMoreInteractions(users);
     }
@@ -197,7 +203,7 @@ class AdminUserServiceTest {
         var target = stubTarget(LmsRole.ADMINISTRATOR, AccessStatus.ACTIVE);
         when(users.countByLmsRoleAndAccessStatus(LmsRole.ADMINISTRATOR, AccessStatus.ACTIVE))
                 .thenReturn(activeAdmins);
-        UUID actor = self ? target.getUserId() : UUID.randomUUID();
+        UUID actor = self ? target.getUserId() : stubActor();
 
         assertThatThrownBy(() -> service().updateUserAccess(target.getUserId(),
                 new UpdateUserAccessRequest(role, status), actor))
@@ -225,7 +231,7 @@ class AdminUserServiceTest {
         var target = stubTarget(LmsRole.ADMINISTRATOR, AccessStatus.ACTIVE);
         when(users.countByLmsRoleAndAccessStatus(LmsRole.ADMINISTRATOR, AccessStatus.ACTIVE)).thenReturn(2L);
         when(users.saveAndFlush(target)).thenReturn(target);
-        UUID actor = self ? target.getUserId() : UUID.randomUUID();
+        UUID actor = self ? target.getUserId() : stubActor();
 
         var result = service().updateUserAccess(target.getUserId(), new UpdateUserAccessRequest(role, status), actor);
 
@@ -261,11 +267,38 @@ class AdminUserServiceTest {
     @Test
     void propagatesSaveFailure() {
         var target = stubTarget(LmsRole.STUDENT, AccessStatus.ACTIVE);
+        UUID actor = stubActor();
         var failure = new IllegalStateException("storage failure");
         when(users.saveAndFlush(target)).thenThrow(failure);
 
         assertThatThrownBy(() -> service().updateUserAccess(target.getUserId(),
-                new UpdateUserAccessRequest(LmsRole.TUTOR, null), UUID.randomUUID())).isSameAs(failure);
+                new UpdateUserAccessRequest(LmsRole.TUTOR, null), actor)).isSameAs(failure);
+    }
+
+    @ParameterizedTest
+    @CsvSource({",", "STUDENT,ACTIVE", "TUTOR,ACTIVE", "ADMINISTRATOR,SUSPENDED",
+            "STUDENT,SUSPENDED", "TUTOR,SUSPENDED"})
+    void rejectsMissingOrRevokedActorUnderLockBeforeReadingTarget(LmsRole role, AccessStatus status) {
+        stubLock();
+        UUID actorId = UUID.randomUUID();
+        when(users.findById(actorId)).thenReturn(role == null ? Optional.empty() : Optional.of(user(role, status)));
+
+        assertThatThrownBy(() -> service().updateUserAccess(UUID.randomUUID(),
+                new UpdateUserAccessRequest(LmsRole.ADMINISTRATOR, AccessStatus.ACTIVE), actorId))
+                .isInstanceOf(AccessDeniedException.class)
+                .hasMessage("Access denied: acting administrator is no longer active with administrator role");
+
+        var order = inOrder(states, users);
+        order.verify(states).lockGlobalState();
+        order.verify(users).findById(actorId);
+        verifyNoMoreInteractions(states, users);
+        verifyNoInteractions(auditLogs);
+    }
+
+    private UUID stubActor() {
+        var actor = user(LmsRole.ADMINISTRATOR, AccessStatus.ACTIVE);
+        when(users.findById(actor.getUserId())).thenReturn(Optional.of(actor));
+        return actor.getUserId();
     }
 
     private void stubLock() {
