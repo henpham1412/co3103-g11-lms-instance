@@ -49,9 +49,14 @@ public final class LocalAccessJwtAuthenticationConverter implements Converter<Jw
             LmsUserAccess user = localUser.get();
             Instant issuedAt = jwt.getIssuedAt();
             boolean newLogin = user.getAccessStatus() == AccessStatus.ACTIVE && issuedAt != null
-                    && (user.getLastLoginAt() == null || issuedAt.isAfter(user.getLastLoginAt()));
-            if ((fullName != null && !Objects.equals(fullName, user.getFullName()))
-                    || (email != null && !Objects.equals(email, user.getEmail())) || newLogin) {
+                    && (user.getLastLoginTokenIat() == null || issuedAt.isAfter(user.getLastLoginTokenIat()));
+            Instant profileIat = user.getLastSyncedProfileIat();
+            boolean changedProfile = (fullName != null && !Objects.equals(fullName, user.getFullName()))
+                    || (email != null && !Objects.equals(email, user.getEmail()));
+            boolean refreshProfile = issuedAt != null && (fullName != null || email != null)
+                    && (profileIat == null || issuedAt.isAfter(profileIat)
+                    || (issuedAt.equals(profileIat) && changedProfile));
+            if (refreshProfile || newLogin) {
                 // Update only projection columns. Re-read authorization after any concurrent access change.
                 repository.synchronizeIdentity(userId, fullName, email, issuedAt, clock.instant());
                 localUser = repository.findById(userId);

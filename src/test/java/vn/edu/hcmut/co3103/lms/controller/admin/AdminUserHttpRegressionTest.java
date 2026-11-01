@@ -28,6 +28,7 @@ import org.springframework.context.annotation.Primary;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.test.context.DynamicPropertyRegistry;
 import org.springframework.test.context.DynamicPropertySource;
+import org.springframework.test.context.bean.override.mockito.MockitoSpyBean;
 import tools.jackson.databind.JsonNode;
 import tools.jackson.databind.ObjectMapper;
 import vn.edu.hcmut.co3103.lms.domain.AccessStatus;
@@ -59,6 +60,7 @@ import java.util.stream.Stream;
 import javax.sql.DataSource;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.mockito.Mockito.doReturn;
 
 // No test-owned transaction: Tomcat completes each request, then assertions read committed state.
 @SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT, properties = {
@@ -81,6 +83,7 @@ class AdminUserHttpRegressionTest {
     @Autowired private ObjectMapper mapper;
     @Autowired private JdbcTemplate jdbc;
     @Autowired private DataSource dataSource;
+    @MockitoSpyBean(name = "fixedJwtClock") private Clock clock;
     private LmsUserAccess admin;
     private LmsUserAccess target;
 
@@ -109,7 +112,8 @@ class AdminUserHttpRegressionTest {
         // Existing admin requests reuse a login; their mutation snapshots exclude login bookkeeping.
         UUID adminId = UUID.randomUUID();
         admin = users.saveAndFlush(new LmsUserAccess(adminId, "Administrator", adminId + "@example.test",
-                LmsRole.ADMINISTRATOR, AccessStatus.ACTIVE, JwtTestSupport.NOW, ORIGINAL_TIME, ORIGINAL_TIME));
+                LmsRole.ADMINISTRATOR, AccessStatus.ACTIVE, JwtTestSupport.NOW, ORIGINAL_TIME, ORIGINAL_TIME,
+                null, Instant.ofEpochSecond(JwtTestSupport.NOW.getEpochSecond() - 300)));
         target = saveUser("Nguyễn An", LmsRole.STUDENT, AccessStatus.ACTIVE);
     }
 
@@ -160,6 +164,54 @@ class AdminUserHttpRegressionTest {
     }
 
     @Test
+    void olderTrustedTokenCannotOverwriteNewerIdentityProjection() throws Exception {
+        var claims = TOKENS.claims();
+        claims.put("sub", admin.getUserId().toString());
+        claims.put("iat", JwtTestSupport.numericDate(JwtTestSupport.NOW));
+        claims.put("fullName", "Newer CI Name");
+        claims.put("email", "newer-ci@example.test");
+        json(sendToken("GET", USERS, null, TOKENS.token(claims)), 200);
+        var newer = users.findById(admin.getUserId()).orElseThrow();
+        assertThat(newer.getFullName()).isEqualTo("Newer CI Name");
+        assertThat(newer.getEmail()).isEqualTo("newer-ci@example.test");
+        assertThat(newer.getUserId()).isEqualTo(admin.getUserId());
+        assertThat(newer.getLmsRole()).isEqualTo(admin.getLmsRole());
+        assertThat(newer.getAccessStatus()).isEqualTo(admin.getAccessStatus());
+        assertThat(newer.getCreatedAt()).isEqualTo(admin.getCreatedAt());
+
+        doReturn(JwtTestSupport.NOW.plusSeconds(1)).when(clock).instant();
+        claims.put("iat", JwtTestSupport.numericDate(JwtTestSupport.NOW.minusSeconds(30)));
+        claims.put("fullName", "Older CI Name");
+        claims.put("email", "older-ci@example.test");
+        json(sendToken("GET", USERS, null, TOKENS.token(claims)), 200);
+        assertThat(users.findById(admin.getUserId()).orElseThrow()).usingRecursiveComparison().isEqualTo(newer);
+        assertThat(auditLogs.count()).isZero();
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {"0", "0.000000001", "0.000000999"})
+    void futureIssuedTokenReuseDoesNotRecordAnotherLocalLogin(String fraction) throws Exception {
+        var claims = TOKENS.claims();
+        claims.put("sub", admin.getUserId().toString());
+        claims.put("iat", JwtTestSupport.numericDate(JwtTestSupport.NOW.plusSeconds(45))
+                .add(new java.math.BigDecimal(fraction)));
+        claims.put("fullName", "Future CI Name");
+        claims.put("email", "future-ci@example.test");
+        String bearer = TOKENS.token(claims);
+        json(sendToken("GET", USERS, null, bearer), 200);
+        var first = users.findById(admin.getUserId()).orElseThrow();
+        assertThat(first.getLastLoginAt()).isEqualTo(JwtTestSupport.NOW);
+        assertThat(first.getUpdatedAt()).isEqualTo(JwtTestSupport.NOW);
+
+        for (int seconds : List.of(1, 20, 46)) {
+            doReturn(JwtTestSupport.NOW.plusSeconds(seconds)).when(clock).instant();
+            json(sendToken("GET", USERS, null, bearer), 200);
+            assertThat(users.findById(admin.getUserId()).orElseThrow()).usingRecursiveComparison().isEqualTo(first);
+        }
+        assertThat(auditLogs.count()).isZero();
+    }
+
+    @Test
     void suspendedIdentityCanRefreshDisplayButCannotLoginOrReactivateAccess() throws Exception {
         target.setAccessStatus(AccessStatus.SUSPENDED);
         users.saveAndFlush(target);
@@ -184,7 +236,8 @@ class AdminUserHttpRegressionTest {
         claims.put("sub", target.getUserId().toString());
         error(sendToken("GET", USERS, null, TOKENS.token(claims)), 403, "FORBIDDEN");
         var loggedIn = users.findById(target.getUserId()).orElseThrow();
-        assertThat(loggedIn).usingRecursiveComparison().ignoringFields("lastLoginAt", "updatedAt").isEqualTo(target);
+        assertThat(loggedIn).usingRecursiveComparison().ignoringFields("lastLoginAt", "lastLoginTokenIat", "updatedAt")
+                .isEqualTo(target);
         assertThat(loggedIn.getLastLoginAt()).isEqualTo(JwtTestSupport.NOW);
         claims.put("email", "partial-ci@example.test");
         error(sendToken("GET", USERS, null, TOKENS.token(claims)), 403, "FORBIDDEN");
@@ -292,7 +345,7 @@ class AdminUserHttpRegressionTest {
                             SELECT EXISTS (SELECT 1 FROM pg_stat_activity
                             WHERE datname = current_database() AND pid <> pg_backend_pid()
                               AND wait_event_type = 'Lock'
-                              AND query LIKE '%update%admin_user_http_test.lms_user_access%')
+                              AND query ILIKE '%update%admin_user_http_test.lms_user_access%')
                             """, Boolean.class);
                     if (blocked) break;
                     Thread.sleep(20);

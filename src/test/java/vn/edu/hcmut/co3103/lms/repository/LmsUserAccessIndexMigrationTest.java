@@ -37,8 +37,9 @@ class LmsUserAccessIndexMigrationTest {
                     FROM generate_series(10005, 1, -1) AS i
                     """.formatted(table));
             jdbc.execute("ANALYZE " + table);
-            var before = jdbc.queryForList("SELECT * FROM " + table + " ORDER BY created_at DESC, user_id ASC");
-            String listing = "SELECT * FROM " + table + " ORDER BY created_at DESC, user_id ASC LIMIT 20";
+            String projection = "SELECT user_id, full_name, email, lms_role, access_status, last_login_at, created_at, updated_at FROM ";
+            var before = jdbc.queryForList(projection + table + " ORDER BY created_at DESC, user_id ASC");
+            String listing = projection + table + " ORDER BY created_at DESC, user_id ASC LIMIT 20";
             if (upgrade) {
                 String plan = String.join("\n", jdbc.queryForList("EXPLAIN (ANALYZE, BUFFERS) " + listing, String.class));
                 System.out.println("Default listing before V5:\n" + plan);
@@ -48,11 +49,11 @@ class LmsUserAccessIndexMigrationTest {
             var flyway = migration.target("latest").load();
             flyway.migrate();
             flyway.validate();
-            assertThat(flyway.info().current().getVersion().getVersion()).isEqualTo("5");
+            assertThat(flyway.info().current().getVersion().getVersion()).isEqualTo("6");
             assertThat(jdbc.queryForObject("SELECT indexdef FROM pg_indexes WHERE schemaname = ? AND indexname = ?",
                     String.class, schema, "idx_lms_user_access_created_at_user_id"))
                     .contains("USING btree (created_at DESC, user_id)");
-            assertThat(jdbc.queryForList("SELECT * FROM " + table + " ORDER BY created_at DESC, user_id ASC"))
+            assertThat(jdbc.queryForList(projection + table + " ORDER BY created_at DESC, user_id ASC"))
                     .isEqualTo(before);
             assertThat(jdbc.queryForList(listing)).isEqualTo(before.subList(0, 20));
             assertThat(jdbc.queryForList(listing + " OFFSET 20")).isEqualTo(before.subList(20, 40));

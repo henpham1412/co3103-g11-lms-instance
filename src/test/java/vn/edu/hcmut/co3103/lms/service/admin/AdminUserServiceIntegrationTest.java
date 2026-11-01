@@ -5,6 +5,7 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.CsvSource;
+import org.junit.jupiter.params.provider.ValueSource;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.autoconfigure.ImportAutoConfiguration;
 import org.springframework.boot.data.jpa.test.autoconfigure.DataJpaTest;
@@ -73,13 +74,14 @@ class AdminUserServiceIntegrationTest {
         var admin = saveUser("Admin", LmsRole.ADMINISTRATOR, AccessStatus.ACTIVE);
         var target = saveUser("Original CI Name", LmsRole.STUDENT, AccessStatus.ACTIVE);
         Instant login = Instant.now().truncatedTo(ChronoUnit.MICROS);
+        Instant issuedAt = login.plusSeconds(45).plusNanos(1);
         new TransactionTemplate(transactions).executeWithoutResult(outer -> {
             // Hold the same managed snapshot an administrator would load before a concurrent login.
             users.findById(target.getUserId()).orElseThrow();
             var separateLogin = new TransactionTemplate(transactions);
             separateLogin.setPropagationBehavior(org.springframework.transaction.TransactionDefinition.PROPAGATION_REQUIRES_NEW);
             separateLogin.executeWithoutResult(inner -> users.synchronizeIdentity(target.getUserId(),
-                    "Refreshed CI Name", "refreshed-ci@example.test", login, login));
+                    "Refreshed CI Name", "refreshed-ci@example.test", issuedAt, login));
             service.updateUserAccess(target.getUserId(),
                     new UpdateUserAccessRequest(LmsRole.TUTOR, AccessStatus.SUSPENDED), admin.getUserId());
         });
@@ -87,8 +89,54 @@ class AdminUserServiceIntegrationTest {
         assertThat(stored.getFullName()).isEqualTo("Refreshed CI Name");
         assertThat(stored.getEmail()).isEqualTo("refreshed-ci@example.test");
         assertThat(stored.getLastLoginAt()).isEqualTo(login);
+        assertThat(stored.getLastSyncedProfileIat()).isEqualTo(issuedAt);
+        assertThat(stored.getLastLoginTokenIat()).isEqualTo(issuedAt);
         assertThat(stored.getLmsRole()).isEqualTo(LmsRole.TUTOR);
         assertThat(stored.getAccessStatus()).isEqualTo(AccessStatus.SUSPENDED);
+    }
+
+    @ParameterizedTest
+    @ValueSource(booleans = {false, true})
+    void waitingIdentityUpdateRechecksCommittedWatermarks(boolean replay) throws Exception {
+        var target = saveUser("Original Name", LmsRole.TUTOR, AccessStatus.ACTIVE);
+        Instant now = Instant.parse("2030-01-01T00:00:00Z");
+        Instant issuedAt = now.plusSeconds(45).plusNanos(1);
+        var enteredUpdate = new CountDownLatch(1);
+        var executor = Executors.newSingleThreadExecutor();
+        try {
+            Future<Integer> pending = new TransactionTemplate(transactions).execute(transaction -> {
+                assertThat(users.synchronizeIdentity(target.getUserId(), "Newest Name", "newest@example.test",
+                        issuedAt, now)).isEqualTo(1);
+                var attempt = executor.submit(() -> {
+                    enteredUpdate.countDown();
+                    return users.synchronizeIdentity(target.getUserId(), replay ? "Newest Name" : "Older Name",
+                            replay ? "newest@example.test" : "older@example.test",
+                            replay ? issuedAt : issuedAt.minusNanos(1), now.plusSeconds(1));
+                });
+                try {
+                    assertThat(enteredUpdate.await(10, TimeUnit.SECONDS)).isTrue();
+                    assertThatThrownBy(() -> attempt.get(100, TimeUnit.MILLISECONDS)).isInstanceOf(TimeoutException.class);
+                } catch (InterruptedException interrupted) {
+                    Thread.currentThread().interrupt();
+                    throw new AssertionError(interrupted);
+                }
+                return attempt;
+            });
+            assertThat(pending.get(10, TimeUnit.SECONDS)).isZero();
+            var stored = users.findById(target.getUserId()).orElseThrow();
+            assertThat(stored.getFullName()).isEqualTo("Newest Name");
+            assertThat(stored.getEmail()).isEqualTo("newest@example.test");
+            assertThat(stored.getLastSyncedProfileIat()).isEqualTo(issuedAt);
+            assertThat(stored.getLastLoginTokenIat()).isEqualTo(issuedAt);
+            assertThat(stored.getLastLoginAt()).isEqualTo(now);
+            assertThat(stored.getUpdatedAt()).isEqualTo(now);
+            assertThat(stored.getLmsRole()).isEqualTo(target.getLmsRole());
+            assertThat(stored.getAccessStatus()).isEqualTo(target.getAccessStatus());
+            assertThat(stored.getCreatedAt()).isEqualTo(target.getCreatedAt());
+        } finally {
+            executor.shutdownNow();
+            assertThat(executor.awaitTermination(10, TimeUnit.SECONDS)).isTrue();
+        }
     }
 
     @Test

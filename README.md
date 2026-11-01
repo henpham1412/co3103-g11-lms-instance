@@ -198,8 +198,12 @@ export DB_PASSWORD
 
 Flyway runs `src/main/resources/db/migration` on application startup: V1 creates
 local access, V2 aligns columns, V3 initializes administrator setup, V4 creates
-audit logs, and V5 indexes the default user order `(created_at DESC, user_id ASC)`.
-An empty database receives V1–V5; an existing V4 database receives only V5.
+audit logs, V5 indexes the default user order `(created_at DESC, user_id ASC)`,
+and V6 adds independent profile/login token issuance watermarks.
+An empty database receives V1–V6; an existing V5 database receives only V6.
+The nullable watermarks store exact epoch seconds (`NUMERIC(21,9)`) to preserve
+decoded JWT nanoseconds. Existing rows initialize them on the first trusted token
+after upgrade; historical issuance cannot be inferred from local wall-clock timestamps.
 Hibernate does not create/update the schema (`ddl-auto=none`). Add new versioned
 migrations for schema changes; do not edit applied migrations or repair checksums
 to bypass validation. Do not commit database passwords, signing keys, or other secrets.

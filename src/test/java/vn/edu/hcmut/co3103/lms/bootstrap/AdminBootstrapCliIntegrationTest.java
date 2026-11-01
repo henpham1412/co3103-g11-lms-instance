@@ -7,6 +7,7 @@ import org.junit.jupiter.params.provider.CsvSource;
 import org.springframework.boot.WebApplicationType;
 import org.springframework.boot.builder.SpringApplicationBuilder;
 import org.springframework.context.ConfigurableApplicationContext;
+import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.web.context.WebApplicationContext;
 import vn.edu.hcmut.co3103.lms.Co3103G11LmsInstanceApplication;
 import vn.edu.hcmut.co3103.lms.domain.AccessStatus;
@@ -17,6 +18,7 @@ import vn.edu.hcmut.co3103.lms.repository.LmsSetupStateRepository;
 import vn.edu.hcmut.co3103.lms.repository.LmsUserAccessRepository;
 
 import java.time.Instant;
+import java.sql.Timestamp;
 import java.util.List;
 import java.util.UUID;
 
@@ -26,7 +28,7 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 class AdminBootstrapCliIntegrationTest {
 
     @Test
-    void upgradesV1WithDuplicateEmailProjectionsThroughV5() {
+    void upgradesV1WithDuplicateEmailProjectionsThroughV6() {
         String schema = "bootstrap_v1_upgrade_" + UUID.randomUUID().toString().replace("-", "");
         UUID firstId = UUID.randomUUID();
         UUID secondId = UUID.randomUUID();
@@ -34,18 +36,19 @@ class AdminBootstrapCliIntegrationTest {
         try (var context = application(schema).properties("spring.flyway.target=1",
                 "spring.jpa.hibernate.ddl-auto=none").run()) {
             assertThat(context.getBean(Flyway.class).info().current().getVersion().getVersion()).isEqualTo("1");
-            context.getBean(LmsUserAccessRepository.class).saveAllAndFlush(List.of(
+            List.of(
                     new LmsUserAccess(firstId, "First User", email, LmsRole.STUDENT,
                             AccessStatus.ACTIVE, null, null, null),
                     new LmsUserAccess(secondId, "Second User", email, LmsRole.TUTOR,
-                            AccessStatus.SUSPENDED, null, null, null)));
+                            AccessStatus.SUSPENDED, null, null, null))
+                    .forEach(user -> insertLegacyUser(context, schema, user));
         }
 
         try (var context = application(schema).run()) {
             var flyway = context.getBean(Flyway.class);
-            assertThat(flyway.info().current().getVersion().getVersion()).isEqualTo("5");
+            assertThat(flyway.info().current().getVersion().getVersion()).isEqualTo("6");
             assertThat(flyway.info().applied()).filteredOn(info -> info.getVersion() != null)
-                    .extracting(info -> info.getVersion().getVersion()).containsExactly("1", "2", "3", "4", "5");
+                    .extracting(info -> info.getVersion().getVersion()).containsExactly("1", "2", "3", "4", "5", "6");
             var users = context.getBean(LmsUserAccessRepository.class);
             assertThat(users.findAll()).extracting(LmsUserAccess::getUserId)
                     .containsExactlyInAnyOrder(firstId, secondId);
@@ -118,7 +121,7 @@ class AdminBootstrapCliIntegrationTest {
                 "spring.jpa.hibernate.ddl-auto=none").run()) {
             assertThat(context.getBean(Flyway.class).info().current().getVersion().getVersion()).isEqualTo("2");
             assertThat(context.getBeansOfType(AdminBootstrapRunner.class)).isEmpty();
-            context.getBean(LmsUserAccessRepository.class).saveAndFlush(new LmsUserAccess(existingId,
+            insertLegacyUser(context, schema, new LmsUserAccess(existingId,
                     "Existing Admin", "existing@example.com", LmsRole.ADMINISTRATOR,
                     status, null, null, null));
         }
@@ -126,7 +129,7 @@ class AdminBootstrapCliIntegrationTest {
         Instant beforeMigration = Instant.now().minusSeconds(1);
         Instant completedAt;
         try (var context = application(schema).run()) {
-            assertThat(context.getBean(Flyway.class).info().current().getVersion().getVersion()).isEqualTo("5");
+            assertThat(context.getBean(Flyway.class).info().current().getVersion().getVersion()).isEqualTo("6");
             assertThat(context.getBeansOfType(AdminBootstrapRunner.class)).isEmpty();
             var state = context.getBean(LmsSetupStateRepository.class).findById(LmsSetupState.GLOBAL_ID).orElseThrow();
             assertThat(state.isCompleted()).isTrue();
@@ -178,15 +181,14 @@ class AdminBootstrapCliIntegrationTest {
         List<LmsUserAccess> existing;
         try (var context = application(schema).properties("spring.flyway.target=2",
                 "spring.jpa.hibernate.ddl-auto=none").run()) {
-            var users = context.getBean(LmsUserAccessRepository.class);
-            users.saveAllAndFlush(List.of(
+            existing = List.of(
                     new LmsUserAccess(new UUID(0, 1), "New Admin", "same@example.com", LmsRole.ADMINISTRATOR,
                             AccessStatus.ACTIVE, null, oldest.plusSeconds(1), oldest),
                     new LmsUserAccess(new UUID(0, 3), "Tied Admin", "same@example.com", LmsRole.ADMINISTRATOR,
                             AccessStatus.ACTIVE, null, oldest, oldest),
                     new LmsUserAccess(selected, "Old Admin", "same@example.com", LmsRole.ADMINISTRATOR,
-                            AccessStatus.SUSPENDED, null, oldest, oldest)));
-            existing = users.findAll();
+                            AccessStatus.SUSPENDED, null, oldest, oldest));
+            existing.forEach(user -> insertLegacyUser(context, schema, user));
         }
         try (var context = application(schema).run()) {
             context.getBean(Flyway.class).validate();
@@ -201,6 +203,17 @@ class AdminBootstrapCliIntegrationTest {
             states.deleteAllInBatch();
             users.deleteAllInBatch();
         }
+    }
+
+    private void insertLegacyUser(ConfigurableApplicationContext context, String schema, LmsUserAccess user) {
+        // Seed V1/V2 columns directly: the current entity also maps columns introduced by V6.
+        context.getBean(JdbcTemplate.class).update("""
+                INSERT INTO %s.lms_user_access (user_id, full_name, email, lms_role, access_status, created_at, updated_at)
+                VALUES (?, ?, ?, ?, ?, COALESCE(CAST(? AS TIMESTAMPTZ), CURRENT_TIMESTAMP),
+                        COALESCE(CAST(? AS TIMESTAMPTZ), CURRENT_TIMESTAMP))
+                """.formatted(schema), user.getUserId(), user.getFullName(), user.getEmail(), user.getLmsRole().name(),
+                user.getAccessStatus().name(), user.getCreatedAt() == null ? null : Timestamp.from(user.getCreatedAt()),
+                user.getUpdatedAt() == null ? null : Timestamp.from(user.getUpdatedAt()));
     }
 
     private SpringApplicationBuilder application(String schema) {

@@ -41,6 +41,111 @@ class LmsUserAccessRepositoryTest {
     private JdbcTemplate jdbcTemplate;
 
     @Test
+    void newerUnchangedProfileStillPreventsAnIntermediateTokenFromRollingItBack() {
+        var user = repository.saveAndFlush(newUser(LmsRole.TUTOR, AccessStatus.SUSPENDED));
+        Instant issuedAt = Instant.parse("2030-01-01T00:00:00Z");
+        assertThat(repository.synchronizeIdentity(user.getUserId(), user.getFullName(), user.getEmail(),
+                issuedAt, issuedAt)).isEqualTo(1);
+        assertThat(repository.synchronizeIdentity(user.getUserId(), user.getFullName(), user.getEmail(),
+                issuedAt.plusSeconds(30), issuedAt.plusSeconds(30))).isEqualTo(1);
+        var newer = repository.findById(user.getUserId()).orElseThrow();
+
+        assertThat(repository.synchronizeIdentity(user.getUserId(), "Intermediate Name", "old@example.test",
+                issuedAt.plusSeconds(15), issuedAt.plusSeconds(31))).isZero();
+        assertThat(repository.findById(user.getUserId()).orElseThrow()).usingRecursiveComparison().isEqualTo(newer);
+        assertThat(newer.getLastSyncedProfileIat()).isEqualTo(issuedAt.plusSeconds(30));
+        assertThat(newer.getLastLoginTokenIat()).isNull();
+        assertThat(newer.getLastLoginAt()).isNull();
+    }
+
+    @ParameterizedTest
+    @EnumSource(AccessStatus.class)
+    void staleIdentityUpdateIsAnAtomicNoOp(AccessStatus status) {
+        var user = repository.saveAndFlush(newUser(LmsRole.TUTOR, status));
+        entityManager.refresh(user);
+        Instant issuedAt = Instant.parse("2030-01-01T00:00:00.123456789Z");
+        assertThat(repository.synchronizeIdentity(user.getUserId(), "Newer Name", "newer@example.test",
+                issuedAt, issuedAt.truncatedTo(ChronoUnit.MICROS))).isEqualTo(1);
+        var newer = repository.findById(user.getUserId()).orElseThrow();
+
+        // Bypass the converter's snapshot check to exercise the database guard under a stale read.
+        assertThat(repository.synchronizeIdentity(user.getUserId(), "Older Name", "older@example.test",
+                issuedAt.minusNanos(1), issuedAt.plusSeconds(1))).isZero();
+        var stored = repository.findById(user.getUserId()).orElseThrow();
+        assertThat(stored).usingRecursiveComparison().isEqualTo(newer);
+        assertThat(stored.getUserId()).isEqualTo(user.getUserId());
+        assertThat(stored.getLmsRole()).isEqualTo(user.getLmsRole());
+        assertThat(stored.getAccessStatus()).isEqualTo(status);
+        assertThat(stored.getCreatedAt()).isEqualTo(user.getCreatedAt());
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {"2030-01-01T00:00:45Z", "2030-01-01T00:00:45.000000001Z",
+            "2030-01-01T00:00:45.999999999Z"})
+    void futureIssuedTokenReuseDoesNotUpdateLoginOrUpdatedAt(String timestamp) {
+        var user = repository.saveAndFlush(newUser(LmsRole.STUDENT, AccessStatus.ACTIVE));
+        Instant now = Instant.parse("2030-01-01T00:00:00Z");
+        Instant issuedAt = Instant.parse(timestamp);
+        assertThat(repository.synchronizeIdentity(user.getUserId(), "Future Name", "future@example.test",
+                issuedAt, now)).isEqualTo(1);
+        var first = repository.findById(user.getUserId()).orElseThrow();
+        assertThat(first.getLastLoginAt()).isEqualTo(now);
+        assertThat(first.getLastLoginTokenIat()).isEqualTo(issuedAt);
+        assertThat(first.getLastSyncedProfileIat()).isEqualTo(issuedAt);
+
+        for (int seconds : List.of(1, 20, 46)) {
+            assertThat(repository.synchronizeIdentity(user.getUserId(), "Future Name", "future@example.test",
+                    issuedAt, now.plusSeconds(seconds))).isZero();
+            assertThat(repository.findById(user.getUserId()).orElseThrow()).usingRecursiveComparison().isEqualTo(first);
+        }
+        assertThat(repository.synchronizeIdentity(user.getUserId(), null, null, issuedAt.plusNanos(1),
+                now.plusSeconds(47))).isEqualTo(1);
+        var next = repository.findById(user.getUserId()).orElseThrow();
+        assertThat(next.getLastLoginTokenIat()).isEqualTo(issuedAt.plusNanos(1));
+        assertThat(next.getLastLoginAt()).isEqualTo(now.plusSeconds(47));
+        assertThat(next.getLastSyncedProfileIat()).isEqualTo(issuedAt);
+        assertThat(next.getFullName()).isEqualTo(first.getFullName());
+        assertThat(next.getEmail()).isEqualTo(first.getEmail());
+    }
+
+    @Test
+    void equalIssuanceCanCompletePartialProfileWithoutRecordingAnotherLogin() {
+        var user = repository.saveAndFlush(newUser(LmsRole.STUDENT, AccessStatus.ACTIVE));
+        Instant now = Instant.parse("2030-01-01T00:00:00Z");
+        assertThat(repository.synchronizeIdentity(user.getUserId(), null, "partial@example.test", now, now)).isEqualTo(1);
+        assertThat(repository.synchronizeIdentity(user.getUserId(), "Partial Name", null, now, now.plusSeconds(1))).isEqualTo(1);
+        var partial = repository.findById(user.getUserId()).orElseThrow();
+        assertThat(partial.getFullName()).isEqualTo("Partial Name");
+        assertThat(partial.getEmail()).isEqualTo("partial@example.test");
+        assertThat(partial.getLastLoginAt()).isEqualTo(now);
+        assertThat(partial.getLastLoginTokenIat()).isEqualTo(now);
+        assertThat(partial.getLastSyncedProfileIat()).isEqualTo(now);
+        assertThat(partial.getUpdatedAt()).isEqualTo(now.plusSeconds(1));
+        assertThat(repository.synchronizeIdentity(user.getUserId(), "Partial Name", null, now, now.plusSeconds(2))).isZero();
+        assertThat(repository.synchronizeIdentity(user.getUserId(), "Undated Name", null, null, now.plusSeconds(3))).isZero();
+        assertThat(repository.findById(user.getUserId()).orElseThrow()).usingRecursiveComparison().isEqualTo(partial);
+    }
+
+    @Test
+    void staleProfileCannotOverwriteDisplayWhenAnIndependentLoginIsRecorded() {
+        var user = repository.saveAndFlush(newUser(LmsRole.TUTOR, AccessStatus.SUSPENDED));
+        Instant now = Instant.parse("2030-01-01T00:00:00Z");
+        repository.synchronizeIdentity(user.getUserId(), "Latest Name", "latest@example.test", now, now);
+        jdbcTemplate.update("UPDATE lms_user_access SET access_status = 'ACTIVE' WHERE user_id = ?", user.getUserId());
+
+        assertThat(repository.synchronizeIdentity(user.getUserId(), "Old Name", "old@example.test",
+                now.minusSeconds(1), now.plusSeconds(1))).isEqualTo(1);
+        var stored = repository.findById(user.getUserId()).orElseThrow();
+        assertThat(stored.getFullName()).isEqualTo("Latest Name");
+        assertThat(stored.getEmail()).isEqualTo("latest@example.test");
+        assertThat(stored.getLastSyncedProfileIat()).isEqualTo(now);
+        assertThat(stored.getLastLoginTokenIat()).isEqualTo(now.minusSeconds(1));
+        assertThat(stored.getLastLoginAt()).isEqualTo(now.plusSeconds(1));
+        assertThat(stored.getAccessStatus()).isEqualTo(AccessStatus.ACTIVE);
+        assertThat(stored.getLmsRole()).isEqualTo(LmsRole.TUTOR);
+    }
+
+    @Test
     void createsReadsUpdatesAndDeletesUserAccess() {
         Instant originalTime = Instant.parse("2020-01-01T00:00:00Z");
         LmsUserAccess user = new LmsUserAccess(UUID.randomUUID(), "Test User",

@@ -21,6 +21,7 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Optional;
 import java.util.UUID;
+import java.time.Instant;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -131,6 +132,68 @@ class LocalAccessJwtAuthenticationConverterTest {
         assertThatThrownBy(() -> converter.convert(jwt(List.of(USER_ID.toString()))))
                 .isInstanceOf(OAuth2AuthenticationException.class);
         verifyNoInteractions(repository);
+    }
+
+    @Test
+    void olderTrustedTokenCannotOverwriteNewerIdentityProjection() {
+        var user = user(LmsRole.TUTOR, AccessStatus.ACTIVE);
+        user.setLastSyncedProfileIat(JwtTestSupport.NOW);
+        user.setLastLoginTokenIat(JwtTestSupport.NOW);
+        when(repository.findById(USER_ID)).thenReturn(Optional.of(user));
+        var oldToken = Jwt.withTokenValue("older-token").header("alg", "RS256").subject(USER_ID.toString())
+                .issuedAt(JwtTestSupport.NOW.minusSeconds(30))
+                .claim("fullName", "Older Name").claim("email", "older@example.test").build();
+
+        var authentication = converter.convert(oldToken);
+
+        assertThat(authentication.isAuthenticated()).isTrue();
+        assertThat(authentication.getAuthorities()).extracting(GrantedAuthority::getAuthority).containsExactly("ROLE_TUTOR");
+        verify(repository).findById(USER_ID);
+        verifyNoMoreInteractions(repository);
+    }
+
+    @Test
+    void consumedFutureIssuedTokenDoesNotSynchronizeAgain() {
+        var user = user(LmsRole.STUDENT, AccessStatus.ACTIVE);
+        Instant issuedAt = JwtTestSupport.NOW.plusSeconds(45);
+        user.setLastLoginAt(JwtTestSupport.NOW);
+        user.setLastLoginTokenIat(issuedAt);
+        user.setLastSyncedProfileIat(issuedAt);
+        when(repository.findById(USER_ID)).thenReturn(Optional.of(user));
+        var token = Jwt.withTokenValue("future-token").header("alg", "RS256").subject(USER_ID.toString())
+                .issuedAt(issuedAt).claim("email", user.getEmail()).build();
+
+        assertThat(converter.convert(token).isAuthenticated()).isTrue();
+        assertThat(converter.convert(token).isAuthenticated()).isTrue();
+        verify(repository, times(2)).findById(USER_ID);
+        verifyNoMoreInteractions(repository);
+    }
+
+    @Test
+    void newerUnchangedProfileAdvancesWatermarkEvenForSuspendedUser() {
+        var user = user(LmsRole.STUDENT, AccessStatus.SUSPENDED);
+        user.setLastSyncedProfileIat(JwtTestSupport.NOW.minusSeconds(30));
+        when(repository.findById(USER_ID)).thenReturn(Optional.of(user));
+        var token = Jwt.withTokenValue("newer-token").header("alg", "RS256").subject(USER_ID.toString())
+                .issuedAt(JwtTestSupport.NOW).claim("email", user.getEmail()).build();
+
+        assertThat(converter.convert(token).getAuthorities()).isEmpty();
+        verify(repository).synchronizeIdentity(USER_ID, null, user.getEmail(), JwtTestSupport.NOW, JwtTestSupport.NOW);
+        verify(repository, times(2)).findById(USER_ID);
+        verifyNoMoreInteractions(repository);
+    }
+
+    @Test
+    void rereadsAccessAfterConcurrentSuspensionDuringSynchronization() {
+        var active = user(LmsRole.ADMINISTRATOR, AccessStatus.ACTIVE);
+        var suspended = user(LmsRole.ADMINISTRATOR, AccessStatus.SUSPENDED);
+        when(repository.findById(USER_ID)).thenReturn(Optional.of(active), Optional.of(suspended));
+        var token = Jwt.withTokenValue("new-token").header("alg", "RS256").subject(USER_ID.toString())
+                .issuedAt(JwtTestSupport.NOW).build();
+
+        assertThat(converter.convert(token).getAuthorities()).isEmpty();
+        verify(repository).synchronizeIdentity(USER_ID, null, null, JwtTestSupport.NOW, JwtTestSupport.NOW);
+        verify(repository, times(2)).findById(USER_ID);
     }
 
     @Test
