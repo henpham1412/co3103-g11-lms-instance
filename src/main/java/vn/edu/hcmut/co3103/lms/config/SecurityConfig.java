@@ -25,6 +25,8 @@ import vn.edu.hcmut.co3103.lms.security.JsonCorsFilter;
 import vn.edu.hcmut.co3103.lms.security.jwt.ClaimValidatingJwtDecoder;
 import vn.edu.hcmut.co3103.lms.security.jwt.JwtSubjectValidator;
 import vn.edu.hcmut.co3103.lms.security.jwt.LocalAccessJwtAuthenticationConverter;
+import org.springframework.security.config.annotation.web.configurers.AbstractHttpConfigurer;
+
 import java.net.URI;
 import java.time.Clock;
 import java.util.Arrays;
@@ -56,10 +58,10 @@ public class SecurityConfig {
 
     @Bean
     CorsConfigurationSource corsConfigurationSource(
-            @Value("${lms.allowed-origins:http://localhost:3000,http://localhost:5173}") String allowedOrigins) {
+                @Value("${lms.allowed-origins:http://localhost:3000,http://localhost:5173}") String allowedOrigins) {
         CorsConfiguration configuration = new CorsConfiguration();
         configuration.setAllowedOrigins(Arrays.stream(allowedOrigins.split(",", -1))
-                .map(String::trim).map(origin -> validateOrigin(origin)).distinct().toList());
+                .map(String::trim).map(SecurityConfig::validateOrigin).distinct().toList());
         configuration.setAllowedMethods(List.of("GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS"));
         configuration.setAllowedHeaders(List.of("Authorization", "Content-Type", "Accept", "Origin",
                 "X-Requested-With", "Access-Control-Request-Method", "Access-Control-Request-Headers"));
@@ -94,8 +96,8 @@ public class SecurityConfig {
                                            JsonAccessDeniedHandler accessDeniedHandler,
                                            LocalAccessJwtAuthenticationConverter jwtAuthenticationConverter,
                                            CorsConfigurationSource corsConfigurationSource) {
-        http.csrf(csrf -> csrf.disable())
-                .cors(cors -> cors.disable())
+        http.csrf(AbstractHttpConfigurer::disable)
+                .cors(AbstractHttpConfigurer::disable)
                 .addFilterAt(new JsonCorsFilter(corsConfigurationSource, accessDeniedHandler), CorsFilter.class)
                 .sessionManagement(session -> session
                         .sessionCreationPolicy(SessionCreationPolicy.STATELESS)
