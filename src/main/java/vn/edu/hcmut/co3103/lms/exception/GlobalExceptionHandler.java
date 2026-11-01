@@ -21,13 +21,25 @@ public class GlobalExceptionHandler {
 
     @ExceptionHandler({HttpMessageNotReadableException.class, MethodArgumentTypeMismatchException.class,
             PropertyReferenceException.class, IllegalArgumentException.class})
-    public ResponseEntity<Map<String, Object>> handleMalformedRequest() {
+    public ResponseEntity<Map<String, Object>> handleMalformedRequest(Exception exception) {
+        for (Throwable cause = exception; cause != null; cause = cause.getCause()) {
+            if (cause instanceof AdminAccessValidationException) {
+                return handleAdminAccessValidation();
+            }
+        }
         return ResponseEntity.status(HttpStatus.BAD_REQUEST)
                 .contentType(MediaType.APPLICATION_JSON)
                 .body(Map.of(
                         "code", "BAD_REQUEST",
                         "message", "Bad Request",
                         "details", List.of()));
+    }
+
+    @ExceptionHandler(AdminAccessValidationException.class)
+    public ResponseEntity<Map<String, Object>> handleAdminAccessValidation() {
+        return ResponseEntity.status(HttpStatus.BAD_REQUEST)
+                .contentType(MediaType.APPLICATION_JSON)
+                .body(Map.of("code", "VALIDATION_ERROR", "message", "Validation failed", "details", List.of()));
     }
 
     @ExceptionHandler(HttpMediaTypeNotAcceptableException.class)
@@ -42,10 +54,10 @@ public class GlobalExceptionHandler {
 
     @ExceptionHandler(LastAdminProtectionException.class)
     public ResponseEntity<Map<String, Object>> handleLastAdminProtection(LastAdminProtectionException exception) {
-        return ResponseEntity.status(HttpStatus.BAD_REQUEST)
+        return ResponseEntity.status(HttpStatus.CONFLICT)
                 .contentType(MediaType.APPLICATION_JSON)
                 .body(Map.of(
-                        "code", "LAST_ADMIN_PROTECTION",
+                        "code", "INVALID_ROLE_OR_STATUS_TRANSITION",
                         "message", exception.getMessage(),
                         "details", List.of()));
     }
@@ -55,7 +67,7 @@ public class GlobalExceptionHandler {
         return ResponseEntity.status(HttpStatus.NOT_FOUND)
                 .contentType(MediaType.APPLICATION_JSON)
                 .body(Map.of(
-                        "code", "USER_NOT_FOUND",
+                        "code", "LOCAL_USER_NOT_FOUND",
                         "message", exception.getMessage(),
                         "details", List.of()));
     }

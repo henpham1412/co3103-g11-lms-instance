@@ -99,16 +99,16 @@ class AdminUserControllerIntegrationTest {
 
         mockMvc.perform(get(USERS).header(HttpHeaders.AUTHORIZATION, bearer(admin.getUserId()))
                         .param("q", " ALICE ").param("role", "TUTOR").param("status", "ACTIVE")
-                        .param("page", "1").param("size", "1").param("sort", "fullName,asc"))
+                        .param("page", "2").param("size", "1").param("sort", "fullName,asc"))
                 .andExpect(status().isOk())
-                .andExpect(jsonPath("$.content.length()").value(1))
-                .andExpect(jsonPath("$.content[0].userId").value(second.getUserId().toString()))
-                .andExpect(jsonPath("$.content[0].role").value("TUTOR"))
-                .andExpect(jsonPath("$.content[0].accessStatus").value("ACTIVE"))
-                .andExpect(jsonPath("$.page").value(1))
+                .andExpect(jsonPath("$.items.length()").value(1))
+                .andExpect(jsonPath("$.items[0].user_id").value(second.getUserId().toString()))
+                .andExpect(jsonPath("$.items[0].lms_role").value("TUTOR"))
+                .andExpect(jsonPath("$.items[0].access_status").value("ACTIVE"))
+                .andExpect(jsonPath("$.page").value(2))
                 .andExpect(jsonPath("$.size").value(1))
-                .andExpect(jsonPath("$.totalElements").value(2))
-                .andExpect(jsonPath("$.totalPages").value(2))
+                .andExpect(jsonPath("$.total_items").value(2))
+                .andExpect(jsonPath("$.total_pages").value(2))
                 .andExpect(jsonPath("$.last").value(true));
     }
 
@@ -116,12 +116,12 @@ class AdminUserControllerIntegrationTest {
     void defaultsToTheFirstTwentyUsersOrderedByCreationDescending() throws Exception {
         mockMvc.perform(get(USERS).header(HttpHeaders.AUTHORIZATION, bearer(admin.getUserId())))
                 .andExpect(status().isOk())
-                .andExpect(jsonPath("$.content.length()").value(2))
-                .andExpect(jsonPath("$.content[0].userId").value(admin.getUserId().toString()))
-                .andExpect(jsonPath("$.content[1].userId").value(target.getUserId().toString()))
-                .andExpect(jsonPath("$.page").value(0))
+                .andExpect(jsonPath("$.items.length()").value(2))
+                .andExpect(jsonPath("$.items[0].user_id").value(admin.getUserId().toString()))
+                .andExpect(jsonPath("$.items[1].user_id").value(target.getUserId().toString()))
+                .andExpect(jsonPath("$.page").value(1))
                 .andExpect(jsonPath("$.size").value(20))
-                .andExpect(jsonPath("$.totalElements").value(2));
+                .andExpect(jsonPath("$.total_items").value(2));
     }
 
     @ParameterizedTest
@@ -140,11 +140,11 @@ class AdminUserControllerIntegrationTest {
         mockMvc.perform(get(USERS).header(HttpHeaders.AUTHORIZATION, bearer(admin.getUserId()))
                         .param("sort", property + ",asc"))
                 .andExpect(status().isOk())
-                .andExpect(jsonPath("$.totalElements").value(2));
+                .andExpect(jsonPath("$.total_items").value(2));
     }
 
     @ParameterizedTest
-    @CsvSource({"2147483647, 20", "1073741824, 2"})
+    @CsvSource({"2147483647, 20", "1073741825, 2"})
     void rejectsPageOffsetOverflowWithBadRequest(String page, String size) throws Exception {
         mockMvc.perform(get(USERS).header(HttpHeaders.AUTHORIZATION, bearer(admin.getUserId()))
                         .param("page", page).param("size", size))
@@ -190,7 +190,7 @@ class AdminUserControllerIntegrationTest {
                             .header(HttpHeaders.AUTHORIZATION, bearer(admin.getUserId()))
                             .contentType(MediaType.APPLICATION_JSON).content(body))
                     .andExpect(status().isBadRequest())
-                    .andExpect(errorEnvelope("BAD_REQUEST", "Bad Request"));
+                    .andExpect(errorEnvelope("VALIDATION_ERROR", "Validation failed"));
 
             assertTargetAccessUnchanged();
         } finally {
@@ -210,11 +210,11 @@ class AdminUserControllerIntegrationTest {
                         .header(HttpHeaders.AUTHORIZATION, bearer(admin.getUserId()))
                         .contentType(MediaType.APPLICATION_JSON).content(body))
                 .andExpect(status().isOk())
-                .andExpect(jsonPath("$.userId").value(target.getUserId().toString()))
-                .andExpect(jsonPath("$.role").value(role.name()))
-                .andExpect(jsonPath("$.accessStatus").value(accessStatus.name()))
-                .andExpect(jsonPath("$.createdAt").value(ORIGINAL_TIME.toString()))
-                .andExpect(jsonPath("$.updatedAt").isString());
+                .andExpect(jsonPath("$.user_id").value(target.getUserId().toString()))
+                .andExpect(jsonPath("$.lms_role").value(role.name()))
+                .andExpect(jsonPath("$.access_status").value(accessStatus.name()))
+                .andExpect(jsonPath("$.created_at").value(ORIGINAL_TIME.toString()))
+                .andExpect(jsonPath("$.updated_at").isString());
 
         entityManager.clear();
         var stored = users.findById(target.getUserId()).orElseThrow();
@@ -282,7 +282,8 @@ class AdminUserControllerIntegrationTest {
                         .header(HttpHeaders.AUTHORIZATION, bearer(admin.getUserId()))
                         .contentType(MediaType.APPLICATION_JSON).content(body))
                 .andExpect(status().isBadRequest())
-                .andExpect(errorEnvelope("BAD_REQUEST", "Bad Request"));
+                .andExpect(errorEnvelope(body.startsWith("{\"") ? "VALIDATION_ERROR" : "BAD_REQUEST",
+                        body.startsWith("{\"") ? "Validation failed" : "Bad Request"));
 
         entityManager.clear();
         var stored = users.findById(target.getUserId()).orElseThrow();
@@ -297,7 +298,7 @@ class AdminUserControllerIntegrationTest {
                         .header(HttpHeaders.AUTHORIZATION, bearer(admin.getUserId()))
                         .contentType(MediaType.APPLICATION_JSON).content("{\"role\":\"TUTOR\"}"))
                 .andExpect(status().isNotFound())
-                .andExpect(errorEnvelope("USER_NOT_FOUND", "User not found"));
+                .andExpect(errorEnvelope("LOCAL_USER_NOT_FOUND", "User not found"));
     }
 
     @ParameterizedTest
@@ -307,8 +308,8 @@ class AdminUserControllerIntegrationTest {
         mockMvc.perform(patch(USERS + "/{userId}", admin.getUserId())
                         .header(HttpHeaders.AUTHORIZATION, bearer(admin.getUserId()))
                         .contentType(MediaType.APPLICATION_JSON).content(body))
-                .andExpect(status().isBadRequest())
-                .andExpect(errorEnvelope("LAST_ADMIN_PROTECTION",
+                .andExpect(status().isConflict())
+                .andExpect(errorEnvelope("INVALID_ROLE_OR_STATUS_TRANSITION",
                         "Cannot demote or suspend the last active administrator"));
 
         entityManager.clear();

@@ -206,8 +206,9 @@ Do not modify these shared settings locally unless the team agrees to update the
 
 ## 7. API Overview
 
-DOC-05 describes the general `/api/v1` API prefix. The implemented LMS-13 user
-administration endpoints use `/api/admin/users`; see the
+LMS-13 user administration follows the DOC-05 `/api/v1/admin/users` contract,
+with `/api/admin/users` retained as a route alias. Both routes use snake_case
+responses and one-based pagination; see the
 [UC7.1 endpoint and verification guide](docs/admin-user-management.md) and its
 [Postman collection](docs/postman/LMS-13_AdminUserManagement.postman_collection.json).
 All LMS endpoints are served by the current LMS instance.

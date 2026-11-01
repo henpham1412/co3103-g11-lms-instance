@@ -4,6 +4,7 @@ import org.springframework.data.domain.Pageable;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import vn.edu.hcmut.co3103.lms.domain.AccessStatus;
+import vn.edu.hcmut.co3103.lms.domain.AuditLog;
 import vn.edu.hcmut.co3103.lms.domain.LmsRole;
 import vn.edu.hcmut.co3103.lms.domain.LmsUserAccess;
 import vn.edu.hcmut.co3103.lms.dto.admin.AdminUserPageResponse;
@@ -12,6 +13,7 @@ import vn.edu.hcmut.co3103.lms.dto.admin.UpdateUserAccessRequest;
 import vn.edu.hcmut.co3103.lms.exception.LastAdminProtectionException;
 import vn.edu.hcmut.co3103.lms.exception.UserNotFoundException;
 import vn.edu.hcmut.co3103.lms.repository.LmsSetupStateRepository;
+import vn.edu.hcmut.co3103.lms.repository.AuditLogRepository;
 import vn.edu.hcmut.co3103.lms.repository.LmsUserAccessRepository;
 import vn.edu.hcmut.co3103.lms.repository.LmsUserAccessSpecification;
 
@@ -26,10 +28,13 @@ public class AdminUserService {
 
     private final LmsUserAccessRepository users;
     private final LmsSetupStateRepository states;
+    private final AuditLogRepository auditLogs;
 
-    public AdminUserService(LmsUserAccessRepository users, LmsSetupStateRepository states) {
+    public AdminUserService(LmsUserAccessRepository users, LmsSetupStateRepository states,
+                            AuditLogRepository auditLogs) {
         this.users = users;
         this.states = states;
+        this.auditLogs = auditLogs;
     }
 
     @Transactional(readOnly = true)
@@ -44,8 +49,15 @@ public class AdminUserService {
         }
         var page = users.findAll(LmsUserAccessSpecification.filter(query, role, status), pageable)
                 .map(AdminUserService::toResponse);
-        return new AdminUserPageResponse(page.getContent(), page.getNumber(), page.getSize(),
-                page.getTotalElements(), page.getTotalPages(), page.isLast());
+        long externalPage = (long) page.getNumber() + 1;
+        return new AdminUserPageResponse(page.getContent(), externalPage, page.getSize(),
+                page.getTotalElements(), page.getTotalPages(), externalPage >= page.getTotalPages());
+    }
+
+    @Transactional(readOnly = true)
+    public AdminUserResponse getUser(UUID userId) {
+        return toResponse(users.findById(userId)
+                .orElseThrow(() -> new UserNotFoundException("User not found")));
     }
 
     @Transactional
@@ -67,6 +79,8 @@ public class AdminUserService {
             throw new LastAdminProtectionException("Cannot demote or suspend the last active administrator");
         }
 
+        LmsRole previousRole = target.getLmsRole();
+        AccessStatus previousStatus = target.getAccessStatus();
         if (request.role() != null) {
             target.setLmsRole(request.role());
         }
@@ -74,11 +88,15 @@ public class AdminUserService {
             target.setAccessStatus(request.accessStatus());
         }
         // Flush invokes @PreUpdate before the response captures updatedAt.
-        return toResponse(users.saveAndFlush(target));
+        LmsUserAccess saved = users.saveAndFlush(target);
+        if (previousRole != saved.getLmsRole() || previousStatus != saved.getAccessStatus()) {
+            auditLogs.saveAndFlush(new AuditLog(currentAdminUserId, saved, previousRole, previousStatus));
+        }
+        return toResponse(saved);
     }
 
     private static AdminUserResponse toResponse(LmsUserAccess user) {
         return new AdminUserResponse(user.getUserId(), user.getLmsRole(), user.getAccessStatus(),
-                user.getCreatedAt(), user.getUpdatedAt());
+                user.getCreatedAt(), user.getUpdatedAt(), user.getFullName(), user.getEmail(), user.getLastLoginAt());
     }
 }

@@ -26,7 +26,7 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 class AdminBootstrapCliIntegrationTest {
 
     @Test
-    void upgradesV1WithDuplicateEmailProjectionsThroughV2AndV3() {
+    void upgradesV1WithDuplicateEmailProjectionsThroughV4() {
         String schema = "bootstrap_v1_upgrade_" + UUID.randomUUID().toString().replace("-", "");
         UUID firstId = UUID.randomUUID();
         UUID secondId = UUID.randomUUID();
@@ -43,9 +43,9 @@ class AdminBootstrapCliIntegrationTest {
 
         try (var context = application(schema).run()) {
             var flyway = context.getBean(Flyway.class);
-            assertThat(flyway.info().current().getVersion().getVersion()).isEqualTo("3");
+            assertThat(flyway.info().current().getVersion().getVersion()).isEqualTo("4");
             assertThat(flyway.info().applied()).filteredOn(info -> info.getVersion() != null)
-                    .extracting(info -> info.getVersion().getVersion()).containsExactly("1", "2", "3");
+                    .extracting(info -> info.getVersion().getVersion()).containsExactly("1", "2", "3", "4");
             var users = context.getBean(LmsUserAccessRepository.class);
             assertThat(users.findAll()).extracting(LmsUserAccess::getUserId)
                     .containsExactlyInAnyOrder(firstId, secondId);
@@ -126,7 +126,7 @@ class AdminBootstrapCliIntegrationTest {
         Instant beforeMigration = Instant.now().minusSeconds(1);
         Instant completedAt;
         try (var context = application(schema).run()) {
-            assertThat(context.getBean(Flyway.class).info().current().getVersion().getVersion()).isEqualTo("3");
+            assertThat(context.getBean(Flyway.class).info().current().getVersion().getVersion()).isEqualTo("4");
             assertThat(context.getBeansOfType(AdminBootstrapRunner.class)).isEmpty();
             var state = context.getBean(LmsSetupStateRepository.class).findById(LmsSetupState.GLOBAL_ID).orElseThrow();
             assertThat(state.isCompleted()).isTrue();

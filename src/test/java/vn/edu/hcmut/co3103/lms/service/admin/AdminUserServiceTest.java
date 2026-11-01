@@ -21,6 +21,7 @@ import vn.edu.hcmut.co3103.lms.dto.admin.UpdateUserAccessRequest;
 import vn.edu.hcmut.co3103.lms.exception.LastAdminProtectionException;
 import vn.edu.hcmut.co3103.lms.exception.UserNotFoundException;
 import vn.edu.hcmut.co3103.lms.repository.LmsSetupStateRepository;
+import vn.edu.hcmut.co3103.lms.repository.AuditLogRepository;
 import vn.edu.hcmut.co3103.lms.repository.LmsUserAccessRepository;
 import vn.edu.hcmut.co3103.lms.repository.LmsUserAccessSpecification;
 
@@ -44,9 +45,10 @@ class AdminUserServiceTest {
 
     @Mock private LmsUserAccessRepository users;
     @Mock private LmsSetupStateRepository states;
+    @Mock private AuditLogRepository auditLogs;
 
     private AdminUserService service() {
-        return new AdminUserService(users, states);
+        return new AdminUserService(users, states, auditLogs);
     }
 
     @ParameterizedTest
@@ -72,7 +74,7 @@ class AdminUserServiceTest {
             var response = service().getUsers(query, role, status, pageable);
 
             assertThat(response.content()).containsExactly(response(first), response(second));
-            assertThat(response.page()).isEqualTo(page);
+            assertThat(response.page()).isEqualTo(page + 1L);
             assertThat(response.size()).isEqualTo(size);
             assertThat(response.totalElements()).isEqualTo(total);
             assertThat(response.totalPages()).isEqualTo((int) Math.ceil((double) total / size));
@@ -91,7 +93,7 @@ class AdminUserServiceTest {
         var response = service().getUsers("missing", null, null, pageable);
 
         assertThat(response.content()).isEmpty();
-        assertThat(response.page()).isEqualTo(3);
+        assertThat(response.page()).isEqualTo(4);
         assertThat(response.size()).isEqualTo(10);
         assertThat(response.totalElements()).isZero();
         assertThat(response.totalPages()).isZero();
@@ -125,7 +127,10 @@ class AdminUserServiceTest {
         var pageable = PageRequest.of(Integer.MAX_VALUE, 1);
         when(users.findAll(any(Specification.class), eq(pageable))).thenReturn(Page.empty(pageable));
 
-        assertThat(service().getUsers(null, null, null, pageable).content()).isEmpty();
+        var result = service().getUsers(null, null, null, pageable);
+        assertThat(result.content()).isEmpty();
+        assertThat(result.last()).isTrue();
+        assertThat(result.page()).isEqualTo(2147483648L);
 
         verify(users).findAll(any(Specification.class), eq(pageable));
     }
@@ -152,7 +157,7 @@ class AdminUserServiceTest {
                 UUID.randomUUID());
 
         assertThat(result).isEqualTo(new AdminUserResponse(target.getUserId(), expectedRole, expectedStatus,
-                CREATED_AT, UPDATED_AT.plusSeconds(1)));
+                CREATED_AT, UPDATED_AT.plusSeconds(1), "Existing User", "existing@example.com", CREATED_AT));
         assertThat(target.getFullName()).isEqualTo("Existing User");
         assertThat(target.getEmail()).isEqualTo("existing@example.com");
         assertThat(target.getLastLoginAt()).isEqualTo(CREATED_AT);
@@ -281,6 +286,6 @@ class AdminUserServiceTest {
 
     private AdminUserResponse response(LmsUserAccess user) {
         return new AdminUserResponse(user.getUserId(), user.getLmsRole(), user.getAccessStatus(),
-                user.getCreatedAt(), user.getUpdatedAt());
+                user.getCreatedAt(), user.getUpdatedAt(), user.getFullName(), user.getEmail(), user.getLastLoginAt());
     }
 }

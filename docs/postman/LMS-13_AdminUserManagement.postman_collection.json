@@ -1,7 +1,7 @@
 {
   "info": {
     "name": "LMS-13 | UC7.1 Local User Administration",
-    "description": "Verification of GET /api/admin/users and PATCH /api/admin/users/{userId}. See docs/admin-user-management.md for the implemented contract, fixtures and test commands. Set the four collection variables locally; tokens must not include the Bearer prefix. baseUrl defaults to port 8080 as requested, but the LMS application defaults to port 8081. Use a disposable fixture database with exactly one ACTIVE ADMINISTRATOR, a separate ACTIVE STUDENT token subject, and a third non-admin target. Run one iteration in order: the target ends as ACTIVE/TUTOR. 2.5 preflights the active-admin count and skips its PATCH with a failing test if the fixture is wrong. Empty object/null fields are valid PATCH no-ops; 2.6 tests absent body, whole-body null and malformed values instead. No credentials are included.",
+    "description": "DOC-05 user administration: list, detail and access updates at /api/v1/admin/users. Snake_case response fields and one-based pagination. See docs/admin-user-management.md for fixtures, aliases, audit semantics and verification. Set tokens locally. Run against a disposable database with one active administrator, a separate active student and a third target; ordered mutations leave the target ACTIVE/TUTOR.",
     "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
   },
   "auth": {
@@ -17,9 +17,9 @@
   "variable": [
     {
       "key": "baseUrl",
-      "value": "http://localhost:8080",
+      "value": "http://localhost:8081",
       "type": "string",
-      "description": "LMS origin without trailing slash. Override to http://localhost:8081 for the application default."
+      "description": "LMS origin without trailing slash; application default port 8081."
     },
     {
       "key": "admin_jwt",
@@ -51,11 +51,11 @@
           "    pm.response.json();",
           "});",
           "function assertUser(user) {",
-          "    pm.expect(user).to.have.all.keys('userId', 'role', 'accessStatus', 'createdAt', 'updatedAt');",
-          "    pm.expect(user.userId).to.match(/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i);",
-          "    pm.expect(user.role).to.be.oneOf(['STUDENT', 'TUTOR', 'ADMINISTRATOR']);",
-          "    pm.expect(user.accessStatus).to.be.oneOf(['ACTIVE', 'SUSPENDED']);",
-          "    ['createdAt', 'updatedAt'].forEach(function (key) {",
+          "    pm.expect(user).to.have.all.keys('user_id', 'lms_role', 'access_status', 'created_at', 'updated_at', 'full_name', 'email', 'last_login_at');",
+          "    pm.expect(user.user_id).to.match(/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i);",
+          "    pm.expect(user.lms_role).to.be.oneOf(['STUDENT', 'TUTOR', 'ADMINISTRATOR']);",
+          "    pm.expect(user.access_status).to.be.oneOf(['ACTIVE', 'SUSPENDED']);",
+          "    ['created_at', 'updated_at'].forEach(function (key) {",
           "        pm.expect(user[key]).to.be.a('string');",
           "        pm.expect(Number.isFinite(Date.parse(user[key]))).to.eql(true);",
           "    });",
@@ -63,19 +63,19 @@
           "if (pm.response.code === 200) {",
           "    pm.test('Successful response schema', function () {",
           "        const body = pm.response.json();",
-          "        if (pm.request.method === 'GET') {",
-          "            pm.expect(body).to.have.all.keys('content', 'page', 'size', 'totalElements', 'totalPages', 'last');",
-          "            pm.expect(body.content).to.be.an('array');",
-          "            ['page', 'size', 'totalElements', 'totalPages'].forEach(function (key) {",
+          "        if (pm.request.method === 'GET' && Array.isArray(body.items)) {",
+          "            pm.expect(body).to.have.all.keys('items', 'page', 'size', 'total_items', 'total_pages', 'last');",
+          "            pm.expect(body.items).to.be.an('array');",
+          "            ['page', 'size', 'total_items', 'total_pages'].forEach(function (key) {",
           "                pm.expect(Number.isInteger(body[key])).to.eql(true);",
-          "                pm.expect(body[key]).to.be.at.least(key === 'size' ? 1 : 0);",
+          "                pm.expect(body[key]).to.be.at.least((key === 'size' || key === 'page') ? 1 : 0);",
           "            });",
           "            pm.expect(body.last).to.be.a('boolean');",
-          "            pm.expect(body.content.length).to.be.at.most(body.size);",
-          "            pm.expect(body.totalElements).to.be.at.least(body.content.length);",
-          "            pm.expect(body.totalPages).to.eql(Math.ceil(body.totalElements / body.size));",
-          "            pm.expect(body.last).to.eql(body.page + 1 >= body.totalPages);",
-          "            body.content.forEach(assertUser);",
+          "            pm.expect(body.items.length).to.be.at.most(body.size);",
+          "            pm.expect(body.total_items).to.be.at.least(body.items.length);",
+          "            pm.expect(body.total_pages).to.eql(Math.ceil(body.total_items / body.size));",
+          "            pm.expect(body.last).to.eql(body.page >= body.total_pages);",
+          "            body.items.forEach(assertUser);",
           "        } else {",
           "            assertUser(body);",
           "        }",
@@ -95,7 +95,7 @@
   ],
   "item": [
     {
-      "name": "1. GET /api/admin/users",
+      "name": "1. GET /api/v1/admin/users",
       "description": "Listing, search, filters, pagination and authorization.",
       "item": [
         {
@@ -110,12 +110,12 @@
                   "",
                   "",
                   "",
-                  "pm.test('Page 0 with size 20 and newest users first', function () {",
+                  "pm.test('Page 1 with size 20 and newest users first', function () {",
                   "    const body = pm.response.json();",
-                  "    pm.expect(body.page).to.eql(0);",
+                  "    pm.expect(body.page).to.eql(1);",
                   "    pm.expect(body.size).to.eql(20);",
-                  "    for (let i = 1; i < body.content.length; i++) {",
-                  "        pm.expect(Date.parse(body.content[i - 1].createdAt)).to.be.at.least(Date.parse(body.content[i].createdAt));",
+                  "    for (let i = 1; i < body.items.length; i++) {",
+                  "        pm.expect(Date.parse(body.items[i - 1].created_at)).to.be.at.least(Date.parse(body.items[i].created_at));",
                   "    }",
                   "});"
                 ]
@@ -131,17 +131,18 @@
               }
             ],
             "url": {
-              "raw": "{{baseUrl}}/api/admin/users",
+              "raw": "{{baseUrl}}/api/v1/admin/users",
               "host": [
                 "{{baseUrl}}"
               ],
               "path": [
                 "api",
+                "v1",
                 "admin",
                 "users"
               ]
             },
-            "description": "Expect page 0, size 20 and createdAt descending."
+            "description": "Expect page 1, size 20 and created_at descending."
           },
           "response": []
         },
@@ -157,12 +158,12 @@
                   "",
                   "",
                   "",
-                  "pm.test('Page 0 with size 20 and newest users first', function () {",
+                  "pm.test('Page 1 with size 20 and newest users first', function () {",
                   "    const body = pm.response.json();",
-                  "    pm.expect(body.page).to.eql(0);",
+                  "    pm.expect(body.page).to.eql(1);",
                   "    pm.expect(body.size).to.eql(20);",
-                  "    for (let i = 1; i < body.content.length; i++) {",
-                  "        pm.expect(Date.parse(body.content[i - 1].createdAt)).to.be.at.least(Date.parse(body.content[i].createdAt));",
+                  "    for (let i = 1; i < body.items.length; i++) {",
+                  "        pm.expect(Date.parse(body.items[i - 1].created_at)).to.be.at.least(Date.parse(body.items[i].created_at));",
                   "    }",
                   "});"
                 ]
@@ -178,12 +179,13 @@
               }
             ],
             "url": {
-              "raw": "{{baseUrl}}/api/admin/users?q=example.test",
+              "raw": "{{baseUrl}}/api/v1/admin/users?q=example.test",
               "host": [
                 "{{baseUrl}}"
               ],
               "path": [
                 "api",
+                "v1",
                 "admin",
                 "users"
               ],
@@ -210,19 +212,19 @@
                   "",
                   "",
                   "",
-                  "pm.test('Page 0 with size 20 and newest users first', function () {",
+                  "pm.test('Page 1 with size 20 and newest users first', function () {",
                   "    const body = pm.response.json();",
-                  "    pm.expect(body.page).to.eql(0);",
+                  "    pm.expect(body.page).to.eql(1);",
                   "    pm.expect(body.size).to.eql(20);",
-                  "    for (let i = 1; i < body.content.length; i++) {",
-                  "        pm.expect(Date.parse(body.content[i - 1].createdAt)).to.be.at.least(Date.parse(body.content[i].createdAt));",
+                  "    for (let i = 1; i < body.items.length; i++) {",
+                  "        pm.expect(Date.parse(body.items[i - 1].created_at)).to.be.at.least(Date.parse(body.items[i].created_at));",
                   "    }",
                   "});",
                   "pm.test('Exactly the target user is found', function () {",
                   "    const body = pm.response.json();",
-                  "    pm.expect(body.totalElements).to.eql(1);",
-                  "    pm.expect(body.content).to.have.lengthOf(1);",
-                  "    pm.expect(body.content[0].userId.toLowerCase()).to.eql(pm.variables.get('target_user_id').toLowerCase());",
+                  "    pm.expect(body.total_items).to.eql(1);",
+                  "    pm.expect(body.items).to.have.lengthOf(1);",
+                  "    pm.expect(body.items[0].user_id.toLowerCase()).to.eql(pm.variables.get('target_user_id').toLowerCase());",
                   "});"
                 ]
               }
@@ -237,12 +239,13 @@
               }
             ],
             "url": {
-              "raw": "{{baseUrl}}/api/admin/users?q={{target_user_id}}",
+              "raw": "{{baseUrl}}/api/v1/admin/users?q={{target_user_id}}",
               "host": [
                 "{{baseUrl}}"
               ],
               "path": [
                 "api",
+                "v1",
                 "admin",
                 "users"
               ],
@@ -253,7 +256,7 @@
                 }
               ]
             },
-            "description": "A canonical UUID also searches userId exactly. Requires the existing target fixture."
+            "description": "A canonical UUID also searches user_id exactly. Requires the existing target fixture."
           },
           "response": []
         },
@@ -269,16 +272,16 @@
                   "",
                   "",
                   "",
-                  "pm.test('Page 0 with size 20 and newest users first', function () {",
+                  "pm.test('Page 1 with size 20 and newest users first', function () {",
                   "    const body = pm.response.json();",
-                  "    pm.expect(body.page).to.eql(0);",
+                  "    pm.expect(body.page).to.eql(1);",
                   "    pm.expect(body.size).to.eql(20);",
-                  "    for (let i = 1; i < body.content.length; i++) {",
-                  "        pm.expect(Date.parse(body.content[i - 1].createdAt)).to.be.at.least(Date.parse(body.content[i].createdAt));",
+                  "    for (let i = 1; i < body.items.length; i++) {",
+                  "        pm.expect(Date.parse(body.items[i - 1].created_at)).to.be.at.least(Date.parse(body.items[i].created_at));",
                   "    }",
                   "});",
                   "pm.test('Every returned role is STUDENT', function () {",
-                  "    pm.response.json().content.forEach(function (user) { pm.expect(user.role).to.eql('STUDENT'); });",
+                  "    pm.response.json().items.forEach(function (user) { pm.expect(user.lms_role).to.eql('STUDENT'); });",
                   "});"
                 ]
               }
@@ -293,18 +296,19 @@
               }
             ],
             "url": {
-              "raw": "{{baseUrl}}/api/admin/users?role=STUDENT",
+              "raw": "{{baseUrl}}/api/v1/admin/users?lms_role=STUDENT",
               "host": [
                 "{{baseUrl}}"
               ],
               "path": [
                 "api",
+                "v1",
                 "admin",
                 "users"
               ],
               "query": [
                 {
-                  "key": "role",
+                  "key": "lms_role",
                   "value": "STUDENT"
                 }
               ]
@@ -325,16 +329,16 @@
                   "",
                   "",
                   "",
-                  "pm.test('Page 0 with size 20 and newest users first', function () {",
+                  "pm.test('Page 1 with size 20 and newest users first', function () {",
                   "    const body = pm.response.json();",
-                  "    pm.expect(body.page).to.eql(0);",
+                  "    pm.expect(body.page).to.eql(1);",
                   "    pm.expect(body.size).to.eql(20);",
-                  "    for (let i = 1; i < body.content.length; i++) {",
-                  "        pm.expect(Date.parse(body.content[i - 1].createdAt)).to.be.at.least(Date.parse(body.content[i].createdAt));",
+                  "    for (let i = 1; i < body.items.length; i++) {",
+                  "        pm.expect(Date.parse(body.items[i - 1].created_at)).to.be.at.least(Date.parse(body.items[i].created_at));",
                   "    }",
                   "});",
                   "pm.test('Every returned role is TUTOR', function () {",
-                  "    pm.response.json().content.forEach(function (user) { pm.expect(user.role).to.eql('TUTOR'); });",
+                  "    pm.response.json().items.forEach(function (user) { pm.expect(user.lms_role).to.eql('TUTOR'); });",
                   "});"
                 ]
               }
@@ -349,18 +353,19 @@
               }
             ],
             "url": {
-              "raw": "{{baseUrl}}/api/admin/users?role=TUTOR",
+              "raw": "{{baseUrl}}/api/v1/admin/users?lms_role=TUTOR",
               "host": [
                 "{{baseUrl}}"
               ],
               "path": [
                 "api",
+                "v1",
                 "admin",
                 "users"
               ],
               "query": [
                 {
-                  "key": "role",
+                  "key": "lms_role",
                   "value": "TUTOR"
                 }
               ]
@@ -381,16 +386,16 @@
                   "",
                   "",
                   "",
-                  "pm.test('Page 0 with size 20 and newest users first', function () {",
+                  "pm.test('Page 1 with size 20 and newest users first', function () {",
                   "    const body = pm.response.json();",
-                  "    pm.expect(body.page).to.eql(0);",
+                  "    pm.expect(body.page).to.eql(1);",
                   "    pm.expect(body.size).to.eql(20);",
-                  "    for (let i = 1; i < body.content.length; i++) {",
-                  "        pm.expect(Date.parse(body.content[i - 1].createdAt)).to.be.at.least(Date.parse(body.content[i].createdAt));",
+                  "    for (let i = 1; i < body.items.length; i++) {",
+                  "        pm.expect(Date.parse(body.items[i - 1].created_at)).to.be.at.least(Date.parse(body.items[i].created_at));",
                   "    }",
                   "});",
                   "pm.test('Every returned role is ADMINISTRATOR', function () {",
-                  "    pm.response.json().content.forEach(function (user) { pm.expect(user.role).to.eql('ADMINISTRATOR'); });",
+                  "    pm.response.json().items.forEach(function (user) { pm.expect(user.lms_role).to.eql('ADMINISTRATOR'); });",
                   "});"
                 ]
               }
@@ -405,18 +410,19 @@
               }
             ],
             "url": {
-              "raw": "{{baseUrl}}/api/admin/users?role=ADMINISTRATOR",
+              "raw": "{{baseUrl}}/api/v1/admin/users?lms_role=ADMINISTRATOR",
               "host": [
                 "{{baseUrl}}"
               ],
               "path": [
                 "api",
+                "v1",
                 "admin",
                 "users"
               ],
               "query": [
                 {
-                  "key": "role",
+                  "key": "lms_role",
                   "value": "ADMINISTRATOR"
                 }
               ]
@@ -437,16 +443,16 @@
                   "",
                   "",
                   "",
-                  "pm.test('Page 0 with size 20 and newest users first', function () {",
+                  "pm.test('Page 1 with size 20 and newest users first', function () {",
                   "    const body = pm.response.json();",
-                  "    pm.expect(body.page).to.eql(0);",
+                  "    pm.expect(body.page).to.eql(1);",
                   "    pm.expect(body.size).to.eql(20);",
-                  "    for (let i = 1; i < body.content.length; i++) {",
-                  "        pm.expect(Date.parse(body.content[i - 1].createdAt)).to.be.at.least(Date.parse(body.content[i].createdAt));",
+                  "    for (let i = 1; i < body.items.length; i++) {",
+                  "        pm.expect(Date.parse(body.items[i - 1].created_at)).to.be.at.least(Date.parse(body.items[i].created_at));",
                   "    }",
                   "});",
                   "pm.test('Every returned access status is ACTIVE', function () {",
-                  "    pm.response.json().content.forEach(function (user) { pm.expect(user.accessStatus).to.eql('ACTIVE'); });",
+                  "    pm.response.json().items.forEach(function (user) { pm.expect(user.access_status).to.eql('ACTIVE'); });",
                   "});"
                 ]
               }
@@ -461,23 +467,24 @@
               }
             ],
             "url": {
-              "raw": "{{baseUrl}}/api/admin/users?status=ACTIVE",
+              "raw": "{{baseUrl}}/api/v1/admin/users?access_status=ACTIVE",
               "host": [
                 "{{baseUrl}}"
               ],
               "path": [
                 "api",
+                "v1",
                 "admin",
                 "users"
               ],
               "query": [
                 {
-                  "key": "status",
+                  "key": "access_status",
                   "value": "ACTIVE"
                 }
               ]
             },
-            "description": "Only ACTIVE access records should be returned. Query parameter is status, unlike PATCH accessStatus."
+            "description": "Only ACTIVE access records should be returned. Query and PATCH both use access_status."
           },
           "response": []
         },
@@ -493,16 +500,16 @@
                   "",
                   "",
                   "",
-                  "pm.test('Page 0 with size 20 and newest users first', function () {",
+                  "pm.test('Page 1 with size 20 and newest users first', function () {",
                   "    const body = pm.response.json();",
-                  "    pm.expect(body.page).to.eql(0);",
+                  "    pm.expect(body.page).to.eql(1);",
                   "    pm.expect(body.size).to.eql(20);",
-                  "    for (let i = 1; i < body.content.length; i++) {",
-                  "        pm.expect(Date.parse(body.content[i - 1].createdAt)).to.be.at.least(Date.parse(body.content[i].createdAt));",
+                  "    for (let i = 1; i < body.items.length; i++) {",
+                  "        pm.expect(Date.parse(body.items[i - 1].created_at)).to.be.at.least(Date.parse(body.items[i].created_at));",
                   "    }",
                   "});",
                   "pm.test('Every returned access status is SUSPENDED', function () {",
-                  "    pm.response.json().content.forEach(function (user) { pm.expect(user.accessStatus).to.eql('SUSPENDED'); });",
+                  "    pm.response.json().items.forEach(function (user) { pm.expect(user.access_status).to.eql('SUSPENDED'); });",
                   "});"
                 ]
               }
@@ -517,28 +524,29 @@
               }
             ],
             "url": {
-              "raw": "{{baseUrl}}/api/admin/users?status=SUSPENDED",
+              "raw": "{{baseUrl}}/api/v1/admin/users?access_status=SUSPENDED",
               "host": [
                 "{{baseUrl}}"
               ],
               "path": [
                 "api",
+                "v1",
                 "admin",
                 "users"
               ],
               "query": [
                 {
-                  "key": "status",
+                  "key": "access_status",
                   "value": "SUSPENDED"
                 }
               ]
             },
-            "description": "Only SUSPENDED access records should be returned. Query parameter is status, unlike PATCH accessStatus."
+            "description": "Only SUSPENDED access records should be returned. Query and PATCH both use access_status."
           },
           "response": []
         },
         {
-          "name": "1.5 Pagination - page 0, size 5, newest first",
+          "name": "1.5 Pagination - page 1, size 5, newest first",
           "event": [
             {
               "listen": "test",
@@ -549,12 +557,12 @@
                   "",
                   "",
                   "",
-                  "pm.test('Page 0 with size 5 and newest users first', function () {",
+                  "pm.test('Page 1 with size 5 and newest users first', function () {",
                   "    const body = pm.response.json();",
-                  "    pm.expect(body.page).to.eql(0);",
+                  "    pm.expect(body.page).to.eql(1);",
                   "    pm.expect(body.size).to.eql(5);",
-                  "    for (let i = 1; i < body.content.length; i++) {",
-                  "        pm.expect(Date.parse(body.content[i - 1].createdAt)).to.be.at.least(Date.parse(body.content[i].createdAt));",
+                  "    for (let i = 1; i < body.items.length; i++) {",
+                  "        pm.expect(Date.parse(body.items[i - 1].created_at)).to.be.at.least(Date.parse(body.items[i].created_at));",
                   "    }",
                   "});"
                 ]
@@ -570,19 +578,20 @@
               }
             ],
             "url": {
-              "raw": "{{baseUrl}}/api/admin/users?page=0&size=5&sort=createdAt,desc",
+              "raw": "{{baseUrl}}/api/v1/admin/users?page=1&size=5&sort=created_at,desc",
               "host": [
                 "{{baseUrl}}"
               ],
               "path": [
                 "api",
+                "v1",
                 "admin",
                 "users"
               ],
               "query": [
                 {
                   "key": "page",
-                  "value": "0"
+                  "value": "1"
                 },
                 {
                   "key": "size",
@@ -590,11 +599,11 @@
                 },
                 {
                   "key": "sort",
-                  "value": "createdAt,desc"
+                  "value": "created_at,desc"
                 }
               ]
             },
-            "description": "Explicit page=0, size=5, sort=createdAt,desc. At most five users are returned, with matching page totals."
+            "description": "Explicit page=1, size=5, sort=created_at,desc. At most five users are returned, with matching page totals."
           },
           "response": []
         },
@@ -628,12 +637,13 @@
               }
             ],
             "url": {
-              "raw": "{{baseUrl}}/api/admin/users",
+              "raw": "{{baseUrl}}/api/v1/admin/users",
               "host": [
                 "{{baseUrl}}"
               ],
               "path": [
                 "api",
+                "v1",
                 "admin",
                 "users"
               ]
@@ -675,12 +685,13 @@
               }
             ],
             "url": {
-              "raw": "{{baseUrl}}/api/admin/users",
+              "raw": "{{baseUrl}}/api/v1/admin/users",
               "host": [
                 "{{baseUrl}}"
               ],
               "path": [
                 "api",
+                "v1",
                 "admin",
                 "users"
               ]
@@ -702,7 +713,7 @@
       ]
     },
     {
-      "name": "2. PATCH /api/admin/users/{userId}",
+      "name": "2. PATCH /api/v1/admin/users/{user_id}",
       "description": "Run in order using disposable fixtures. Collection Bearer auth uses admin_jwt except the explicit student request.",
       "item": [
         {
@@ -719,8 +730,8 @@
                   "",
                   "pm.test('Target UUID and requested access values', function () {",
                   "    const body = pm.response.json();",
-                  "    pm.expect(body.userId.toLowerCase()).to.eql(pm.variables.get('target_user_id').toLowerCase());",
-                  "    pm.expect(body.role).to.eql(\"TUTOR\");",
+                  "    pm.expect(body.user_id.toLowerCase()).to.eql(pm.variables.get('target_user_id').toLowerCase());",
+                  "    pm.expect(body.lms_role).to.eql(\"TUTOR\");",
                   "});"
                 ]
               }
@@ -739,21 +750,22 @@
               }
             ],
             "url": {
-              "raw": "{{baseUrl}}/api/admin/users/{{target_user_id}}",
+              "raw": "{{baseUrl}}/api/v1/admin/users/{{target_user_id}}",
               "host": [
                 "{{baseUrl}}"
               ],
               "path": [
                 "api",
+                "v1",
                 "admin",
                 "users",
                 "{{target_user_id}}"
               ]
             },
-            "description": "Assign the disposable target TUTOR. Omitted accessStatus preserves the current status.",
+            "description": "Assign the disposable target TUTOR. Omitted access_status preserves the current status.",
             "body": {
               "mode": "raw",
-              "raw": "{\n  \"role\": \"TUTOR\"\n}",
+              "raw": "{\n  \"lms_role\": \"TUTOR\"\n}",
               "options": {
                 "raw": {
                   "language": "json"
@@ -777,9 +789,9 @@
                   "",
                   "pm.test('Target UUID and requested access values', function () {",
                   "    const body = pm.response.json();",
-                  "    pm.expect(body.userId.toLowerCase()).to.eql(pm.variables.get('target_user_id').toLowerCase());",
-                  "    pm.expect(body.role).to.eql(\"TUTOR\");",
-                  "    pm.expect(body.accessStatus).to.eql(\"SUSPENDED\");",
+                  "    pm.expect(body.user_id.toLowerCase()).to.eql(pm.variables.get('target_user_id').toLowerCase());",
+                  "    pm.expect(body.lms_role).to.eql(\"TUTOR\");",
+                  "    pm.expect(body.access_status).to.eql(\"SUSPENDED\");",
                   "});"
                 ]
               }
@@ -798,21 +810,22 @@
               }
             ],
             "url": {
-              "raw": "{{baseUrl}}/api/admin/users/{{target_user_id}}",
+              "raw": "{{baseUrl}}/api/v1/admin/users/{{target_user_id}}",
               "host": [
                 "{{baseUrl}}"
               ],
               "path": [
                 "api",
+                "v1",
                 "admin",
                 "users",
                 "{{target_user_id}}"
               ]
             },
-            "description": "After 2.1, suspend the target while retaining TUTOR. Body property is accessStatus.",
+            "description": "After 2.1, suspend the target while retaining TUTOR. Body property is access_status.",
             "body": {
               "mode": "raw",
-              "raw": "{\n  \"accessStatus\": \"SUSPENDED\"\n}",
+              "raw": "{\n  \"access_status\": \"SUSPENDED\"\n}",
               "options": {
                 "raw": {
                   "language": "json"
@@ -836,9 +849,9 @@
                   "",
                   "pm.test('Target UUID and requested access values', function () {",
                   "    const body = pm.response.json();",
-                  "    pm.expect(body.userId.toLowerCase()).to.eql(pm.variables.get('target_user_id').toLowerCase());",
-                  "    pm.expect(body.role).to.eql(\"TUTOR\");",
-                  "    pm.expect(body.accessStatus).to.eql(\"ACTIVE\");",
+                  "    pm.expect(body.user_id.toLowerCase()).to.eql(pm.variables.get('target_user_id').toLowerCase());",
+                  "    pm.expect(body.lms_role).to.eql(\"TUTOR\");",
+                  "    pm.expect(body.access_status).to.eql(\"ACTIVE\");",
                   "});"
                 ]
               }
@@ -857,12 +870,13 @@
               }
             ],
             "url": {
-              "raw": "{{baseUrl}}/api/admin/users/{{target_user_id}}",
+              "raw": "{{baseUrl}}/api/v1/admin/users/{{target_user_id}}",
               "host": [
                 "{{baseUrl}}"
               ],
               "path": [
                 "api",
+                "v1",
                 "admin",
                 "users",
                 "{{target_user_id}}"
@@ -871,7 +885,7 @@
             "description": "After 2.2, reactivate the target while retaining TUTOR.",
             "body": {
               "mode": "raw",
-              "raw": "{\n  \"accessStatus\": \"ACTIVE\"\n}",
+              "raw": "{\n  \"access_status\": \"ACTIVE\"\n}",
               "options": {
                 "raw": {
                   "language": "json"
@@ -890,9 +904,9 @@
                 "type": "text/javascript",
                 "exec": [
                   "pm.test('HTTP 404', function () { pm.response.to.have.status(404); });",
-                  "pm.test('USER_NOT_FOUND error envelope', function () {",
+                  "pm.test('LOCAL_USER_NOT_FOUND error envelope', function () {",
                   "    const body = pm.response.json();",
-                  "    pm.expect(body.code).to.eql(\"USER_NOT_FOUND\");",
+                  "    pm.expect(body.code).to.eql(\"LOCAL_USER_NOT_FOUND\");",
                   "    pm.expect(body.message).to.eql(\"User not found\");",
                   "});"
                 ]
@@ -912,12 +926,13 @@
               }
             ],
             "url": {
-              "raw": "{{baseUrl}}/api/admin/users/ffffffff-ffff-4fff-8fff-ffffffffffff",
+              "raw": "{{baseUrl}}/api/v1/admin/users/ffffffff-ffff-4fff-8fff-ffffffffffff",
               "host": [
                 "{{baseUrl}}"
               ],
               "path": [
                 "api",
+                "v1",
                 "admin",
                 "users",
                 "ffffffff-ffff-4fff-8fff-ffffffffffff"
@@ -926,7 +941,7 @@
             "description": "The reserved example UUID must be absent from the disposable database. No record is created.",
             "body": {
               "mode": "raw",
-              "raw": "{\n  \"role\": \"TUTOR\"\n}",
+              "raw": "{\n  \"lms_role\": \"TUTOR\"\n}",
               "options": {
                 "raw": {
                   "language": "json"
@@ -946,7 +961,7 @@
                 "type": "text/javascript",
                 "exec": [
                   "pm.sendRequest({",
-                  "    url: pm.variables.replaceIn('{{baseUrl}}/api/admin/users?role=ADMINISTRATOR&status=ACTIVE&page=0&size=2'),",
+                  "    url: pm.variables.replaceIn('{{baseUrl}}/api/v1/admin/users?lms_role=ADMINISTRATOR&access_status=ACTIVE&page=1&size=2'),",
                   "    method: 'GET',",
                   "    header: { Authorization: pm.variables.replaceIn('Bearer {{admin_jwt}}'), Accept: 'application/json' }",
                   "}, function (error, response) {",
@@ -955,12 +970,12 @@
                   "        pm.expect(error).to.not.exist;",
                   "        pm.expect(response.code).to.eql(200);",
                   "        const page = response.json();",
-                  "        pm.expect(page.totalElements, 'Use a fixture with exactly one ACTIVE ADMINISTRATOR').to.eql(1);",
-                  "        pm.expect(page.content).to.have.lengthOf(1);",
-                  "        pm.expect(page.content[0].role).to.eql('ADMINISTRATOR');",
-                  "        pm.expect(page.content[0].accessStatus).to.eql('ACTIVE');",
-                  "        pm.expect(page.content[0].userId).to.match(/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i);",
-                  "        adminId = page.content[0].userId;",
+                  "        pm.expect(page.total_items, 'Use a fixture with exactly one ACTIVE ADMINISTRATOR').to.eql(1);",
+                  "        pm.expect(page.items).to.have.lengthOf(1);",
+                  "        pm.expect(page.items[0].lms_role).to.eql('ADMINISTRATOR');",
+                  "        pm.expect(page.items[0].access_status).to.eql('ACTIVE');",
+                  "        pm.expect(page.items[0].user_id).to.match(/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i);",
+                  "        adminId = page.items[0].user_id;",
                   "    });",
                   "    if (!adminId) {",
                   "        pm.execution.skipRequest();",
@@ -974,17 +989,17 @@
           ],
           "item": [
             {
-              "name": "2.5a Demote last active administrator - 400",
+              "name": "2.5a Demote last active administrator - 409",
               "event": [
                 {
                   "listen": "test",
                   "script": {
                     "type": "text/javascript",
                     "exec": [
-                      "pm.test('HTTP 400', function () { pm.response.to.have.status(400); });",
-                      "pm.test('LAST_ADMIN_PROTECTION error envelope', function () {",
+                      "pm.test('HTTP 409', function () { pm.response.to.have.status(409); });",
+                      "pm.test('INVALID_ROLE_OR_STATUS_TRANSITION error envelope', function () {",
                       "    const body = pm.response.json();",
-                      "    pm.expect(body.code).to.eql(\"LAST_ADMIN_PROTECTION\");",
+                      "    pm.expect(body.code).to.eql(\"INVALID_ROLE_OR_STATUS_TRANSITION\");",
                       "    pm.expect(body.message).to.eql(\"Cannot demote or suspend the last active administrator\");",
                       "});"
                     ]
@@ -1004,12 +1019,13 @@
                   }
                 ],
                 "url": {
-                  "raw": "{{baseUrl}}/api/admin/users/{{last_active_admin_id}}",
+                  "raw": "{{baseUrl}}/api/v1/admin/users/{{last_active_admin_id}}",
                   "host": [
                     "{{baseUrl}}"
                   ],
                   "path": [
                     "api",
+                    "v1",
                     "admin",
                     "users",
                     "{{last_active_admin_id}}"
@@ -1018,7 +1034,7 @@
                 "description": "Preflight selects the sole active administrator; attempt demotion to STUDENT.",
                 "body": {
                   "mode": "raw",
-                  "raw": "{\n  \"role\": \"STUDENT\"\n}",
+                  "raw": "{\n  \"lms_role\": \"STUDENT\"\n}",
                   "options": {
                     "raw": {
                       "language": "json"
@@ -1029,17 +1045,17 @@
               "response": []
             },
             {
-              "name": "2.5b Suspend last active administrator - 400",
+              "name": "2.5b Suspend last active administrator - 409",
               "event": [
                 {
                   "listen": "test",
                   "script": {
                     "type": "text/javascript",
                     "exec": [
-                      "pm.test('HTTP 400', function () { pm.response.to.have.status(400); });",
-                      "pm.test('LAST_ADMIN_PROTECTION error envelope', function () {",
+                      "pm.test('HTTP 409', function () { pm.response.to.have.status(409); });",
+                      "pm.test('INVALID_ROLE_OR_STATUS_TRANSITION error envelope', function () {",
                       "    const body = pm.response.json();",
-                      "    pm.expect(body.code).to.eql(\"LAST_ADMIN_PROTECTION\");",
+                      "    pm.expect(body.code).to.eql(\"INVALID_ROLE_OR_STATUS_TRANSITION\");",
                       "    pm.expect(body.message).to.eql(\"Cannot demote or suspend the last active administrator\");",
                       "});"
                     ]
@@ -1059,12 +1075,13 @@
                   }
                 ],
                 "url": {
-                  "raw": "{{baseUrl}}/api/admin/users/{{last_active_admin_id}}",
+                  "raw": "{{baseUrl}}/api/v1/admin/users/{{last_active_admin_id}}",
                   "host": [
                     "{{baseUrl}}"
                   ],
                   "path": [
                     "api",
+                    "v1",
                     "admin",
                     "users",
                     "{{last_active_admin_id}}"
@@ -1073,7 +1090,7 @@
                 "description": "Preflight selects the sole active administrator; attempt suspension.",
                 "body": {
                   "mode": "raw",
-                  "raw": "{\n  \"accessStatus\": \"SUSPENDED\"\n}",
+                  "raw": "{\n  \"access_status\": \"SUSPENDED\"\n}",
                   "options": {
                     "raw": {
                       "language": "json"
@@ -1120,12 +1137,13 @@
                   }
                 ],
                 "url": {
-                  "raw": "{{baseUrl}}/api/admin/users/{{target_user_id}}",
+                  "raw": "{{baseUrl}}/api/v1/admin/users/{{target_user_id}}",
                   "host": [
                     "{{baseUrl}}"
                   ],
                   "path": [
                     "api",
+                    "v1",
                     "admin",
                     "users",
                     "{{target_user_id}}"
@@ -1175,12 +1193,13 @@
                   }
                 ],
                 "url": {
-                  "raw": "{{baseUrl}}/api/admin/users/{{target_user_id}}",
+                  "raw": "{{baseUrl}}/api/v1/admin/users/{{target_user_id}}",
                   "host": [
                     "{{baseUrl}}"
                   ],
                   "path": [
                     "api",
+                    "v1",
                     "admin",
                     "users",
                     "{{target_user_id}}"
@@ -1208,10 +1227,10 @@
                     "type": "text/javascript",
                     "exec": [
                       "pm.test('HTTP 400', function () { pm.response.to.have.status(400); });",
-                      "pm.test('BAD_REQUEST error envelope', function () {",
+                      "pm.test('VALIDATION_ERROR error envelope', function () {",
                       "    const body = pm.response.json();",
-                      "    pm.expect(body.code).to.eql(\"BAD_REQUEST\");",
-                      "    pm.expect(body.message).to.eql(\"Bad Request\");",
+                      "    pm.expect(body.code).to.eql(\"VALIDATION_ERROR\");",
+                      "    pm.expect(body.message).to.eql(\"Validation failed\");",
                       "});"
                     ]
                   }
@@ -1230,12 +1249,13 @@
                   }
                 ],
                 "url": {
-                  "raw": "{{baseUrl}}/api/admin/users/{{target_user_id}}",
+                  "raw": "{{baseUrl}}/api/v1/admin/users/{{target_user_id}}",
                   "host": [
                     "{{baseUrl}}"
                   ],
                   "path": [
                     "api",
+                    "v1",
                     "admin",
                     "users",
                     "{{target_user_id}}"
@@ -1244,7 +1264,7 @@
                 "description": "OWNER is not an allowed LMS role.",
                 "body": {
                   "mode": "raw",
-                  "raw": "{\"role\":\"OWNER\"}",
+                  "raw": "{\"lms_role\":\"OWNER\"}",
                   "options": {
                     "raw": {
                       "language": "json"
@@ -1255,7 +1275,7 @@
               "response": []
             },
             {
-              "name": "2.6d Invalid accessStatus enum - 400",
+              "name": "2.6d Invalid access_status enum - 400",
               "event": [
                 {
                   "listen": "test",
@@ -1263,10 +1283,10 @@
                     "type": "text/javascript",
                     "exec": [
                       "pm.test('HTTP 400', function () { pm.response.to.have.status(400); });",
-                      "pm.test('BAD_REQUEST error envelope', function () {",
+                      "pm.test('VALIDATION_ERROR error envelope', function () {",
                       "    const body = pm.response.json();",
-                      "    pm.expect(body.code).to.eql(\"BAD_REQUEST\");",
-                      "    pm.expect(body.message).to.eql(\"Bad Request\");",
+                      "    pm.expect(body.code).to.eql(\"VALIDATION_ERROR\");",
+                      "    pm.expect(body.message).to.eql(\"Validation failed\");",
                       "});"
                     ]
                   }
@@ -1285,12 +1305,13 @@
                   }
                 ],
                 "url": {
-                  "raw": "{{baseUrl}}/api/admin/users/{{target_user_id}}",
+                  "raw": "{{baseUrl}}/api/v1/admin/users/{{target_user_id}}",
                   "host": [
                     "{{baseUrl}}"
                   ],
                   "path": [
                     "api",
+                    "v1",
                     "admin",
                     "users",
                     "{{target_user_id}}"
@@ -1299,7 +1320,7 @@
                 "description": "DELETED is not an allowed access status.",
                 "body": {
                   "mode": "raw",
-                  "raw": "{\"accessStatus\":\"DELETED\"}",
+                  "raw": "{\"access_status\":\"DELETED\"}",
                   "options": {
                     "raw": {
                       "language": "json"
@@ -1340,12 +1361,13 @@
                   }
                 ],
                 "url": {
-                  "raw": "{{baseUrl}}/api/admin/users/{{target_user_id}}",
+                  "raw": "{{baseUrl}}/api/v1/admin/users/{{target_user_id}}",
                   "host": [
                     "{{baseUrl}}"
                   ],
                   "path": [
                     "api",
+                    "v1",
                     "admin",
                     "users",
                     "{{target_user_id}}"
@@ -1400,12 +1422,13 @@
               }
             ],
             "url": {
-              "raw": "{{baseUrl}}/api/admin/users/{{target_user_id}}",
+              "raw": "{{baseUrl}}/api/v1/admin/users/{{target_user_id}}",
               "host": [
                 "{{baseUrl}}"
               ],
               "path": [
                 "api",
+                "v1",
                 "admin",
                 "users",
                 "{{target_user_id}}"
@@ -1424,7 +1447,7 @@
             },
             "body": {
               "mode": "raw",
-              "raw": "{\n  \"role\": \"TUTOR\"\n}",
+              "raw": "{\n  \"lms_role\": \"TUTOR\"\n}",
               "options": {
                 "raw": {
                   "language": "json"
@@ -1452,9 +1475,9 @@
                       "",
                       "pm.test('Target UUID and requested access values', function () {",
                       "    const body = pm.response.json();",
-                      "    pm.expect(body.userId.toLowerCase()).to.eql(pm.variables.get('target_user_id').toLowerCase());",
-                      "    pm.expect(body.role).to.eql(\"TUTOR\");",
-                      "    pm.expect(body.accessStatus).to.eql(\"ACTIVE\");",
+                      "    pm.expect(body.user_id.toLowerCase()).to.eql(pm.variables.get('target_user_id').toLowerCase());",
+                      "    pm.expect(body.lms_role).to.eql(\"TUTOR\");",
+                      "    pm.expect(body.access_status).to.eql(\"ACTIVE\");",
                       "});"
                     ]
                   }
@@ -1473,12 +1496,13 @@
                   }
                 ],
                 "url": {
-                  "raw": "{{baseUrl}}/api/admin/users/{{target_user_id}}",
+                  "raw": "{{baseUrl}}/api/v1/admin/users/{{target_user_id}}",
                   "host": [
                     "{{baseUrl}}"
                   ],
                   "path": [
                     "api",
+                    "v1",
                     "admin",
                     "users",
                     "{{target_user_id}}"
@@ -1511,9 +1535,9 @@
                       "",
                       "pm.test('Target UUID and requested access values', function () {",
                       "    const body = pm.response.json();",
-                      "    pm.expect(body.userId.toLowerCase()).to.eql(pm.variables.get('target_user_id').toLowerCase());",
-                      "    pm.expect(body.role).to.eql(\"TUTOR\");",
-                      "    pm.expect(body.accessStatus).to.eql(\"ACTIVE\");",
+                      "    pm.expect(body.user_id.toLowerCase()).to.eql(pm.variables.get('target_user_id').toLowerCase());",
+                      "    pm.expect(body.lms_role).to.eql(\"TUTOR\");",
+                      "    pm.expect(body.access_status).to.eql(\"ACTIVE\");",
                       "});"
                     ]
                   }
@@ -1532,12 +1556,13 @@
                   }
                 ],
                 "url": {
-                  "raw": "{{baseUrl}}/api/admin/users/{{target_user_id}}",
+                  "raw": "{{baseUrl}}/api/v1/admin/users/{{target_user_id}}",
                   "host": [
                     "{{baseUrl}}"
                   ],
                   "path": [
                     "api",
+                    "v1",
                     "admin",
                     "users",
                     "{{target_user_id}}"
@@ -1546,7 +1571,7 @@
                 "description": "Null fields preserve the existing values.",
                 "body": {
                   "mode": "raw",
-                  "raw": "{\n  \"role\": null,\n  \"accessStatus\": null\n}",
+                  "raw": "{\n  \"lms_role\": null,\n  \"access_status\": null\n}",
                   "options": {
                     "raw": {
                       "language": "json"
@@ -1557,6 +1582,49 @@
               "response": []
             }
           ]
+        }
+      ]
+    },
+    {
+      "name": "3. GET user details",
+      "item": [
+        {
+          "name": "3.1 Retrieve the local user",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Accept",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/admin/users/{{target_user_id}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "admin",
+                "users",
+                "{{target_user_id}}"
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('HTTP 200', function () { pm.response.to.have.status(200); });",
+                  "pm.test('Requested local user', function () { pm.expect(pm.response.json().user_id).to.eql(pm.variables.get('target_user_id')); });"
+                ]
+              }
+            }
+          ],
+          "response": []
         }
       ]
     }

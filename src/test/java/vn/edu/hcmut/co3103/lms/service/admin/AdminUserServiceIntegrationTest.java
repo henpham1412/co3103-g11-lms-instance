@@ -63,6 +63,7 @@ class AdminUserServiceIntegrationTest {
     @AfterEach
     void resetIsolatedSchema() {
         jdbc.execute("DELETE FROM admin_user_service_test.lms_setup_state");
+        jdbc.execute("DELETE FROM admin_user_service_test.audit_logs");
         users.deleteAllInBatch();
         jdbc.execute("INSERT INTO admin_user_service_test.lms_setup_state (id, is_completed) VALUES ('GLOBAL', FALSE)");
     }
@@ -79,8 +80,9 @@ class AdminUserServiceIntegrationTest {
                 PageRequest.of(1, 1, Sort.by("fullName")));
 
         assertThat(page.content()).containsExactly(new AdminUserResponse(second.getUserId(), LmsRole.TUTOR,
-                AccessStatus.ACTIVE, second.getCreatedAt(), second.getUpdatedAt()));
-        assertThat(page.page()).isEqualTo(1);
+                AccessStatus.ACTIVE, second.getCreatedAt(), second.getUpdatedAt(), second.getFullName(),
+                second.getEmail(), second.getLastLoginAt()));
+        assertThat(page.page()).isEqualTo(2);
         assertThat(page.size()).isEqualTo(1);
         assertThat(page.totalElements()).isEqualTo(2);
         assertThat(page.totalPages()).isEqualTo(2);
@@ -117,6 +119,7 @@ class AdminUserServiceIntegrationTest {
         assertThat(stored.getEmail()).isEqualTo(target.getEmail());
         assertThat(stored.getLastLoginAt()).isEqualTo(target.getLastLoginAt());
         assertThat(states.findById("GLOBAL").orElseThrow()).usingRecursiveComparison().isEqualTo(completedSetup);
+        assertThat(auditCount()).isEqualTo(1);
     }
 
     @ParameterizedTest
@@ -132,6 +135,7 @@ class AdminUserServiceIntegrationTest {
 
         assertThat(users.findById(target.getUserId()).orElseThrow()).usingRecursiveComparison().isEqualTo(target);
         assertThat(users.countByLmsRoleAndAccessStatus(LmsRole.ADMINISTRATOR, AccessStatus.ACTIVE)).isEqualTo(1);
+        assertThat(auditCount()).isZero();
     }
 
     @Test
@@ -140,11 +144,12 @@ class AdminUserServiceIntegrationTest {
 
         assertThatThrownBy(() -> new TransactionTemplate(transactions).executeWithoutResult(transaction -> {
             service.updateUserAccess(target.getUserId(),
-                    new UpdateUserAccessRequest(LmsRole.TUTOR, AccessStatus.SUSPENDED), UUID.randomUUID());
+                    new UpdateUserAccessRequest(LmsRole.TUTOR, AccessStatus.SUSPENDED), target.getUserId());
             throw new IllegalStateException("failure after flush");
         })).isInstanceOf(IllegalStateException.class).hasMessage("failure after flush");
 
         assertThat(users.findById(target.getUserId()).orElseThrow()).usingRecursiveComparison().isEqualTo(target);
+        assertThat(auditCount()).isZero();
     }
 
     @ParameterizedTest
@@ -187,6 +192,7 @@ class AdminUserServiceIntegrationTest {
             assertThat(List.of(attempts.get(0).get(15, TimeUnit.SECONDS), attempts.get(1).get(15, TimeUnit.SECONDS)))
                     .containsExactlyInAnyOrder(true, false);
             assertThat(users.countByLmsRoleAndAccessStatus(LmsRole.ADMINISTRATOR, AccessStatus.ACTIVE)).isEqualTo(1);
+            assertThat(auditCount()).isEqualTo(1);
         } finally {
             executor.shutdownNow();
             assertThat(executor.awaitTermination(10, TimeUnit.SECONDS)).isTrue();
@@ -199,5 +205,9 @@ class AdminUserServiceIntegrationTest {
         users.saveAndFlush(new LmsUserAccess(id, name, id + "@example.com", role, status,
                 originalTime, originalTime, originalTime));
         return users.findById(id).orElseThrow();
+    }
+
+    private long auditCount() {
+        return jdbc.queryForObject("SELECT COUNT(*) FROM admin_user_service_test.audit_logs", Long.class);
     }
 }

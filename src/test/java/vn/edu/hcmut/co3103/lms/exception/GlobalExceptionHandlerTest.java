@@ -38,12 +38,12 @@ class GlobalExceptionHandlerTest {
 
     @ParameterizedTest
     @ValueSource(strings = {"application/json", "text/html", "application/json;q=0", "*/*"})
-    void returnsBadRequestForLastAdminProtection(String accept) throws Exception {
+    void returnsConflictForLastAdminProtection(String accept) throws Exception {
         mockMvc.perform(get("/test/admin/last-admin").header("Accept", accept))
-                .andExpect(status().isBadRequest())
+                .andExpect(status().isConflict())
                 .andExpect(content().contentTypeCompatibleWith(MediaType.APPLICATION_JSON))
                 .andExpect(jsonPath("$.length()").value(3))
-                .andExpect(jsonPath("$.code").value("LAST_ADMIN_PROTECTION"))
+                .andExpect(jsonPath("$.code").value("INVALID_ROLE_OR_STATUS_TRANSITION"))
                 .andExpect(jsonPath("$.message").value("The last active administrator cannot be demoted."))
                 .andExpect(jsonPath("$.details").isArray())
                 .andExpect(jsonPath("$.details").isEmpty());
@@ -56,7 +56,7 @@ class GlobalExceptionHandlerTest {
                 .andExpect(status().isNotFound())
                 .andExpect(content().contentTypeCompatibleWith(MediaType.APPLICATION_JSON))
                 .andExpect(jsonPath("$.length()").value(3))
-                .andExpect(jsonPath("$.code").value("USER_NOT_FOUND"))
+                .andExpect(jsonPath("$.code").value("LOCAL_USER_NOT_FOUND"))
                 .andExpect(jsonPath("$.message").value("The requested user was not found."))
                 .andExpect(jsonPath("$.details").isArray())
                 .andExpect(jsonPath("$.details").isEmpty());

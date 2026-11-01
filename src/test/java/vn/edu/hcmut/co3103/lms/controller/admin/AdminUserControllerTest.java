@@ -64,24 +64,24 @@ class AdminUserControllerTest {
     @Test
     void listsUsersWithFiltersAndExplicitPaginationAndSort() throws Exception {
         var pageable = PageRequest.of(1, 2, Sort.by("fullName").ascending());
-        var user = new AdminUserResponse(USER_ID, LmsRole.TUTOR, AccessStatus.ACTIVE, CREATED_AT, UPDATED_AT);
+        var user = new AdminUserResponse(USER_ID, LmsRole.TUTOR, AccessStatus.ACTIVE, CREATED_AT, UPDATED_AT, "Alice", "alice@example.test", CREATED_AT);
         when(service.getUsers(" Alice ", LmsRole.TUTOR, AccessStatus.ACTIVE, pageable))
-                .thenReturn(new AdminUserPageResponse(List.of(user), 1, 2, 3, 2, true));
+                .thenReturn(new AdminUserPageResponse(List.of(user), 2, 2, 3, 2, true));
 
         mockMvc.perform(get(USERS).param("q", " Alice ").param("role", "TUTOR").param("status", "ACTIVE")
-                        .param("page", "1").param("size", "2").param("sort", "fullName,asc"))
+                        .param("page", "2").param("size", "2").param("sort", "fullName,asc"))
                 .andExpect(status().isOk())
                 .andExpect(content().contentTypeCompatibleWith(MediaType.APPLICATION_JSON))
-                .andExpect(jsonPath("$.content.length()").value(1))
-                .andExpect(jsonPath("$.content[0].userId").value(USER_ID.toString()))
-                .andExpect(jsonPath("$.content[0].role").value("TUTOR"))
-                .andExpect(jsonPath("$.content[0].accessStatus").value("ACTIVE"))
-                .andExpect(jsonPath("$.content[0].createdAt").value(CREATED_AT.toString()))
-                .andExpect(jsonPath("$.content[0].updatedAt").value(UPDATED_AT.toString()))
-                .andExpect(jsonPath("$.page").value(1))
+                .andExpect(jsonPath("$.items.length()").value(1))
+                .andExpect(jsonPath("$.items[0].user_id").value(USER_ID.toString()))
+                .andExpect(jsonPath("$.items[0].lms_role").value("TUTOR"))
+                .andExpect(jsonPath("$.items[0].access_status").value("ACTIVE"))
+                .andExpect(jsonPath("$.items[0].created_at").value(CREATED_AT.toString()))
+                .andExpect(jsonPath("$.items[0].updated_at").value(UPDATED_AT.toString()))
+                .andExpect(jsonPath("$.page").value(2))
                 .andExpect(jsonPath("$.size").value(2))
-                .andExpect(jsonPath("$.totalElements").value(3))
-                .andExpect(jsonPath("$.totalPages").value(2))
+                .andExpect(jsonPath("$.total_items").value(3))
+                .andExpect(jsonPath("$.total_pages").value(2))
                 .andExpect(jsonPath("$.last").value(true));
 
         verify(service).getUsers(" Alice ", LmsRole.TUTOR, AccessStatus.ACTIVE, pageable);
@@ -93,7 +93,7 @@ class AdminUserControllerTest {
             throws Exception {
         var pageable = PageRequest.of(0, 20, Sort.by("createdAt").descending());
         when(service.getUsers(query, role, accessStatus, pageable))
-                .thenReturn(new AdminUserPageResponse(List.of(), 0, 20, 0, 0, true));
+                .thenReturn(new AdminUserPageResponse(List.of(), 1, 20, 0, 0, true));
         var request = get(USERS);
         if (query != null) request.param("q", query);
         if (role != null) request.param("role", role.name());
@@ -101,11 +101,11 @@ class AdminUserControllerTest {
 
         mockMvc.perform(request)
                 .andExpect(status().isOk())
-                .andExpect(jsonPath("$.content").isEmpty())
-                .andExpect(jsonPath("$.page").value(0))
+                .andExpect(jsonPath("$.items").isEmpty())
+                .andExpect(jsonPath("$.page").value(1))
                 .andExpect(jsonPath("$.size").value(20))
-                .andExpect(jsonPath("$.totalElements").value(0))
-                .andExpect(jsonPath("$.totalPages").value(0))
+                .andExpect(jsonPath("$.total_items").value(0))
+                .andExpect(jsonPath("$.total_pages").value(0))
                 .andExpect(jsonPath("$.last").value(true));
 
         verify(service).getUsers(query, role, accessStatus, pageable);
@@ -127,19 +127,19 @@ class AdminUserControllerTest {
             throws Exception {
         var request = new UpdateUserAccessRequest(role, accessStatus);
         var response = new AdminUserResponse(USER_ID, role == null ? LmsRole.STUDENT : role,
-                accessStatus == null ? AccessStatus.ACTIVE : accessStatus, CREATED_AT, UPDATED_AT);
+                accessStatus == null ? AccessStatus.ACTIVE : accessStatus, CREATED_AT, UPDATED_AT, "Alice", "alice@example.test", CREATED_AT);
         when(service.updateUserAccess(USER_ID, request, ADMIN_ID)).thenReturn(response);
 
         mockMvc.perform(patch(USERS + "/{userId}", USER_ID).principal(ADMIN)
                         .contentType(MediaType.APPLICATION_JSON).content(body))
                 .andExpect(status().isOk())
                 .andExpect(content().contentTypeCompatibleWith(MediaType.APPLICATION_JSON))
-                .andExpect(jsonPath("$.length()").value(5))
-                .andExpect(jsonPath("$.userId").value(USER_ID.toString()))
-                .andExpect(jsonPath("$.role").value(response.role().name()))
-                .andExpect(jsonPath("$.accessStatus").value(response.accessStatus().name()))
-                .andExpect(jsonPath("$.createdAt").value(CREATED_AT.toString()))
-                .andExpect(jsonPath("$.updatedAt").value(UPDATED_AT.toString()));
+                .andExpect(jsonPath("$.length()").value(8))
+                .andExpect(jsonPath("$.user_id").value(USER_ID.toString()))
+                .andExpect(jsonPath("$.lms_role").value(response.role().name()))
+                .andExpect(jsonPath("$.access_status").value(response.accessStatus().name()))
+                .andExpect(jsonPath("$.created_at").value(CREATED_AT.toString()))
+                .andExpect(jsonPath("$.updated_at").value(UPDATED_AT.toString()));
 
         verify(service).updateUserAccess(USER_ID, request, ADMIN_ID);
     }
@@ -155,7 +155,8 @@ class AdminUserControllerTest {
         mockMvc.perform(patch(USERS + "/{userId}", USER_ID).principal(ADMIN)
                         .contentType(MediaType.APPLICATION_JSON).content(body))
                 .andExpect(status().isBadRequest())
-                .andExpect(errorEnvelope("BAD_REQUEST", "Bad Request"));
+                .andExpect(errorEnvelope(body.startsWith("{\"") ? "VALIDATION_ERROR" : "BAD_REQUEST",
+                        body.startsWith("{\"") ? "Validation failed" : "Bad Request"));
 
         verifyNoInteractions(service);
     }
@@ -182,7 +183,7 @@ class AdminUserControllerTest {
         var request = new UpdateUserAccessRequest(LmsRole.TUTOR, null);
         when(service.updateUserAccess(USER_ID, request, ADMIN_ID))
                 .thenReturn(new AdminUserResponse(USER_ID, LmsRole.TUTOR, AccessStatus.ACTIVE,
-                        CREATED_AT, UPDATED_AT));
+                        CREATED_AT, UPDATED_AT, "Alice", "alice@example.test", CREATED_AT));
 
         mockMvc.perform(patch(USERS + "/{userId}", USER_ID).principal(ADMIN)
                         .header("Accept", accept)
@@ -198,7 +199,7 @@ class AdminUserControllerTest {
     void rejectsInvalidFilters(String parameter, String value) throws Exception {
         mockMvc.perform(get(USERS).param(parameter, value))
                 .andExpect(status().isBadRequest())
-                .andExpect(errorEnvelope("BAD_REQUEST", "Bad Request"));
+                .andExpect(errorEnvelope("VALIDATION_ERROR", "Validation failed"));
 
         verifyNoInteractions(service);
     }
@@ -221,19 +222,19 @@ class AdminUserControllerTest {
         mockMvc.perform(patch(USERS + "/{userId}", USER_ID).principal(ADMIN)
                         .contentType(MediaType.APPLICATION_JSON).content("{\"role\":\"TUTOR\"}"))
                 .andExpect(status().isNotFound())
-                .andExpect(errorEnvelope("USER_NOT_FOUND", "User not found"));
+                .andExpect(errorEnvelope("LOCAL_USER_NOT_FOUND", "User not found"));
     }
 
     @Test
-    void returnsBadRequestWhenTheLastAdminIsProtected() throws Exception {
+    void returnsConflictWhenTheLastAdminIsProtected() throws Exception {
         String message = "Cannot demote or suspend the last active administrator";
         when(service.updateUserAccess(ADMIN_ID, new UpdateUserAccessRequest(null, AccessStatus.SUSPENDED), ADMIN_ID))
                 .thenThrow(new LastAdminProtectionException(message));
 
         mockMvc.perform(patch(USERS + "/{userId}", ADMIN_ID).principal(ADMIN)
                         .contentType(MediaType.APPLICATION_JSON).content("{\"accessStatus\":\"SUSPENDED\"}"))
-                .andExpect(status().isBadRequest())
-                .andExpect(errorEnvelope("LAST_ADMIN_PROTECTION", message));
+                .andExpect(status().isConflict())
+                .andExpect(errorEnvelope("INVALID_ROLE_OR_STATUS_TRANSITION", message));
     }
 
     private static ResultMatcher errorEnvelope(String code, String message) {
@@ -245,5 +246,35 @@ class AdminUserControllerTest {
             jsonPath("$.details").isArray().match(result);
             jsonPath("$.details").isEmpty().match(result);
         };
+    }
+
+    @ParameterizedTest
+    @CsvSource({"page,-1", "page,0", "page,abc", "page,2147483648", "page,1.5", "page,''",
+            "size,-1", "size,0", "size,abc", "size,2147483648", "size,1.5", "size,''"})
+    void invalidPaginationIsRejectedBeforeQuery(String parameter, String value) throws Exception {
+        mockMvc.perform(get("/api/v1/admin/users").param(parameter, value))
+                .andExpect(status().isBadRequest())
+                .andExpect(errorEnvelope("BAD_REQUEST", "Bad Request"));
+        verifyNoInteractions(service);
+    }
+
+    @Test
+    void overflowingOffsetIsRejectedBeforeQuery() throws Exception {
+        mockMvc.perform(get("/api/v1/admin/users").param("page", "2147483647").param("size", "2"))
+                .andExpect(status().isBadRequest())
+                .andExpect(errorEnvelope("BAD_REQUEST", "Bad Request"));
+        verifyNoInteractions(service);
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {"application/json;q=0", "application/json;q=0, */*;q=1",
+            "application/json;charset=ISO-8859-1", "application/problem+json"})
+    void getEndpointsRejectUnacceptableResponsesBeforeQuery(String accept) throws Exception {
+        for (String path : List.of("/api/v1/admin/users", "/api/v1/admin/users/" + USER_ID)) {
+            mockMvc.perform(get(path).header("Accept", accept))
+                    .andExpect(status().isNotAcceptable())
+                    .andExpect(errorEnvelope("NOT_ACCEPTABLE", "Not Acceptable"));
+        }
+        verifyNoInteractions(service);
     }
 }
