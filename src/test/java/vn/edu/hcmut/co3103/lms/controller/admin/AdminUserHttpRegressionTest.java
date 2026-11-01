@@ -254,6 +254,47 @@ class AdminUserHttpRegressionTest {
         assertThat(last.path("last").asBoolean()).isTrue();
     }
 
+    static Stream<Arguments> containerRejectedNulPaths() {
+        return Stream.of(USERS, "/api/admin/users").flatMap(route ->
+                Stream.of(false, true).flatMap(appendToUuid ->
+                        Stream.of("GET", "PATCH").flatMap(method ->
+                                Stream.of("ADMINISTRATOR", "STUDENT", "ANONYMOUS").flatMap(caller ->
+                                        Stream.of("application/json", "*/*", "text/html")
+                                                .map(accept -> Arguments.of(route, appendToUuid, method,
+                                                        caller, accept))))));
+    }
+
+    @ParameterizedTest
+    @MethodSource("containerRejectedNulPaths")
+    void containerRejectedNulPathsUseStandardJsonEnvelope(String route, boolean appendToUuid,
+                                                         String method, String caller, String accept) throws Exception {
+        var usersBefore = jdbc.queryForList("SELECT * FROM admin_user_http_test.lms_user_access ORDER BY user_id");
+        var auditsBefore = jdbc.queryForList("SELECT * FROM admin_user_http_test.audit_logs ORDER BY audit_log_id");
+        var setupBefore = jdbc.queryForList("SELECT * FROM admin_user_http_test.lms_setup_state");
+        UUID callerId = switch (caller) {
+            case "ADMINISTRATOR" -> admin.getUserId();
+            case "STUDENT" -> target.getUserId();
+            default -> null;
+        };
+        String path = route + "/" + (appendToUuid ? target.getUserId().toString() : "") + "%00";
+        var response = send(method, path, method.equals("PATCH") ? "{\"lms_role\":\"TUTOR\"}" : null,
+                accept, callerId);
+
+        assertThat(json(response, 400)).isEqualTo(mapper.readTree("""
+                {"code":"BAD_REQUEST","message":"Bad Request","details":[]}
+                """));
+        assertThat(response.body()).doesNotContain("<html", "<!doctype", "Exception", "Tomcat",
+                "org.apache", "lms_user_access", target.getUserId().toString());
+        assertProjection(json(send("GET", route + "/" + target.getUserId(), null,
+                "application/json", admin.getUserId()), 200), "STUDENT", "ACTIVE");
+        assertThat(jdbc.queryForList("SELECT * FROM admin_user_http_test.lms_user_access ORDER BY user_id"))
+                .isEqualTo(usersBefore);
+        assertThat(jdbc.queryForList("SELECT * FROM admin_user_http_test.audit_logs ORDER BY audit_log_id"))
+                .isEqualTo(auditsBefore);
+        assertThat(jdbc.queryForList("SELECT * FROM admin_user_http_test.lms_setup_state"))
+                .isEqualTo(setupBefore);
+    }
+
     static Stream<Arguments> nulSearchQueries() {
         return Stream.of(USERS, "/api/admin/users").flatMap(route ->
                 Stream.of("%00", "a%00b", "%20%09%00%0A", "%00a%00").flatMap(query ->
