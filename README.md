@@ -158,7 +158,31 @@ After PostgreSQL is available and the required datasource and security configura
 ./mvnw spring-boot:run
 ```
 
-The application uses the server port and API configuration defined in its Spring Boot configuration. The final local URL and API base path will be recorded after those settings are confirmed.
+The application listens on `http://localhost:8081` by default; set `SERVER_PORT` to override the port.
+Central Identity remains on `http://localhost:8080` by default.
+
+`lms.allowed-origins` (environment variable `LMS_ALLOWED_ORIGINS`) configures exact
+browser origins for credentialed cross-origin requests. It defaults to
+`http://localhost:3000,http://localhost:5173`. Set, for example,
+`LMS_ALLOWED_ORIGINS=https://portal.example.edu` to replace those defaults. Entries
+are comma-separated, trimmed, and deduplicated; invalid or blank origins fail startup.
+Use HTTP(S) scheme, host, and optional port (1-65535), without userinfo, path,
+trailing slash, query, fragment, or wildcard. Allowed methods are `GET`, `POST`,
+`PUT`, `DELETE`, `PATCH`, and `OPTIONS`.
+Valid CORS preflight requests are handled before Bearer authentication and may be cached for
+3600 seconds. Ordinary OPTIONS requests also return 200 without authentication or database
+access. Disallowed CORS requests receive the standard JSON 403 envelope. Other API requests
+require a valid access token and active LMS-local access.
+
+### 5.6 Bootstrap the Initial Administrator
+
+Use the [administrator bootstrap CLI](docs/administrator-bootstrap.md) once for a new LMS database.
+It requires an explicitly enabled non-web execution and the verified Central Identity account UUID.
+Ordinary web startup never executes bootstrap. Any existing Administrator, including
+SUSPENDED access, closes setup under DOC-04 section 2.1.5. The closure records that
+administrator's UUID; subsequent attempts cannot rewrite it or reopen setup.
+V1 permits duplicate display emails, V2 widens columns without adding uniqueness,
+and V3 creates/seeds setup state. Local identity remains keyed by UUID.
 
 ### 5.6 Local Learning-Material Storage
 

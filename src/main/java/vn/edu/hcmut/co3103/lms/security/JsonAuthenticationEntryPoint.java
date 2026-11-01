@@ -12,7 +12,7 @@ import tools.jackson.databind.ObjectMapper;
 
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
-import java.time.Instant;
+import java.util.List;
 import java.util.Map;
 
 @Component
@@ -29,16 +29,13 @@ public final class JsonAuthenticationEntryPoint implements AuthenticationEntryPo
                          AuthenticationException exception) throws IOException {
         boolean invalidToken = exception instanceof OAuth2AuthenticationException;
         response.setStatus(HttpServletResponse.SC_UNAUTHORIZED);
-        response.setHeader(HttpHeaders.WWW_AUTHENTICATE,
-                invalidToken ? "Bearer error=\"invalid_token\"" : "Bearer");
+        response.setHeader(HttpHeaders.WWW_AUTHENTICATE, "Bearer");
         response.setCharacterEncoding(StandardCharsets.UTF_8.name());
         response.setContentType(MediaType.APPLICATION_JSON_VALUE);
         objectMapper.writeValue(response.getOutputStream(), Map.of(
-                "timestamp", Instant.now().toString(),
-                "status", HttpServletResponse.SC_UNAUTHORIZED,
-                "error", "Unauthorized",
+                "code", "UNAUTHORIZED",
                 "message", invalidToken ? "The Bearer access token is invalid or expired."
                         : "A valid Bearer access token is required.",
-                "path", request.getRequestURI()));
+                "details", List.of()));
     }
 }
