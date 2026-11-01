@@ -2,6 +2,7 @@ package vn.edu.hcmut.co3103.lms.repository;
 
 import jakarta.persistence.LockModeType;
 import org.springframework.data.jpa.repository.JpaRepository;
+import org.springframework.data.jpa.repository.JpaSpecificationExecutor;
 import org.springframework.data.jpa.repository.Lock;
 import vn.edu.hcmut.co3103.lms.domain.AccessStatus;
 import vn.edu.hcmut.co3103.lms.domain.LmsRole;
@@ -11,9 +12,12 @@ import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
 
-public interface LmsUserAccessRepository extends JpaRepository<LmsUserAccess, UUID> {
+public interface LmsUserAccessRepository extends JpaRepository<LmsUserAccess, UUID>,
+        JpaSpecificationExecutor<LmsUserAccess> {
 
     long countByLmsRole(LmsRole lmsRole);
+
+    long countByLmsRoleAndAccessStatus(LmsRole lmsRole, AccessStatus accessStatus);
 
     boolean existsByLmsRole(LmsRole lmsRole);
 

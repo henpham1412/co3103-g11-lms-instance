@@ -177,6 +177,55 @@ class LmsUserAccessRepositoryTest {
     }
 
     @Test
+    void countsOnlyActiveAdministrators() {
+        repository.deleteAllInBatch();
+        assertThat(repository.countByLmsRoleAndAccessStatus(LmsRole.ADMINISTRATOR, AccessStatus.ACTIVE))
+                .isZero();
+        repository.saveAllAndFlush(List.of(
+                newUser(LmsRole.ADMINISTRATOR, AccessStatus.ACTIVE),
+                newUser(LmsRole.ADMINISTRATOR, AccessStatus.ACTIVE),
+                newUser(LmsRole.ADMINISTRATOR, AccessStatus.SUSPENDED),
+                newUser(LmsRole.STUDENT, AccessStatus.ACTIVE),
+                newUser(LmsRole.TUTOR, AccessStatus.ACTIVE)));
+        entityManager.clear();
+
+        assertThat(repository.countByLmsRoleAndAccessStatus(LmsRole.ADMINISTRATOR, AccessStatus.ACTIVE))
+                .isEqualTo(2);
+        assertThat(repository.countByLmsRoleAndAccessStatus(LmsRole.ADMINISTRATOR, AccessStatus.SUSPENDED))
+                .isEqualTo(1);
+    }
+
+    @Test
+    void executesCombinedSpecificationsAndExactUuidSearch() {
+        repository.deleteAllInBatch();
+        LmsUserAccess byName = newUser(LmsRole.TUTOR, AccessStatus.ACTIVE);
+        byName.setFullName("Alice Nguyen");
+        byName.setEmail("name@example.com");
+        LmsUserAccess byEmail = newUser(LmsRole.TUTOR, AccessStatus.ACTIVE);
+        byEmail.setEmail("alice@example.com");
+        LmsUserAccess wrongRole = newUser(LmsRole.STUDENT, AccessStatus.ACTIVE);
+        wrongRole.setFullName("Alice Student");
+        LmsUserAccess suspended = newUser(LmsRole.TUTOR, AccessStatus.SUSPENDED);
+        suspended.setFullName("Alice Suspended");
+        LmsUserAccess unrelated = newUser(LmsRole.TUTOR, AccessStatus.ACTIVE);
+        unrelated.setFullName("100%_\\ Complete");
+        repository.saveAllAndFlush(List.of(byName, byEmail, wrongRole, suspended, unrelated));
+        entityManager.clear();
+
+        assertThat(repository.findAll(LmsUserAccessSpecification.filter(" ALIce ",
+                LmsRole.TUTOR, AccessStatus.ACTIVE))).extracting(LmsUserAccess::getUserId)
+                .containsExactlyInAnyOrder(byName.getUserId(), byEmail.getUserId());
+        assertThat(repository.findAll(LmsUserAccessSpecification.filter(
+                byName.getUserId().toString(), null, null))).extracting(LmsUserAccess::getUserId)
+                .containsExactly(byName.getUserId());
+        assertThat(repository.findAll(LmsUserAccessSpecification.filter(
+                byName.getUserId().toString().substring(0, 8), null, null))).isEmpty();
+        assertThat(repository.findAll(LmsUserAccessSpecification.filter("%_\\", null, null)))
+                .extracting(LmsUserAccess::getUserId).containsExactly(unrelated.getUserId());
+        assertThat(repository.findAll(LmsUserAccessSpecification.filter(" \t", null, null))).hasSize(5);
+    }
+
+    @Test
     void findsByEmailAndReturnsEmptyForUnknownEmail() {
         LmsUserAccess user = newUser(LmsRole.TUTOR, AccessStatus.ACTIVE);
         repository.saveAndFlush(user);
