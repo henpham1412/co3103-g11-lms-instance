@@ -15,10 +15,14 @@ import vn.edu.hcmut.co3103.lms.repository.LmsSetupStateRepository;
 import vn.edu.hcmut.co3103.lms.repository.LmsUserAccessRepository;
 import vn.edu.hcmut.co3103.lms.repository.LmsUserAccessSpecification;
 
+import java.util.Set;
 import java.util.UUID;
 
 @Service
 public class AdminUserService {
+
+    private static final Set<String> SORTABLE_PROPERTIES = Set.of(
+            "userId", "fullName", "email", "lmsRole", "accessStatus", "lastLoginAt", "createdAt", "updatedAt");
 
     private final LmsUserAccessRepository users;
     private final LmsSetupStateRepository states;
@@ -30,6 +34,14 @@ public class AdminUserService {
 
     @Transactional(readOnly = true)
     public AdminUserPageResponse getUsers(String query, LmsRole role, AccessStatus status, Pageable pageable) {
+        if (pageable.isPaged() && pageable.getOffset() > Integer.MAX_VALUE) {
+            throw new IllegalArgumentException("Page offset exceeds the supported maximum");
+        }
+        for (var order : pageable.getSort()) {
+            if (!SORTABLE_PROPERTIES.contains(order.getProperty())) {
+                throw new IllegalArgumentException("Unsupported sort property");
+            }
+        }
         var page = users.findAll(LmsUserAccessSpecification.filter(query, role, status), pageable)
                 .map(AdminUserService::toResponse);
         return new AdminUserPageResponse(page.getContent(), page.getNumber(), page.getSize(),

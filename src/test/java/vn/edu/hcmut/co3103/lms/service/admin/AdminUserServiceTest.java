@@ -4,6 +4,7 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.CsvSource;
+import org.junit.jupiter.params.provider.ValueSource;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.data.domain.Page;
@@ -96,6 +97,37 @@ class AdminUserServiceTest {
         assertThat(response.totalPages()).isZero();
         assertThat(response.last()).isTrue();
         verifyNoInteractions(states);
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {"noSuchProperty", "role", "id", "userId.noSuchProperty"})
+    void rejectsUnknownSortBeforeQueryingUsers(String property) {
+        var pageable = PageRequest.of(0, 20, Sort.by("createdAt", property));
+
+        assertThatThrownBy(() -> service().getUsers(null, null, null, pageable))
+                .isInstanceOf(IllegalArgumentException.class);
+
+        verifyNoInteractions(users, states);
+    }
+
+    @Test
+    void rejectsOverflowingOffsetBeforeQueryingUsers() {
+        var pageable = PageRequest.of(Integer.MAX_VALUE, 20);
+
+        assertThatThrownBy(() -> service().getUsers(null, null, null, pageable))
+                .isInstanceOf(IllegalArgumentException.class);
+
+        verifyNoInteractions(users, states);
+    }
+
+    @Test
+    void acceptsMaximumSupportedOffset() {
+        var pageable = PageRequest.of(Integer.MAX_VALUE, 1);
+        when(users.findAll(any(Specification.class), eq(pageable))).thenReturn(Page.empty(pageable));
+
+        assertThat(service().getUsers(null, null, null, pageable).content()).isEmpty();
+
+        verify(users).findAll(any(Specification.class), eq(pageable));
     }
 
     @ParameterizedTest

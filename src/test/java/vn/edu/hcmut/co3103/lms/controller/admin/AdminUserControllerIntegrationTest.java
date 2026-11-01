@@ -20,6 +20,7 @@ import org.springframework.http.HttpHeaders;
 import org.springframework.http.MediaType;
 import org.springframework.test.context.DynamicPropertyRegistry;
 import org.springframework.test.context.DynamicPropertySource;
+import org.springframework.test.context.transaction.TestTransaction;
 import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.ResultMatcher;
 import org.springframework.transaction.annotation.Transactional;
@@ -121,6 +122,80 @@ class AdminUserControllerIntegrationTest {
                 .andExpect(jsonPath("$.page").value(0))
                 .andExpect(jsonPath("$.size").value(20))
                 .andExpect(jsonPath("$.totalElements").value(2));
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {"noSuchProperty", "role", "id", "userId.noSuchProperty"})
+    void rejectsUnknownSortWithBadRequest(String property) throws Exception {
+        mockMvc.perform(get(USERS).header(HttpHeaders.AUTHORIZATION, bearer(admin.getUserId()))
+                        .param("sort", "createdAt,desc", property + ",asc"))
+                .andExpect(status().isBadRequest())
+                .andExpect(errorEnvelope("BAD_REQUEST", "Bad Request"));
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {"userId", "fullName", "email", "lmsRole", "accessStatus",
+            "lastLoginAt", "createdAt", "updatedAt"})
+    void acceptsDocumentedSortProperties(String property) throws Exception {
+        mockMvc.perform(get(USERS).header(HttpHeaders.AUTHORIZATION, bearer(admin.getUserId()))
+                        .param("sort", property + ",asc"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.totalElements").value(2));
+    }
+
+    @ParameterizedTest
+    @CsvSource({"2147483647, 20", "1073741824, 2"})
+    void rejectsPageOffsetOverflowWithBadRequest(String page, String size) throws Exception {
+        mockMvc.perform(get(USERS).header(HttpHeaders.AUTHORIZATION, bearer(admin.getUserId()))
+                        .param("page", page).param("size", size))
+                .andExpect(status().isBadRequest())
+                .andExpect(errorEnvelope("BAD_REQUEST", "Bad Request"));
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {"application/xml", "text/html", "application/json;q=0", "*/*;q=0",
+            "application/json;q=0, */*;q=1", "*/*;q=1, application/json;q=0",
+            "application/*;q=0, */*;q=1"})
+    void rejectsUnacceptablePatchResponseBeforeCommit(String accept) throws Exception {
+        // Commit fixtures so PATCH owns its transaction, just as it does in production.
+        TestTransaction.flagForCommit();
+        TestTransaction.end();
+        try {
+            mockMvc.perform(patch(USERS + "/{userId}", target.getUserId())
+                            .header(HttpHeaders.AUTHORIZATION, bearer(admin.getUserId()))
+                            .header(HttpHeaders.ACCEPT, accept)
+                            .contentType(MediaType.APPLICATION_JSON)
+                            .content("{\"role\":\"TUTOR\",\"accessStatus\":\"SUSPENDED\"}"))
+                    .andExpect(status().isNotAcceptable())
+                    .andExpect(errorEnvelope("NOT_ACCEPTABLE", "Not Acceptable"));
+
+            assertTargetAccessUnchanged();
+        } finally {
+            users.deleteAllById(List.of(admin.getUserId(), target.getUserId()));
+        }
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {"{\"role\":0}", "{\"role\":1}", "{\"role\":2}",
+            "{\"role\":\"0\"}", "{\"role\":\"1\"}", "{\"role\":\"2\"}", "{\"role\":\" 2 \"}",
+            "{\"accessStatus\":0}", "{\"accessStatus\":1}",
+            "{\"accessStatus\":\"0\"}", "{\"accessStatus\":\"1\"}",
+            "{\"role\":\"ADMINISTRATOR\",\"accessStatus\":1}",
+            "{\"role\":2,\"accessStatus\":\"SUSPENDED\"}"})
+    void rejectsNumericAccessEnumsWithoutMutation(String body) throws Exception {
+        TestTransaction.flagForCommit();
+        TestTransaction.end();
+        try {
+            mockMvc.perform(patch(USERS + "/{userId}", target.getUserId())
+                            .header(HttpHeaders.AUTHORIZATION, bearer(admin.getUserId()))
+                            .contentType(MediaType.APPLICATION_JSON).content(body))
+                    .andExpect(status().isBadRequest())
+                    .andExpect(errorEnvelope("BAD_REQUEST", "Bad Request"));
+
+            assertTargetAccessUnchanged();
+        } finally {
+            users.deleteAllById(List.of(admin.getUserId(), target.getUserId()));
+        }
     }
 
     @ParameterizedTest
@@ -265,6 +340,13 @@ class AdminUserControllerIntegrationTest {
                 .andExpect(forbidden());
         entityManager.clear();
         assertThat(users.findById(target.getUserId()).orElseThrow().getLmsRole()).isEqualTo(LmsRole.STUDENT);
+    }
+
+    private void assertTargetAccessUnchanged() {
+        var stored = users.findById(target.getUserId()).orElseThrow();
+        assertThat(stored.getLmsRole()).isEqualTo(LmsRole.STUDENT);
+        assertThat(stored.getAccessStatus()).isEqualTo(AccessStatus.ACTIVE);
+        assertThat(stored.getUpdatedAt()).isEqualTo(ORIGINAL_TIME);
     }
 
     private LmsUserAccess saveUser(String name, LmsRole role, AccessStatus accessStatus, Instant createdAt) {

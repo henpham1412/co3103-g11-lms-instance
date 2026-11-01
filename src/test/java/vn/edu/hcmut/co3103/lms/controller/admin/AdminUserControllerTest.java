@@ -115,8 +115,12 @@ class AdminUserControllerTest {
     @CsvSource(delimiter = '|', value = {
             "{\"role\":\"TUTOR\",\"accessStatus\":\"SUSPENDED\"}|TUTOR|SUSPENDED",
             "{\"role\":\"TUTOR\"}|TUTOR|",
+            "{\"role\":\"STUDENT\"}|STUDENT|",
+            "{\"role\":\"ADMINISTRATOR\"}|ADMINISTRATOR|",
             "{\"accessStatus\":\"SUSPENDED\"}||SUSPENDED",
+            "{\"accessStatus\":\"ACTIVE\"}||ACTIVE",
             "{\"role\":null,\"accessStatus\":\"SUSPENDED\"}||SUSPENDED",
+            "{\"role\":null,\"accessStatus\":null}||",
             "{}||"
     })
     void patchesAccessAndPassesTheAuthenticatedAdminId(String body, LmsRole role, AccessStatus accessStatus)
@@ -142,7 +146,11 @@ class AdminUserControllerTest {
 
     @ParameterizedTest
     @ValueSource(strings = {"{\"role\":\"OWNER\"}", "{\"accessStatus\":\"DELETED\"}",
-            "{\"role\":{}}", "{", "null", "[]", ""})
+            "{\"role\":{}}", "{", "null", "[]", "",
+            "{\"role\":2}", "{\"role\":\"2\"}", "{\"accessStatus\":1}", "{\"accessStatus\":\"1\"}",
+            "{\"role\":true}", "{\"accessStatus\":[]}", "{\"role\":2.0}", "{\"accessStatus\":1.0}",
+            "{\"role\":\"\"}", "{\"accessStatus\":\" \"}", "{\"role\":\"student\"}",
+            "{\"role\":\" TUTOR \"}"})
     void rejectsInvalidPayloadsWithoutCallingTheService(String body) throws Exception {
         mockMvc.perform(patch(USERS + "/{userId}", USER_ID).principal(ADMIN)
                         .contentType(MediaType.APPLICATION_JSON).content(body))
@@ -150,6 +158,39 @@ class AdminUserControllerTest {
                 .andExpect(errorEnvelope("BAD_REQUEST", "Bad Request"));
 
         verifyNoInteractions(service);
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {"application/xml", "text/html", "application/json;q=0", "*/*;q=0",
+            "application/json;q=0, */*;q=1", "*/*;q=1, application/json;q=0",
+            "application/*;q=0, */*;q=1"})
+    void rejectsUnacceptablePatchResponseWithoutCallingTheService(String accept) throws Exception {
+        mockMvc.perform(patch(USERS + "/{userId}", USER_ID).principal(ADMIN)
+                        .header("Accept", accept)
+                        .contentType(MediaType.APPLICATION_JSON).content("{\"role\":\"TUTOR\"}"))
+                .andExpect(status().isNotAcceptable())
+                .andExpect(errorEnvelope("NOT_ACCEPTABLE", "Not Acceptable"));
+
+        verifyNoInteractions(service);
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {"application/json", "application/*", "*/*", "application/json;q=0.1",
+            "text/html, application/json;q=0.5", "application/json;q=1, */*;q=0",
+            "*/*;q=0, application/json;q=1", "application/*;q=0, application/json;q=0.5"})
+    void acceptsNegotiableJsonPatchResponses(String accept) throws Exception {
+        var request = new UpdateUserAccessRequest(LmsRole.TUTOR, null);
+        when(service.updateUserAccess(USER_ID, request, ADMIN_ID))
+                .thenReturn(new AdminUserResponse(USER_ID, LmsRole.TUTOR, AccessStatus.ACTIVE,
+                        CREATED_AT, UPDATED_AT));
+
+        mockMvc.perform(patch(USERS + "/{userId}", USER_ID).principal(ADMIN)
+                        .header("Accept", accept)
+                        .contentType(MediaType.APPLICATION_JSON).content("{\"role\":\"TUTOR\"}"))
+                .andExpect(status().isOk())
+                .andExpect(content().contentTypeCompatibleWith(MediaType.APPLICATION_JSON));
+
+        verify(service).updateUserAccess(USER_ID, request, ADMIN_ID);
     }
 
     @ParameterizedTest

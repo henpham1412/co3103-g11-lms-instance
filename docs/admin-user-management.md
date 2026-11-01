@@ -19,6 +19,9 @@ The local role and status are loaded on every request. Demotion or suspension
 therefore takes effect on the next request even when the same token is reused.
 
 Send `Accept: application/json`, and `Content-Type: application/json` for PATCH.
+PATCH rejects response formats that do not accept JSON with `406 NOT_ACCEPTABLE`
+before invoking the mutation service. This includes `application/xml`, `text/html`,
+and `application/json;q=0`, even if a less specific wildcard has a positive quality.
 See the [security contract](security-contract.md) for signature, issuer, claim,
 CORS, and local-access validation, and [administrator bootstrap](administrator-bootstrap.md)
 for provisioning the initial administrator.
@@ -38,11 +41,12 @@ combined with AND; name, email, and UUID matches within `q` are combined with OR
 | `sort` | Entity property and direction, e.g. `createdAt,desc` or `fullName,asc`; repeat for multiple properties | `createdAt,desc` |
 
 Use nonnegative page numbers and positive sizes. Pagination coercion and limits
-come from Spring Data rather than custom controller validation. Sort names are
+come from Spring Data; a resolved `page * size` greater than `2147483647` is rejected
+with `400 BAD_REQUEST` before querying users. Sort names are allowlisted
 entity properties: `userId`, `fullName`, `email`, `lmsRole`, `accessStatus`,
 `lastLoginAt`, `createdAt`, `updatedAt`. In particular, the response field `role`
-maps to sort property `lmsRole`. Unknown sort properties are not validated by this
-controller; use the listed properties. Add `sort=userId,asc` to break timestamp
+maps to sort property `lmsRole`. Unknown or unlisted sort properties (including
+`role` and `id`) produce `400 BAD_REQUEST`. Add `sort=userId,asc` to break timestamp
 ties when stable ordering matters.
 
 ```http
@@ -91,6 +95,9 @@ Either or both fields may be supplied. The request DTO is `UpdateUserAccessReque
 the separate `@NotNull` constraints on `UpdateUserRoleRequest` and
 `UpdateUserStatusRequest` are not used by this route. The GET filter is called
 `status`, but the PATCH body field is **`accessStatus`**.
+Only the exact named strings above or JSON `null` are accepted. Numeric ordinals,
+numeric strings (for example, `2` or `"2"` for `role`), blank strings, and other JSON
+types produce `400 BAD_REQUEST` before any access change.
 
 ```json
 { "role": "TUTOR" }
@@ -137,11 +144,12 @@ include it. HTTP status is carried by the status line, not an extra body field.
 
 | HTTP status | Code | Trigger / message |
 | --- | --- | --- |
-| `400` | `BAD_REQUEST` | Malformed body, invalid role/status enum, invalid UUID path or enum query parameter: `Bad Request` |
+| `400` | `BAD_REQUEST` | Malformed body, invalid role/status enum (including numeric tokens/strings), invalid UUID path or enum query parameter, unsupported sort property, or overflowing page offset: `Bad Request` |
 | `400` | `LAST_ADMIN_PROTECTION` | Final active administrator would be demoted or suspended: `Cannot demote or suspend the last active administrator` |
 | `401` | `UNAUTHORIZED` | Missing credentials: `A valid Bearer access token is required.` Invalid/expired token: `The Bearer access token is invalid or expired.` |
 | `403` | `FORBIDDEN` | Active STUDENT/TUTOR, suspended caller, or identity without local access: `Access to this resource is denied.` |
 | `404` | `USER_NOT_FOUND` | Well-formed target UUID with no local record: `User not found` |
+| `406` | `NOT_ACCEPTABLE` | PATCH response format excludes JSON; rejected before mutation: `Not Acceptable` |
 | `500` | `INTERNAL_SERVER_ERROR` | Infrastructure or unexpected internal failure; safe error response, no internal exception details |
 
 These cases have `details: []`. The shared bean-validation handler can instead

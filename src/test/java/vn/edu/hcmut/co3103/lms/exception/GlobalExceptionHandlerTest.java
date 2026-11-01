@@ -5,6 +5,8 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.ValueSource;
 import org.springframework.boot.test.context.TestComponent;
+import org.springframework.data.core.PropertyReferenceException;
+import org.springframework.data.core.TypeInformation;
 import org.springframework.http.MediaType;
 import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.setup.MockMvcBuilders;
@@ -14,6 +16,8 @@ import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RestController;
 import vn.edu.hcmut.co3103.lms.dto.admin.UpdateUserRoleRequest;
 import vn.edu.hcmut.co3103.lms.dto.admin.UpdateUserStatusRequest;
+
+import java.util.List;
 
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.patch;
@@ -54,6 +58,19 @@ class GlobalExceptionHandlerTest {
                 .andExpect(jsonPath("$.length()").value(3))
                 .andExpect(jsonPath("$.code").value("USER_NOT_FOUND"))
                 .andExpect(jsonPath("$.message").value("The requested user was not found."))
+                .andExpect(jsonPath("$.details").isArray())
+                .andExpect(jsonPath("$.details").isEmpty());
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {"illegal-argument", "property-reference"})
+    void returnsSafeBadRequestForInvalidArguments(String path) throws Exception {
+        mockMvc.perform(get("/test/admin/" + path))
+                .andExpect(status().isBadRequest())
+                .andExpect(content().contentTypeCompatibleWith(MediaType.APPLICATION_JSON))
+                .andExpect(jsonPath("$.length()").value(3))
+                .andExpect(jsonPath("$.code").value("BAD_REQUEST"))
+                .andExpect(jsonPath("$.message").value("Bad Request"))
                 .andExpect(jsonPath("$.details").isArray())
                 .andExpect(jsonPath("$.details").isEmpty());
     }
@@ -109,6 +126,17 @@ class GlobalExceptionHandlerTest {
     @TestComponent
     @RestController
     static class TestController {
+
+        @GetMapping("/test/admin/illegal-argument")
+        public void illegalArgument() {
+            throw new IllegalArgumentException("Internal implementation detail");
+        }
+
+        @GetMapping("/test/admin/property-reference")
+        public void propertyReference() {
+            throw new PropertyReferenceException("noSuchProperty", TypeInformation.of(UpdateUserRoleRequest.class),
+                    List.of());
+        }
 
         @GetMapping("/test/admin/last-admin")
         public void lastAdmin() {
