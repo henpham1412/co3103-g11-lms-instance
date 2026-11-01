@@ -13,7 +13,7 @@ import tools.jackson.databind.ObjectMapper;
 
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
-import java.time.Instant;
+import java.util.List;
 import java.util.Map;
 
 @Controller
@@ -34,19 +34,15 @@ public class JsonErrorController implements ErrorController {
         if (status == null) {
             status = HttpStatus.INTERNAL_SERVER_ERROR;
         }
-        String path = request.getAttribute(RequestDispatcher.ERROR_REQUEST_URI) instanceof String uri
-                ? uri : request.getRequestURI();
 
         // Write the fixed envelope directly so Accept cannot select HTML or suppress the body.
         response.setStatus(status.value());
         response.setCharacterEncoding(StandardCharsets.UTF_8.name());
         response.setContentType(MediaType.APPLICATION_JSON_VALUE);
         objectMapper.writeValue(response.getOutputStream(), Map.of(
-                "timestamp", Instant.now().toString(),
-                "status", status.value(),
-                "error", status.getReasonPhrase(),
+                "code", status.name(),
                 "message", status.is5xxServerError() ? "An unexpected server error occurred."
                         : status.getReasonPhrase(),
-                "path", path));
+                "details", List.of()));
     }
 }

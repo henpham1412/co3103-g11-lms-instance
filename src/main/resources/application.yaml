@@ -1,3 +1,13 @@
+server:
+  port: ${SERVER_PORT:8081}
+  error:
+    # Error dispatches are public; never expose exception details, even via query parameters.
+    include-exception: false
+    include-message: never
+    include-stacktrace: never
+    include-binding-errors: never
+    include-path: always
+
 spring:
   application:
     name: co3103-g11-lms-instance
@@ -21,5 +31,5 @@ spring:
           issuer-uri: ${CENTRAL_IDENTITY_ISSUER_URI:http://localhost:8080}
           jwk-set-uri: ${CENTRAL_IDENTITY_JWKS_URI:http://localhost:8080/.well-known/jwks.json}
 
-server:
-  port: ${LMS_PORT:8081}
+lms:
+  allowed-origins: ${LMS_ALLOWED_ORIGINS:http://localhost:3000,http://localhost:5173}

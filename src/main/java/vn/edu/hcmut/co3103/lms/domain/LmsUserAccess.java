@@ -66,13 +66,6 @@ public class LmsUserAccess {
     @Column(name = "updated_at", nullable = false)
     private Instant updatedAt;
 
-    public LmsRole getLmsRole() {
-        return lmsRole;
-    }
-
-    public AccessStatus getAccessStatus() {
-        return accessStatus;
-    }
     @PrePersist
     void initializeTimestamps() {
         Instant now = Instant.now();
