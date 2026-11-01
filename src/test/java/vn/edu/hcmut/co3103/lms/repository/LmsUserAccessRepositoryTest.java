@@ -24,6 +24,7 @@ import java.util.List;
 import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 @DataJpaTest(properties = "spring.jpa.hibernate.ddl-auto=validate", showSql = false)
 @AutoConfigureTestDatabase(replace = AutoConfigureTestDatabase.Replace.NONE)
@@ -53,7 +54,7 @@ class LmsUserAccessRepositoryTest {
         assertThat(stored.getLmsRole()).isEqualTo(LmsRole.STUDENT);
         assertThat(stored.getAccessStatus()).isEqualTo(AccessStatus.ACTIVE);
         assertThat(stored.getLastLoginAt()).isNull();
-        assertThat(stored.getCreatedAt()).isBetween(beforeSave, Instant.now());
+        assertTimestampBetween(stored.getCreatedAt(), beforeSave, Instant.now());
         assertThat(stored.getUpdatedAt()).isEqualTo(stored.getCreatedAt());
         Instant createdAt = stored.getCreatedAt();
 
@@ -114,7 +115,8 @@ class LmsUserAccessRepositoryTest {
         LmsUserAccess updated = repository.findById(user.getUserId()).orElseThrow();
         assertThat(updated.getAccessStatus()).isEqualTo(status);
         assertThat(updated.getCreatedAt()).isEqualTo(originalTime);
-        assertThat(updated.getUpdatedAt()).isBetween(beforeUpdate, Instant.now());
+        assertThat(updated.getUpdatedAt()).isAfter(originalTime);
+        assertTimestampBetween(updated.getUpdatedAt(), beforeUpdate, Instant.now());
     }
 
     @ParameterizedTest
@@ -145,8 +147,30 @@ class LmsUserAccessRepositoryTest {
         assertThat(updated.getEmail()).isEqualTo(stored.getEmail());
         assertThat(updated.getLastLoginAt()).isEqualTo(stored.getLastLoginAt());
         assertThat(updated.getCreatedAt()).isEqualTo(originalTime);
-        assertThat(updated.getUpdatedAt()).isAfter(originalTime)
-                .isBetween(beforeUpdate, Instant.now());
+        assertThat(updated.getUpdatedAt()).isAfter(originalTime);
+        assertTimestampBetween(updated.getUpdatedAt(), beforeUpdate, Instant.now());
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {"2026-11-01T07:01:52.525249600Z", "2026-11-01T07:01:52.999999600Z",
+            "2026-11-01T07:01:52.525249400Z", "2026-11-01T07:01:52.525249000Z"})
+    void timestampBoundsAccountForPostgresPrecisionWithoutHidingInvalidTimes(String timestamp) {
+        Instant observed = Instant.parse(timestamp);
+        LmsUserAccess user = newUser(LmsRole.STUDENT, AccessStatus.ACTIVE);
+        repository.saveAndFlush(user);
+        // Cast text in PostgreSQL so the database, rather than the JDBC driver, rounds the nanoseconds.
+        jdbcTemplate.update("UPDATE lms_user_access SET updated_at = CAST(? AS TIMESTAMPTZ) WHERE user_id = ?",
+                timestamp, user.getUserId());
+        entityManager.clear();
+
+        Instant rounded = repository.findById(user.getUserId()).orElseThrow().getUpdatedAt();
+        assertThat(rounded).isEqualTo(observed.plusNanos(500).truncatedTo(ChronoUnit.MICROS));
+        assertTimestampBetween(rounded, observed, observed);
+        assertThatThrownBy(() -> assertTimestampBetween(
+                observed.truncatedTo(ChronoUnit.MICROS).minus(1, ChronoUnit.MICROS), observed, observed))
+                .isInstanceOf(AssertionError.class);
+        assertThatThrownBy(() -> assertTimestampBetween(rounded.plus(2, ChronoUnit.MICROS), observed, observed))
+                .isInstanceOf(AssertionError.class);
     }
 
     @ParameterizedTest
@@ -312,6 +336,12 @@ class LmsUserAccessRepositoryTest {
         entityManager.clear();
         assertThat(repository.findFirstByLmsRoleOrderByCreatedAtAscUserIdAsc(LmsRole.ADMINISTRATOR))
                 .get().extracting(LmsUserAccess::getUserId).isEqualTo(selected);
+    }
+
+    private static void assertTimestampBetween(Instant actual, Instant before, Instant after) {
+        // TIMESTAMPTZ rounds nanoseconds to microseconds, possibly beyond the Java upper bound.
+        assertThat(actual).isBetween(before.truncatedTo(ChronoUnit.MICROS),
+                after.truncatedTo(ChronoUnit.MICROS).plus(1, ChronoUnit.MICROS));
     }
 
     private LmsUserAccess newUser(LmsRole role, AccessStatus status) {

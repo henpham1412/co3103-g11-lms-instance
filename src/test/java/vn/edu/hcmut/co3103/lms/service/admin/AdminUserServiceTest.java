@@ -3,13 +3,16 @@ package vn.edu.hcmut.co3103.lms.service.admin;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.Arguments;
 import org.junit.jupiter.params.provider.CsvSource;
+import org.junit.jupiter.params.provider.MethodSource;
 import org.junit.jupiter.params.provider.ValueSource;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.PageImpl;
 import org.springframework.data.domain.PageRequest;
+import org.springframework.data.domain.Pageable;
 import org.springframework.data.domain.Sort;
 import org.springframework.data.jpa.domain.Specification;
 import org.springframework.security.access.AccessDeniedException;
@@ -31,6 +34,7 @@ import java.time.Instant;
 import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
+import java.util.stream.Stream;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -65,10 +69,12 @@ class AdminUserServiceTest {
     void listsUsersUsingFiltersAndPreservesPageMetadata(String query, LmsRole role, AccessStatus status,
                                                        int page, int size, long total) {
         var pageable = PageRequest.of(page, size, Sort.by("createdAt").descending());
+        var deterministicPageable = pageable.withSort(pageable.getSort().and(Sort.by("userId")));
         var first = user(LmsRole.TUTOR, AccessStatus.ACTIVE);
         var second = user(LmsRole.STUDENT, AccessStatus.SUSPENDED);
         Specification<LmsUserAccess> filter = Specification.unrestricted();
-        when(users.findAll(filter, pageable)).thenReturn(new PageImpl<>(List.of(first, second), pageable, total));
+        when(users.findAll(filter, deterministicPageable))
+                .thenReturn(new PageImpl<>(List.of(first, second), deterministicPageable, total));
 
         try (var specifications = mockStatic(LmsUserAccessSpecification.class)) {
             specifications.when(() -> LmsUserAccessSpecification.filter(query, role, status)).thenReturn(filter);
@@ -81,7 +87,7 @@ class AdminUserServiceTest {
             assertThat(response.totalElements()).isEqualTo(total);
             assertThat(response.totalPages()).isEqualTo((int) Math.ceil((double) total / size));
             assertThat(response.last()).isEqualTo((long) (page + 1) * size >= total);
-            verify(users).findAll(filter, pageable);
+            verify(users).findAll(filter, deterministicPageable);
             specifications.verify(() -> LmsUserAccessSpecification.filter(query, role, status));
         }
         verifyNoInteractions(states);
@@ -90,7 +96,9 @@ class AdminUserServiceTest {
     @Test
     void returnsAnEmptyPageWhenNoUsersMatch() {
         var pageable = PageRequest.of(3, 10);
-        when(users.findAll(any(Specification.class), eq(pageable))).thenReturn(Page.empty(pageable));
+        var deterministicPageable = pageable.withSort(Sort.by("userId"));
+        when(users.findAll(any(Specification.class), eq(deterministicPageable)))
+                .thenReturn(Page.empty(deterministicPageable));
 
         var response = service().getUsers("missing", null, null, pageable);
 
@@ -101,6 +109,38 @@ class AdminUserServiceTest {
         assertThat(response.totalPages()).isZero();
         assertThat(response.last()).isTrue();
         verifyNoInteractions(states);
+    }
+
+    static Stream<Arguments> deterministicSorts() {
+        var byId = Sort.by("userId");
+        var createdDescending = Sort.by("createdAt").descending();
+        var multiple = Sort.by(Sort.Order.asc("lmsRole"), Sort.Order.desc("accessStatus"));
+        var withOptions = Sort.by(Sort.Order.desc("fullName").ignoreCase().nullsLast());
+        var idDescending = byId.descending();
+        return Stream.of(
+                Arguments.of(Sort.unsorted(), byId),
+                Arguments.of(createdDescending, createdDescending.and(byId)),
+                Arguments.of(multiple, multiple.and(byId)),
+                Arguments.of(withOptions, withOptions.and(byId)),
+                Arguments.of(idDescending, idDescending),
+                Arguments.of(createdDescending.and(idDescending), createdDescending.and(idDescending)),
+                Arguments.of(idDescending.and(multiple), idDescending.and(multiple)),
+                Arguments.of(createdDescending.and(byId).and(multiple), createdDescending.and(byId).and(multiple)));
+    }
+
+    @ParameterizedTest
+    @MethodSource("deterministicSorts")
+    void usesUniqueOrderingWithoutChangingRequestedSortOrPagination(Sort requested, Sort expected) {
+        for (boolean paged : List.of(true, false)) {
+            Pageable pageable = paged ? PageRequest.of(2, 7, requested) : Pageable.unpaged(requested);
+            Pageable deterministicPageable = paged ? PageRequest.of(2, 7, expected) : Pageable.unpaged(expected);
+            when(users.findAll(any(Specification.class), eq(deterministicPageable)))
+                    .thenReturn(Page.empty(deterministicPageable));
+
+            service().getUsers(null, null, null, pageable);
+
+            verify(users).findAll(any(Specification.class), eq(deterministicPageable));
+        }
     }
 
     @ParameterizedTest
@@ -127,14 +167,16 @@ class AdminUserServiceTest {
     @Test
     void acceptsMaximumSupportedOffset() {
         var pageable = PageRequest.of(Integer.MAX_VALUE, 1);
-        when(users.findAll(any(Specification.class), eq(pageable))).thenReturn(Page.empty(pageable));
+        var deterministicPageable = pageable.withSort(Sort.by("userId"));
+        when(users.findAll(any(Specification.class), eq(deterministicPageable)))
+                .thenReturn(Page.empty(deterministicPageable));
 
         var result = service().getUsers(null, null, null, pageable);
         assertThat(result.content()).isEmpty();
         assertThat(result.last()).isTrue();
         assertThat(result.page()).isEqualTo(2147483648L);
 
-        verify(users).findAll(any(Specification.class), eq(pageable));
+        verify(users).findAll(any(Specification.class), eq(deterministicPageable));
     }
 
     @ParameterizedTest

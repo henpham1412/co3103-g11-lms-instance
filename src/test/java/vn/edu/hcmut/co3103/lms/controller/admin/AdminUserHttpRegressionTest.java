@@ -35,6 +35,7 @@ import java.net.http.HttpResponse;
 import java.time.Clock;
 import java.time.Duration;
 import java.time.Instant;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
@@ -130,6 +131,51 @@ class AdminUserHttpRegressionTest {
         assertThat(filtered.path("items").size()).isEqualTo(1);
         assertProjection(filtered.path("items").get(0), "TUTOR", "SUSPENDED");
         assertThat(auditLogs.count()).isEqualTo(1);
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {"", "&sort=created_at,desc", "&sort=created_at,asc",
+            "&sort=lms_role,asc", "&sort=lms_role,desc",
+            "&sort=access_status,asc", "&sort=access_status,desc",
+            "&sort=full_name,asc", "&sort=email,desc", "&sort=updated_at,desc",
+            "&sort=last_login_at,asc", "&sort=last_login_at,desc",
+            "&sort=created_at,desc&sort=user_id,asc",
+            "&sort=created_at,desc&sort=user_id,desc",
+            "&sort=user_id,desc&sort=full_name,asc",
+            "&sort=lms_role,asc&sort=userId,desc&sort=access_status,desc"})
+    void paginationWithTiedSortValuesEnumeratesEveryUserExactlyOnce(String sort) throws Exception {
+        int total = 103;
+        int size = 10;
+        int totalPages = (total + size - 1) / size;
+        var fixtures = new ArrayList<LmsUserAccess>();
+        // Insert in a different order from UUID order; every requested non-ID sort value ties.
+        for (int i = total; i > 0; i--) {
+            fixtures.add(new LmsUserAccess(new UUID(0, i), "Tied Pagination User", "tied@example.test",
+                    LmsRole.STUDENT, AccessStatus.ACTIVE, null, ORIGINAL_TIME, ORIGINAL_TIME));
+        }
+        users.saveAllAndFlush(fixtures);
+        var expectedIds = fixtures.stream().map(user -> user.getUserId().toString()).sorted().toList();
+        if (sort.contains("user_id,desc") || sort.contains("userId,desc")) {
+            expectedIds = expectedIds.reversed();
+        }
+
+        for (String route : List.of(USERS, "/api/admin/users")) {
+            var seenIds = new ArrayList<String>();
+            for (int page = 1; page <= totalPages + 1; page++) {
+                var result = json(send("GET", route + "?q=Tied%20Pagination%20User&page=" + page
+                        + "&size=" + size + sort, null, "application/json", admin.getUserId()), 200);
+                assertThat(result.path("page").asInt()).isEqualTo(page);
+                assertThat(result.path("size").asInt()).isEqualTo(size);
+                assertThat(result.path("total_items").asInt()).isEqualTo(total);
+                assertThat(result.path("total_pages").asInt()).isEqualTo(totalPages);
+                assertThat(result.path("last").asBoolean()).isEqualTo(page >= totalPages);
+                assertThat(result.path("items").size()).isEqualTo(Math.min(size, Math.max(0, total - (page - 1) * size)));
+                for (var user : result.path("items")) {
+                    seenIds.add(user.path("user_id").asText());
+                }
+            }
+            assertThat(seenIds).doesNotHaveDuplicates().containsExactlyElementsOf(expectedIds);
+        }
     }
 
     static Stream<Arguments> unacceptableRepresentations() {

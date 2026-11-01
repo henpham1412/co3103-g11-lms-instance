@@ -1,6 +1,8 @@
 package vn.edu.hcmut.co3103.lms.service.admin;
 
+import org.springframework.data.domain.PageRequest;
 import org.springframework.data.domain.Pageable;
+import org.springframework.data.domain.Sort;
 import org.springframework.security.access.AccessDeniedException;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -48,6 +50,13 @@ public class AdminUserService {
             if (!SORTABLE_PROPERTIES.contains(order.getProperty())) {
                 throw new AdminAccessValidationException();
             }
+        }
+        // A unique final order prevents tied rows from moving between OFFSET/LIMIT windows.
+        if (pageable.getSort().getOrderFor("userId") == null) {
+            Sort sort = pageable.getSort().and(Sort.by("userId"));
+            pageable = pageable.isPaged()
+                    ? PageRequest.of(pageable.getPageNumber(), pageable.getPageSize(), sort)
+                    : Pageable.unpaged(sort);
         }
         var page = users.findAll(LmsUserAccessSpecification.filter(query, role, status), pageable)
                 .map(AdminUserService::toResponse);
