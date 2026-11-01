@@ -151,6 +151,25 @@ application must own the database/schema or have permission to create schemas,
 tables, constraints, and indexes, alter migrated objects, and read/write tables.
 Migration ownership is required on upgrades as well as fresh installations.
 
+Every application/Flyway pool connection sets PostgreSQL `log_error_verbosity=terse`,
+disables failing-statement and statement/duration sampling logs, and disables error
+parameter logging. This suppresses constraint-failure row `DETAIL` and SQL/parameter
+copies in the server log. SQLSTATE and safe primary constraint errors remain available.
+The pool fails to start if these settings cannot be applied. For a non-superuser
+database owner, a database administrator must grant these narrowly scoped permissions
+(replace `lms_app` with the actual application role):
+
+```sql
+GRANT SET ON PARAMETER log_error_verbosity, log_min_error_statement,
+  log_parameter_max_length_on_error, log_statement, log_min_duration_statement,
+  log_min_duration_sample, log_transaction_sample_rate TO lms_app;
+```
+
+Use the same policy for other database clients and log collectors. `terse` removes
+DETAIL, HINT, QUERY and CONTEXT; it does not redact arbitrary primary error messages
+from custom SQL/functions. Keep PII out of those messages and restrict database-log
+access and retention. See [PostgreSQL logging settings](https://www.postgresql.org/docs/18/runtime-config-logging.html).
+
 Set the datasource variables in the shell that runs Maven; `.env` files are not
 loaded automatically by the application:
 
@@ -237,6 +256,7 @@ Use JDK 25 and a **disposable PostgreSQL 18.6 database**, separate from developm
 or production data. Tests create schemas, run Flyway migrations, insert/delete
 fixtures, alter constraints, and drop test schemas. The test role must own this
 database and its test objects; superuser access is not required.
+The test role also needs the logging-parameter SET grants listed in §5.4.
 
 After setting `DB_USERNAME` and `DB_PASSWORD` as above:
 

@@ -74,6 +74,12 @@ public final class JwtTestSupport implements AutoCloseable {
                 Arguments.of("exp", 253402300800L),
                 Arguments.of("iat", -1L),
                 Arguments.of("nbf", -0.5),
+                Arguments.of("iat", new BigDecimal("-1e-400")),
+                Arguments.of("nbf", new BigDecimal("-1e-400")),
+                Arguments.of("iat", new BigDecimal("-1e-10000")),
+                Arguments.of("nbf", new BigDecimal("-1e-10000")),
+                Arguments.of("exp", new BigDecimal("253402300800.000000000001")),
+                Arguments.of("exp", Long.MAX_VALUE),
                 Arguments.of("exp", "1700000000"));
     }
 
@@ -83,12 +89,12 @@ public final class JwtTestSupport implements AutoCloseable {
 
     public static Stream<Arguments> fractionalTimestampBoundaries() {
         return Stream.of(
-                Arguments.of("iat", "60.5", false),
+                Arguments.of("iat", "60.000000000001", false),
                 Arguments.of("iat", "60", true),
-                Arguments.of("nbf", "60.5", false),
+                Arguments.of("nbf", "60.000000000001", false),
                 Arguments.of("nbf", "60", true),
                 Arguments.of("exp", "-60", true),
-                Arguments.of("exp", "-60.5", false));
+                Arguments.of("exp", "-60.000000000001", false));
     }
 
     public static Stream<Arguments> fractionalLifespans() {

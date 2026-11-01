@@ -17,11 +17,14 @@ import lombok.AllArgsConstructor;
 import lombok.Getter;
 import lombok.NoArgsConstructor;
 import lombok.Setter;
+import org.hibernate.annotations.DynamicUpdate;
 
 import java.time.Instant;
 import java.util.UUID;
 
 @Entity
+// Administration must not overwrite a concurrently refreshed CI display projection.
+@DynamicUpdate
 @Table(name = "lms_user_access")
 @Getter
 @Setter

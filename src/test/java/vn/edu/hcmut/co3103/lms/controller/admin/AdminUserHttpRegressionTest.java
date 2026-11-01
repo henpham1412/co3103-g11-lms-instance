@@ -12,6 +12,7 @@ import org.junit.jupiter.api.extension.ExtendWith;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.Arguments;
 import org.junit.jupiter.params.provider.CsvSource;
+import org.junit.jupiter.params.provider.EnumSource;
 import org.junit.jupiter.params.provider.MethodSource;
 import org.junit.jupiter.params.provider.ValueSource;
 import org.slf4j.LoggerFactory;
@@ -105,7 +106,10 @@ class AdminUserHttpRegressionTest {
 
     @BeforeEach
     void createFixtures() {
-        admin = saveUser("Administrator", LmsRole.ADMINISTRATOR, AccessStatus.ACTIVE);
+        // Existing admin requests reuse a login; their mutation snapshots exclude login bookkeeping.
+        UUID adminId = UUID.randomUUID();
+        admin = users.saveAndFlush(new LmsUserAccess(adminId, "Administrator", adminId + "@example.test",
+                LmsRole.ADMINISTRATOR, AccessStatus.ACTIVE, JwtTestSupport.NOW, ORIGINAL_TIME, ORIGINAL_TIME));
         target = saveUser("Nguyễn An", LmsRole.STUDENT, AccessStatus.ACTIVE);
     }
 
@@ -113,6 +117,212 @@ class AdminUserHttpRegressionTest {
     void cleanFixtures() {
         auditLogs.deleteAllInBatch();
         users.deleteAllInBatch();
+    }
+
+    @ParameterizedTest
+    @EnumSource(LmsRole.class)
+    void trustedIdentitySynchronizesDisplayAndLocalLoginWithoutChangingAccess(LmsRole role) throws Exception {
+        target.setLmsRole(role);
+        users.saveAndFlush(target);
+        var claims = TOKENS.claims();
+        claims.put("sub", target.getUserId().toString());
+        claims.put("userId", admin.getUserId().toString()); // Only the verified sub binds local identity.
+        claims.put("fullName", "Updated CI Name");
+        claims.put("email", admin.getEmail()); // Display emails are deliberately not unique.
+        claims.put("roles", List.of("ADMINISTRATOR"));
+        claims.put("access_status", "SUSPENDED");
+        String bearer = TOKENS.token(claims);
+
+        var response = sendToken("GET", USERS, null, bearer);
+        if (role == LmsRole.ADMINISTRATOR) {
+            json(response, 200);
+        } else {
+            error(response, 403, "FORBIDDEN");
+        }
+        var stored = users.findById(target.getUserId()).orElseThrow();
+        assertThat(stored.getFullName()).isEqualTo("Updated CI Name");
+        assertThat(stored.getEmail()).isEqualTo(admin.getEmail());
+        assertThat(stored.getLmsRole()).isEqualTo(role);
+        assertThat(stored.getAccessStatus()).isEqualTo(AccessStatus.ACTIVE);
+        assertThat(stored.getUserId()).isEqualTo(target.getUserId());
+        assertThat(stored.getCreatedAt()).isEqualTo(ORIGINAL_TIME);
+        assertThat(stored.getLastLoginAt()).isEqualTo(JwtTestSupport.NOW);
+        assertThat(stored.getUpdatedAt()).isEqualTo(JwtTestSupport.NOW);
+        assertThat(users.findById(admin.getUserId()).orElseThrow()).usingRecursiveComparison().isEqualTo(admin);
+        assertThat(auditLogs.count()).isZero();
+
+        sendToken("GET", USERS, null, bearer);
+        assertThat(users.findById(target.getUserId()).orElseThrow()).usingRecursiveComparison().isEqualTo(stored);
+        claims.put("iat", JwtTestSupport.NOW.getEpochSecond() + 1);
+        claims.put("fullName", "Newer CI Name");
+        sendToken("GET", USERS, null, TOKENS.token(claims));
+        assertThat(users.findById(target.getUserId()).orElseThrow().getFullName()).isEqualTo("Newer CI Name");
+    }
+
+    @Test
+    void suspendedIdentityCanRefreshDisplayButCannotLoginOrReactivateAccess() throws Exception {
+        target.setAccessStatus(AccessStatus.SUSPENDED);
+        users.saveAndFlush(target);
+        var claims = TOKENS.claims();
+        claims.put("sub", target.getUserId().toString());
+        claims.put("fullName", "Suspended CI Name");
+        claims.put("email", "suspended-ci@example.test");
+        claims.put("lms_role", "ADMINISTRATOR");
+        claims.put("access_status", "ACTIVE");
+        error(sendToken("GET", USERS, null, TOKENS.token(claims)), 403, "FORBIDDEN");
+        var stored = users.findById(target.getUserId()).orElseThrow();
+        assertThat(stored.getFullName()).isEqualTo("Suspended CI Name");
+        assertThat(stored.getEmail()).isEqualTo("suspended-ci@example.test");
+        assertThat(stored.getLmsRole()).isEqualTo(LmsRole.STUDENT);
+        assertThat(stored.getAccessStatus()).isEqualTo(AccessStatus.SUSPENDED);
+        assertThat(stored.getLastLoginAt()).isEqualTo(ORIGINAL_TIME);
+    }
+
+    @Test
+    void absentAndPartialDisplayClaimsPreserveOtherLocalFieldsAndNeverProvisionUsers() throws Exception {
+        var claims = TOKENS.claims();
+        claims.put("sub", target.getUserId().toString());
+        error(sendToken("GET", USERS, null, TOKENS.token(claims)), 403, "FORBIDDEN");
+        var loggedIn = users.findById(target.getUserId()).orElseThrow();
+        assertThat(loggedIn).usingRecursiveComparison().ignoringFields("lastLoginAt", "updatedAt").isEqualTo(target);
+        assertThat(loggedIn.getLastLoginAt()).isEqualTo(JwtTestSupport.NOW);
+        claims.put("email", "partial-ci@example.test");
+        error(sendToken("GET", USERS, null, TOKENS.token(claims)), 403, "FORBIDDEN");
+        var partial = users.findById(target.getUserId()).orElseThrow();
+        assertThat(partial.getEmail()).isEqualTo("partial-ci@example.test");
+        assertThat(partial.getFullName()).isEqualTo(target.getFullName());
+
+        claims.put("sub", UUID.randomUUID().toString());
+        claims.put("email", admin.getEmail());
+        claims.put("fullName", "Unprovisioned CI Name");
+        error(sendToken("GET", USERS, null, TOKENS.token(claims)), 403, "FORBIDDEN");
+        assertThat(users.count()).isEqualTo(2);
+        assertThat(users.findById(admin.getUserId()).orElseThrow()).usingRecursiveComparison().isEqualTo(admin);
+    }
+
+    static Stream<Arguments> invalidDisplayClaims() {
+        return Stream.of(Arguments.of("fullName", null), Arguments.of("fullName", List.of("Name")),
+                Arguments.of("fullName", " "), Arguments.of("fullName", "n".repeat(151)),
+                Arguments.of("email", true), Arguments.of("email", "not-an-email"),
+                Arguments.of("email", "n".repeat(244) + "@example.test"));
+    }
+
+    @ParameterizedTest
+    @MethodSource("invalidDisplayClaims")
+    void malformedDisplayClaimCannotPartiallySynchronizeIdentity(String name, Object value) throws Exception {
+        var claims = TOKENS.claims();
+        claims.put("sub", target.getUserId().toString());
+        claims.put("fullName", "Must Not Persist");
+        claims.put("email", "must-not-persist@example.test");
+        claims.put(name, value);
+        var response = sendToken("GET", USERS, null, TOKENS.token(claims));
+        error(response, 401, "UNAUTHORIZED");
+        assertThat(response.headers().firstValue("WWW-Authenticate")).contains("Bearer");
+        assertUnchanged();
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {"signature", "issuer", "precision"})
+    void untrustedIdentityNeverSynchronizesLocalDisplay(String failure) throws Exception {
+        var claims = TOKENS.claims();
+        claims.put("sub", target.getUserId().toString());
+        claims.put("fullName", "Untrusted CI Name");
+        claims.put("email", "untrusted-ci@example.test");
+        if (failure.equals("issuer")) {
+            claims.put("iss", "https://untrusted.example.test");
+        } else if (failure.equals("precision")) {
+            claims.put("iat", JwtTestSupport.numericDate(JwtTestSupport.NOW)
+                    .add(new java.math.BigDecimal("60.000000000001")));
+        }
+        String token = TOKENS.token(claims);
+        if (failure.equals("signature")) {
+            int start = token.lastIndexOf('.') + 1;
+            token = token.substring(0, start) + (token.charAt(start) == 'A' ? 'B' : 'A') + token.substring(start + 1);
+        }
+        var response = sendToken("GET", USERS, null, token);
+        error(response, 401, "UNAUTHORIZED");
+        assertThat(response.headers().firstValue("WWW-Authenticate")).contains("Bearer");
+        assertUnchanged();
+    }
+
+    @Test
+    void failedProfileSynchronizationReturnsSafe500AndRollsBack(CapturedOutput output) throws Exception {
+        jdbc.execute("ALTER TABLE admin_user_http_test.lms_user_access ADD CONSTRAINT reject_test_profile CHECK (full_name <> 'SYNC_DATABASE_NAME_MARKER')");
+        try {
+            var claims = TOKENS.claims();
+            claims.put("sub", target.getUserId().toString());
+            claims.put("fullName", "SYNC_DATABASE_NAME_MARKER");
+            claims.put("email", "sync-database-pii@example.test");
+            var response = sendToken("GET", USERS, null, TOKENS.token(claims));
+            error(response, 500, "INTERNAL_SERVER_ERROR");
+            assertThat(mapper.readTree(response.body())).isEqualTo(mapper.readTree("""
+                    {"code":"INTERNAL_SERVER_ERROR","message":"An unexpected server error occurred.","details":[]}
+                    """));
+            assertThat(response.headers().firstValue("WWW-Authenticate")).isEmpty();
+            assertUnchanged();
+            assertNoLogPii(output, "SYNC_DATABASE_NAME_MARKER", "sync-database-pii@example.test", "Failing row contains");
+        } finally {
+            jdbc.execute("ALTER TABLE admin_user_http_test.lms_user_access DROP CONSTRAINT reject_test_profile");
+        }
+    }
+
+    @Test
+    void concurrentRevocationSurvivesQueuedProfileSynchronization() throws Exception {
+        target.setLmsRole(LmsRole.ADMINISTRATOR);
+        users.saveAndFlush(target);
+        var claims = TOKENS.claims();
+        claims.put("sub", target.getUserId().toString());
+        claims.put("fullName", "Concurrent CI Name");
+        claims.put("email", "concurrent-ci@example.test");
+        String token = TOKENS.token(claims);
+        try (var executor = Executors.newSingleThreadExecutor()) {
+            Future<HttpResponse<String>> pending;
+            try (var barrier = dataSource.getConnection()) {
+                barrier.setAutoCommit(false);
+                try (var statement = barrier.prepareStatement(
+                        "SELECT user_id FROM admin_user_http_test.lms_user_access WHERE user_id = ? FOR UPDATE")) {
+                    statement.setObject(1, target.getUserId());
+                    statement.execute();
+                }
+                pending = executor.submit(() -> sendToken("GET", USERS, null, token));
+                long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(10);
+                boolean blocked = false;
+                while (System.nanoTime() < deadline) {
+                    blocked = jdbc.queryForObject("""
+                            SELECT EXISTS (SELECT 1 FROM pg_stat_activity
+                            WHERE datname = current_database() AND pid <> pg_backend_pid()
+                              AND wait_event_type = 'Lock'
+                              AND query LIKE '%update%admin_user_http_test.lms_user_access%')
+                            """, Boolean.class);
+                    if (blocked) break;
+                    Thread.sleep(20);
+                }
+                assertThat(blocked).as("authentication waits after reading the old active role").isTrue();
+                try (var statement = barrier.prepareStatement("""
+                        UPDATE admin_user_http_test.lms_user_access
+                        SET lms_role = 'STUDENT', access_status = 'SUSPENDED' WHERE user_id = ?
+                        """)) {
+                    statement.setObject(1, target.getUserId());
+                    statement.executeUpdate();
+                }
+                barrier.commit();
+            }
+            error(pending.get(15, TimeUnit.SECONDS), 403, "FORBIDDEN");
+        }
+        var stored = users.findById(target.getUserId()).orElseThrow();
+        assertThat(stored.getFullName()).isEqualTo("Concurrent CI Name");
+        assertThat(stored.getEmail()).isEqualTo("concurrent-ci@example.test");
+        assertThat(stored.getLmsRole()).isEqualTo(LmsRole.STUDENT);
+        assertThat(stored.getAccessStatus()).isEqualTo(AccessStatus.SUSPENDED);
+        assertThat(stored.getLastLoginAt()).isEqualTo(ORIGINAL_TIME);
+    }
+
+    private HttpResponse<String> sendToken(String method, String path, String body, String token) throws Exception {
+        var request = HttpRequest.newBuilder(URI.create("http://127.0.0.1:" + port + path))
+                .timeout(Duration.ofSeconds(15)).header("Accept", "application/json")
+                .header("Authorization", "Bearer " + token).header("Content-Type", "application/json")
+                .method(method, body == null ? HttpRequest.BodyPublishers.noBody() : HttpRequest.BodyPublishers.ofString(body));
+        return CLIENT.send(request.build(), HttpResponse.BodyHandlers.ofString());
     }
 
     @ParameterizedTest

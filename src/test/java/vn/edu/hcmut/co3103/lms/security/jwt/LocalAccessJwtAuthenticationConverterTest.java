@@ -1,5 +1,6 @@
 package vn.edu.hcmut.co3103.lms.security.jwt;
 
+import jakarta.validation.Validator;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
@@ -40,7 +41,7 @@ class LocalAccessJwtAuthenticationConverterTest {
     @BeforeEach
     void setUp() {
         repository = mock(LmsUserAccessRepository.class);
-        converter = new LocalAccessJwtAuthenticationConverter(repository);
+        converter = new LocalAccessJwtAuthenticationConverter(repository, mock(Validator.class), JwtTestSupport.CLOCK);
     }
 
     @ParameterizedTest
@@ -151,7 +152,7 @@ class LocalAccessJwtAuthenticationConverterTest {
                 .claim("scp", List.of("STUDENT", "TUTOR", "ADMINISTRATOR"))
                 .claim("roles", List.of("ADMINISTRATOR"))
                 .claim("authorities", List.of("ROLE_ADMINISTRATOR"))
-                .claim("email", "external@example.test")
+                .claim("email", "local@example.test")
                 .claims(claims -> {
                     if (subject != null) {
                         claims.put("sub", subject);

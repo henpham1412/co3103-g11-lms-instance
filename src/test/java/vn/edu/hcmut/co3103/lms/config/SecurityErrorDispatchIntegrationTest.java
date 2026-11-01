@@ -159,7 +159,8 @@ class SecurityErrorDispatchIntegrationTest {
             assertThat(response.body()).doesNotContain(token);
             assertThat(controller.invocations).hasValue(1);
         }
-        verify(repository, times(3)).findById(user.getUserId());
+        // Successful authentication re-reads access after recording the first local login.
+        verify(repository, times(4)).findById(user.getUserId());
 
         // Remove only the injected failure; recovery must use the real PostgreSQL repository.
         reset(repository);

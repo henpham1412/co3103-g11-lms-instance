@@ -125,13 +125,13 @@ class JwtValidationTest {
         Map<String, Object> claims = tokens.claims();
         claims.put("iat", 0);
         claims.put("nbf", 0);
-        claims.put("exp", 253402300799L);
+        claims.put("exp", new BigDecimal("253402300799.999999999999"));
 
         Jwt jwt = decoder.decode(tokens.token(claims));
 
         assertThat(jwt.getIssuedAt()).isEqualTo(Instant.EPOCH);
         assertThat(jwt.getNotBefore()).isEqualTo(Instant.EPOCH);
-        assertThat(jwt.getExpiresAt()).isEqualTo(Instant.parse("9999-12-31T23:59:59Z"));
+        assertThat(jwt.getExpiresAt()).isEqualTo(Instant.parse("9999-12-31T23:59:59.999999999Z"));
     }
 
     @Test

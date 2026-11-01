@@ -69,6 +69,29 @@ class AdminUserServiceIntegrationTest {
     }
 
     @Test
+    void accessUpdateDoesNotOverwriteAnIdentityProjectionRefreshedAfterLoadingTheUser() {
+        var admin = saveUser("Admin", LmsRole.ADMINISTRATOR, AccessStatus.ACTIVE);
+        var target = saveUser("Original CI Name", LmsRole.STUDENT, AccessStatus.ACTIVE);
+        Instant login = Instant.now().truncatedTo(ChronoUnit.MICROS);
+        new TransactionTemplate(transactions).executeWithoutResult(outer -> {
+            // Hold the same managed snapshot an administrator would load before a concurrent login.
+            users.findById(target.getUserId()).orElseThrow();
+            var separateLogin = new TransactionTemplate(transactions);
+            separateLogin.setPropagationBehavior(org.springframework.transaction.TransactionDefinition.PROPAGATION_REQUIRES_NEW);
+            separateLogin.executeWithoutResult(inner -> users.synchronizeIdentity(target.getUserId(),
+                    "Refreshed CI Name", "refreshed-ci@example.test", login, login));
+            service.updateUserAccess(target.getUserId(),
+                    new UpdateUserAccessRequest(LmsRole.TUTOR, AccessStatus.SUSPENDED), admin.getUserId());
+        });
+        var stored = users.findById(target.getUserId()).orElseThrow();
+        assertThat(stored.getFullName()).isEqualTo("Refreshed CI Name");
+        assertThat(stored.getEmail()).isEqualTo("refreshed-ci@example.test");
+        assertThat(stored.getLastLoginAt()).isEqualTo(login);
+        assertThat(stored.getLmsRole()).isEqualTo(LmsRole.TUTOR);
+        assertThat(stored.getAccessStatus()).isEqualTo(AccessStatus.SUSPENDED);
+    }
+
+    @Test
     void filtersAndPaginatesPersistedUsers() {
         saveUser("Alice A", LmsRole.TUTOR, AccessStatus.ACTIVE);
         var second = saveUser("Alice B", LmsRole.TUTOR, AccessStatus.ACTIVE);

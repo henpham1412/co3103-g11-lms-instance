@@ -73,6 +73,18 @@ and implementation components.
   Local email is **not unique** in the LMS schema; Central Identity's email
   uniqueness applies to its separate identity database.
   Upgrades from V1 must preserve duplicate email projections through V2 and V3.
+- After trusted JWT validation, optional `fullName` and `email` claims synchronize
+  the existing row selected by `sub`. Missing claims preserve existing copies;
+  supplied claims must satisfy the local display-field validation or return 401.
+  Updates never provision users or change UUID, role, status, or creation time.
+  Suspended users can refresh display copies but still receive 403 and do not
+  record a successful LMS login. A column-specific update and a fresh access read
+  preserve concurrent role/status revocations.
+- For active local users, the first authentication with a token issued after the
+  prior local login records the LMS clock time in `last_login_at`. Reusing that
+  token does not advance it on every API request. This is local authentication,
+  independent of whether the particular endpoint permits the user's role, and
+  distinct from Central Identity's authentication timestamp.
 
 ## CORS and OPTIONS
 

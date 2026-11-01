@@ -64,3 +64,16 @@ jobs:
 
       - name: Run Maven build and tests
         run: ./mvnw --batch-mode --no-transfer-progress clean verify
+
+      - name: Verify PostgreSQL constraint diagnostics omit profile data
+        if: always()
+        run: |
+          docker logs "${{ job.services.postgres.id }}" > "$RUNNER_TEMP/lms-postgres.log" 2>&1
+          # Real HTTP tests must exercise database failures; an empty log is not proof of redaction.
+          python3 - "$RUNNER_TEMP/lms-postgres.log" <<'PY'
+          import pathlib, sys
+          log = pathlib.Path(sys.argv[1]).read_text()
+          assert all(marker in log for marker in ('"reject_test_role"', '"reject_test_profile"')), 'Missing constraint-failure evidence'
+          assert not any(marker in log for marker in ('Failing row contains', 'DATABASE_NAME_MARKER', 'database-pii@example.test')), 'PostgreSQL diagnostic privacy regression'
+          print('PostgreSQL constraint diagnostics contain no profile canaries or failing-row details')
+          PY

@@ -1,6 +1,7 @@
 package vn.edu.hcmut.co3103.lms.config;
 
 import jakarta.servlet.Filter;
+import jakarta.validation.Validator;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.ValueSource;
@@ -160,6 +161,7 @@ class CorsConfigurationTest {
     @Configuration(proxyBeanMethods = false)
     static class Dependencies {
         @Bean ObjectMapper objectMapper() { return new ObjectMapper(); }
+        @Bean Validator validator() { return mock(Validator.class); }
         @Bean LmsUserAccessRepository users() { return mock(LmsUserAccessRepository.class); }
     }
 }
