@@ -169,29 +169,32 @@ public class QuizQuestionService {
         Set<UUID> keepIds = requested.stream().map(QuestionUpdateRequest.Option::optionId)
                 .filter(Objects::nonNull).collect(Collectors.toSet());
         List<QuestionOption> removed = existing.stream().filter(option -> !keepIds.contains(option.getId())).toList();
+        List<QuestionOption> surviving = existing.stream().filter(option -> keepIds.contains(option.getId())).toList();
         if (!removed.isEmpty()) optionRepository.deleteAll(removed);
         optionRepository.flush();
 
         int maxRequestedOrder = requested.stream().map(QuestionUpdateRequest.Option::orderIndex)
                 .max(Integer::compareTo).orElse(0);
-        long maxExistingOrder = existing.stream().map(QuestionOption::getOrderIndex)
+        long maxExistingOrder = surviving.stream().map(QuestionOption::getOrderIndex)
                 .max(Integer::compareTo).orElse(0);
-        long offset = Math.max(maxRequestedOrder, maxExistingOrder) + existing.size() + 1L;
-        if (existing.stream().anyMatch(option -> (long) option.getOrderIndex() + offset > Integer.MAX_VALUE)) {
+        long offset = Math.max(maxRequestedOrder, maxExistingOrder) + surviving.size() + 1L;
+        if (surviving.stream().anyMatch(option -> (long) option.getOrderIndex() + offset > Integer.MAX_VALUE)) {
             throw invalidQuestion();
         }
-        for (QuestionOption option : existing) option.setOrderIndex(option.getOrderIndex() + (int) offset);
-        optionRepository.saveAll(existing);
+        for (QuestionOption option : surviving) option.setOrderIndex(option.getOrderIndex() + (int) offset);
+        optionRepository.saveAll(surviving);
         optionRepository.flush();
 
+        List<QuestionOption> finalOptions = new ArrayList<>(requested.size());
         for (QuestionUpdateRequest.Option item : requested) {
             QuestionOption option = item.optionId() == null ? new QuestionOption() : byId.get(item.optionId());
             option.setQuestion(question);
             option.setContent(item.content().trim());
             option.setIsCorrect(item.isCorrect());
             option.setOrderIndex(item.orderIndex());
-            optionRepository.save(option);
+            finalOptions.add(option);
         }
+        optionRepository.saveAll(finalOptions);
     }
 
     private void recalculateSubmittedAttempts(Quiz quiz) {
