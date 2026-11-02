@@ -11,6 +11,7 @@ import org.springframework.security.oauth2.server.resource.authentication.JwtAut
 import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.request.RequestPostProcessor;
 import org.springframework.test.web.servlet.setup.MockMvcBuilders;
+import org.springframework.mock.web.MockMultipartFile;
 import org.springframework.web.method.support.HandlerMethodArgumentResolver;
 import org.springframework.web.method.support.ModelAndViewContainer;
 import org.springframework.core.MethodParameter;
@@ -20,10 +21,13 @@ import vn.edu.hcmut.co3103.lms.dto.request.ClassCreationRequest;
 import vn.edu.hcmut.co3103.lms.dto.request.ClassUpdateRequest;
 import vn.edu.hcmut.co3103.lms.dto.response.ClassCatalogResponse;
 import vn.edu.hcmut.co3103.lms.dto.response.ClassCreationResponse;
+import vn.edu.hcmut.co3103.lms.exception.GlobalExceptionHandler;
+import vn.edu.hcmut.co3103.lms.exception.ClassCodeAlreadyExistsException;
 import vn.edu.hcmut.co3103.lms.entity.Class;
 import vn.edu.hcmut.co3103.lms.mapper.ClassMapper;
 import vn.edu.hcmut.co3103.lms.service.classmanagement.ClassMembershipService;
 import vn.edu.hcmut.co3103.lms.service.classmanagement.ClassService;
+import vn.edu.hcmut.co3103.lms.service.classmanagement.ClassThumbnailService;
 
 import java.time.Instant;
 import java.util.List;
@@ -36,6 +40,7 @@ import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.multipart;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.patch;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
@@ -46,15 +51,17 @@ class ClassControllerApiTest {
     private final ClassService classService = mock(ClassService.class);
     private final ClassMembershipService membershipService = mock(ClassMembershipService.class);
     private final ClassMapper mapper = new ClassMapper();
+    private final ClassThumbnailService thumbnailService = mock(ClassThumbnailService.class);
     private final UUID tutorId = UUID.randomUUID();
     private final UUID classId = UUID.randomUUID();
     private MockMvc mvc;
 
     @BeforeEach
     void setUp() {
-        ClassController controller = new ClassController(classService, membershipService, mapper);
+        ClassController controller = new ClassController(classService, membershipService, mapper, thumbnailService);
         mvc = MockMvcBuilders.standaloneSetup(controller)
                 .setCustomArgumentResolvers(new AuthenticationArgumentResolver())
+                .setControllerAdvice(new GlobalExceptionHandler())
                 .build();
     }
 
@@ -140,6 +147,101 @@ class ClassControllerApiTest {
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.class_id").value(classId.toString()))
                 .andExpect(jsonPath("$.title").value("Updated title"));
+    }
+
+    @Test
+    void tutorCanUploadClassThumbnailUsingMultipartContract() throws Exception {
+        String url = "http://localhost:8081/class-thumbnails/thumbnail.png";
+        when(thumbnailService.upload(eq(classId), eq(tutorId), any())).thenReturn(url);
+        MockMultipartFile image = new MockMultipartFile(
+                "file", "cover.png", MediaType.IMAGE_PNG_VALUE,
+                new byte[]{(byte) 0x89, 'P', 'N', 'G', 13, 10, 26, 10}
+        );
+
+        mvc.perform(multipart("/api/v1/classes/{id}/thumbnail", classId)
+                        .file(image).with(jwtAs("TUTOR")))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.thumbnail_url").value(url));
+        verify(thumbnailService).upload(eq(classId), eq(tutorId), any());
+    }
+
+    @Test
+    void invalidEnrollmentPolicyUsesTheDocumentedErrorEnvelope() throws Exception {
+        mvc.perform(get("/api/v1/classes").param("enrollment_policy", "INVALID"))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.code").value("INVALID_QUERY_PARAMETER"))
+                .andExpect(jsonPath("$.message").isNotEmpty())
+                .andExpect(jsonPath("$.details").isArray());
+    }
+
+    @Test
+    void malformedJsonUsesTheDocumentedErrorEnvelope() throws Exception {
+        mvc.perform(post("/api/v1/classes").with(jwtAs("TUTOR"))
+                        .contentType(MediaType.APPLICATION_JSON).content("{not-json"))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.code").value("VALIDATION_ERROR"))
+                .andExpect(jsonPath("$.message").isNotEmpty())
+                .andExpect(jsonPath("$.details").isArray());
+    }
+
+    @Test
+    void classValidationUsesTheDocumentedErrorEnvelope() throws Exception {
+        mvc.perform(post("/api/v1/classes").with(jwtAs("TUTOR"))
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"title\":\" \",\"class_code\":\"x\",\"enrollment_policy\":\"OPEN\"}"))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.code").value("VALIDATION_ERROR"))
+                .andExpect(jsonPath("$.message").isNotEmpty())
+                .andExpect(jsonPath("$.details[0].field").isNotEmpty())
+                .andExpect(jsonPath("$.details[0].code").value("INVALID_VALUE"));
+    }
+
+    @Test
+    void duplicateClassCodeRaceUsesConflictEnvelope() throws Exception {
+        when(classService.createClass(any(ClassCreationRequest.class), any()))
+                .thenThrow(new ClassCodeAlreadyExistsException());
+
+        mvc.perform(post("/api/v1/classes").with(jwtAs("TUTOR"))
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"title\":\"Programming\",\"class_code\":\"CS101\",\"enrollment_policy\":\"OPEN\"}"))
+                .andExpect(status().isConflict())
+                .andExpect(jsonPath("$.code").value("CLASS_CODE_ALREADY_EXISTS"))
+                .andExpect(jsonPath("$.message").isNotEmpty())
+                .andExpect(jsonPath("$.details").isArray());
+    }
+
+    @Test
+    void databaseUniqueConstraintRaceUsesSameConflictEnvelope() throws Exception {
+        var sqlException = new java.sql.SQLException("do not expose this");
+        var databaseCause = new org.hibernate.exception.ConstraintViolationException(
+                "duplicate class code", sqlException, "uq_class_class_code");
+        when(classService.createClass(any(ClassCreationRequest.class), any()))
+                .thenThrow(new org.springframework.dao.DataIntegrityViolationException(
+                        "database detail must not be exposed", databaseCause));
+
+        mvc.perform(post("/api/v1/classes").with(jwtAs("TUTOR"))
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"title\":\"Programming\",\"class_code\":\"CS101\",\"enrollment_policy\":\"OPEN\"}"))
+                .andExpect(status().isConflict())
+                .andExpect(jsonPath("$.code").value("CLASS_CODE_ALREADY_EXISTS"))
+                .andExpect(jsonPath("$.message").isNotEmpty())
+                .andExpect(jsonPath("$.details").isArray())
+                .andExpect(result -> org.junit.jupiter.api.Assertions.assertFalse(
+                        result.getResponse().getContentAsString().contains("database detail")));
+    }
+
+    @Test
+    void thumbnailRequiresMultipartAndFilePartErrorsUseContractEnvelope() throws Exception {
+        mvc.perform(post("/api/v1/classes/{id}/thumbnail", classId).with(jwtAs("TUTOR"))
+                        .contentType(MediaType.APPLICATION_JSON).content("{}"))
+                .andExpect(status().isUnsupportedMediaType())
+                .andExpect(jsonPath("$.code").value("UNSUPPORTED_MEDIA_TYPE"))
+                .andExpect(jsonPath("$.details").isArray());
+
+        mvc.perform(multipart("/api/v1/classes/{id}/thumbnail", classId).with(jwtAs("TUTOR")))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.code").value("INVALID_FILE"))
+                .andExpect(jsonPath("$.details").isArray());
     }
 
     @Test

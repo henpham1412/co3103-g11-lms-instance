@@ -230,6 +230,77 @@ class ClassMembershipServiceTest {
         verify(classMemberRepository, never()).save(any(ClassMember.class));
     }
 
+    @Test
+    void rejectionRejectsMembershipThatIsNotPending() {
+        ClassMember inactive = membership(ClassMember.MembershipStatus.INACTIVE);
+        when(classMemberRepository.findByClassMemberIdAndClassId(inactive.getClassMemberId(), classId))
+                .thenReturn(Optional.of(inactive));
+
+        ResponseStatusException error = assertThrows(ResponseStatusException.class,
+                () -> service.rejectJoinRequest(classId, inactive.getClassMemberId(), tutorId));
+
+        assertEquals(HttpStatus.CONFLICT, error.getStatusCode());
+        assertEquals("INVALID_MEMBERSHIP_STATE", error.getReason());
+        verify(classMemberRepository, never()).save(any(ClassMember.class));
+    }
+
+    @Test
+    void studentCannotLeaveWhileMembershipIsPending() {
+        ClassMember pending = membership(ClassMember.MembershipStatus.PENDING);
+        when(classMemberRepository.findByClassIdAndStudentId(classId, studentId))
+                .thenReturn(Optional.of(pending));
+
+        ResponseStatusException error = assertThrows(ResponseStatusException.class,
+                () -> service.leaveClass(classId, studentId));
+
+        assertEquals(HttpStatus.CONFLICT, error.getStatusCode());
+        assertEquals("INVALID_MEMBERSHIP_STATE", error.getReason());
+        verify(classMemberRepository, never()).save(any(ClassMember.class));
+    }
+
+    @Test
+    void studentCannotWithdrawWhenThereIsNoPendingRequest() {
+        ClassMember active = membership(ClassMember.MembershipStatus.ACTIVE);
+        when(classMemberRepository.findByClassIdAndStudentId(classId, studentId))
+                .thenReturn(Optional.of(active));
+
+        ResponseStatusException error = assertThrows(ResponseStatusException.class,
+                () -> service.withdrawJoinRequest(classId, studentId));
+
+        assertEquals(HttpStatus.CONFLICT, error.getStatusCode());
+        assertEquals("INVALID_MEMBERSHIP_STATE", error.getReason());
+        verify(classMemberRepository, never()).save(any(ClassMember.class));
+    }
+
+    @Test
+    void tutorCannotRejectAnotherTutorsMembership() {
+        Class anotherTutorsClass = new Class(UUID.randomUUID(), "CS202", "Other class", null, null, 10,
+                Class.EnrollmentPolicy.APPROVAL_REQUIRED);
+        ReflectionTestUtils.setField(anotherTutorsClass, "classId", classId);
+        when(classRepository.findByIdForUpdate(classId)).thenReturn(Optional.of(anotherTutorsClass));
+
+        ResponseStatusException error = assertThrows(ResponseStatusException.class,
+                () -> service.rejectJoinRequest(classId, UUID.randomUUID(), tutorId));
+
+        assertEquals(HttpStatus.FORBIDDEN, error.getStatusCode());
+        verify(classMemberRepository, never()).findByClassMemberIdAndClassId(any(), any());
+        verify(classMemberRepository, never()).save(any(ClassMember.class));
+    }
+
+    @Test
+    void tutorCannotRemovePendingRequestAsIfItWereAnActiveMember() {
+        ClassMember pending = membership(ClassMember.MembershipStatus.PENDING);
+        when(classMemberRepository.findByClassMemberIdAndClassId(pending.getClassMemberId(), classId))
+                .thenReturn(Optional.of(pending));
+
+        ResponseStatusException error = assertThrows(ResponseStatusException.class,
+                () -> service.removeMember(classId, pending.getClassMemberId(), tutorId));
+
+        assertEquals(HttpStatus.CONFLICT, error.getStatusCode());
+        assertEquals("INVALID_MEMBERSHIP_STATE", error.getReason());
+        verify(classMemberRepository, never()).save(any(ClassMember.class));
+    }
+
     private ClassMember membership(ClassMember.MembershipStatus status) {
         ClassMember result = new ClassMember(classId, studentId, status,
                 java.time.Instant.now(), status == ClassMember.MembershipStatus.ACTIVE

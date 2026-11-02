@@ -106,6 +106,8 @@ public class SecurityConfig {
                         // Let internal dispatches render safe JSON errors without a false 401.
                         // Direct requests to /error still require an active local role below.
                         .dispatcherTypeMatchers(DispatcherType.ERROR).permitAll()
+                        // Thumbnails are public class-catalog assets; uploads remain tutor-protected.
+                        .requestMatchers("/class-thumbnails/**").permitAll()
                         // A valid JWT establishes identity; an active local role grants LMS access.
                         .anyRequest().hasAnyRole("STUDENT", "TUTOR", "ADMINISTRATOR")
                 )

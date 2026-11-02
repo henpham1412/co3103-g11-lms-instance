@@ -6,6 +6,7 @@ import org.springframework.data.domain.PageRequest;
 import org.springframework.data.domain.Pageable;
 import org.springframework.data.domain.Sort;
 import org.springframework.http.HttpStatus;
+import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.security.core.Authentication;
@@ -19,13 +20,16 @@ import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
+import org.springframework.web.bind.annotation.RequestPart;
 import org.springframework.web.bind.annotation.RestController;
+import org.springframework.web.multipart.MultipartFile;
 import org.springframework.web.server.ResponseStatusException;
 import vn.edu.hcmut.co3103.lms.dto.request.ClassCreationRequest;
 import vn.edu.hcmut.co3103.lms.dto.request.ClassUpdateRequest;
 import vn.edu.hcmut.co3103.lms.dto.response.ClassCatalogResponse;
 import vn.edu.hcmut.co3103.lms.dto.response.ClassCreationResponse;
 import vn.edu.hcmut.co3103.lms.dto.response.ClassMemberResponse;
+import vn.edu.hcmut.co3103.lms.dto.response.ClassThumbnailResponse;
 import vn.edu.hcmut.co3103.lms.dto.response.CurrentMembershipResponse;
 import vn.edu.hcmut.co3103.lms.dto.response.MembershipActionResponse;
 import vn.edu.hcmut.co3103.lms.dto.response.PageResponse;
@@ -34,6 +38,7 @@ import vn.edu.hcmut.co3103.lms.entity.ClassMember;
 import vn.edu.hcmut.co3103.lms.mapper.ClassMapper;
 import vn.edu.hcmut.co3103.lms.service.classmanagement.ClassMembershipService;
 import vn.edu.hcmut.co3103.lms.service.classmanagement.ClassService;
+import vn.edu.hcmut.co3103.lms.service.classmanagement.ClassThumbnailService;
 
 import java.util.Map;
 import java.util.List;
@@ -64,15 +69,18 @@ public class ClassController {
     private final ClassService classService;
     private final ClassMembershipService membershipService;
     private final ClassMapper classMapper;
+    private final ClassThumbnailService thumbnailService;
 
     public ClassController(
             ClassService classService,
             ClassMembershipService membershipService,
-            ClassMapper classMapper
+            ClassMapper classMapper,
+            ClassThumbnailService thumbnailService
     ) {
         this.classService = classService;
         this.membershipService = membershipService;
         this.classMapper = classMapper;
+        this.thumbnailService = thumbnailService;
     }
 
     @GetMapping("/classes")
@@ -150,6 +158,16 @@ public class ClassController {
         return classMapper.toCreationResponse(
                 classService.updateClass(classId, userId(jwt), request)
         );
+    }
+
+    @PostMapping(path = "/classes/{classId}/thumbnail", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
+    @PreAuthorize("hasRole('TUTOR')")
+    public ClassThumbnailResponse uploadClassThumbnail(
+            @AuthenticationPrincipal Jwt jwt,
+            @PathVariable UUID classId,
+            @RequestPart("file") MultipartFile file
+    ) {
+        return new ClassThumbnailResponse(thumbnailService.upload(classId, userId(jwt), file));
     }
 
     @GetMapping("/classes/{classId}/members")
