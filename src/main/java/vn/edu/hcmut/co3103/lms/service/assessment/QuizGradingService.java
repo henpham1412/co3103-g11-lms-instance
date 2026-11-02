@@ -17,6 +17,8 @@ import vn.edu.hcmut.co3103.lms.repository.assessment.QuizAttemptRepository;
 import java.math.BigDecimal;
 import java.math.RoundingMode;
 import java.time.OffsetDateTime;
+import java.util.List;
+import java.util.Objects;
 import java.util.Set;
 import java.util.UUID;
 import java.util.stream.Collectors;
@@ -35,6 +37,32 @@ public class QuizGradingService {
         for (QuizAttempt attempt : attemptRepository.findByQuiz_IdAndStatus(quiz.getId(), "SUBMITTED")) {
             gradeAttempt(attempt);
         }
+    }
+
+    public BigDecimal calculateFinalGrade(QuizAttempt viewedAttempt) {
+        List<BigDecimal> submittedScores = attemptRepository
+                .findByQuiz_IdAndClassMember_ClassMemberIdOrderByAttemptNumber(
+                        viewedAttempt.getQuiz().getId(), viewedAttempt.getClassMember().getClassMemberId())
+                .stream()
+                .filter(attempt -> "SUBMITTED".equals(attempt.getStatus()))
+                .map(QuizAttempt::getScore)
+                .filter(Objects::nonNull)
+                .toList();
+
+        return aggregateFinalGrade(viewedAttempt.getQuiz().getGradingMethod(), submittedScores);
+    }
+
+    static BigDecimal aggregateFinalGrade(String gradingMethod, List<BigDecimal> submittedScores) {
+        if (submittedScores.isEmpty()) return null;
+
+        return switch (gradingMethod) {
+            case "HIGHEST" -> submittedScores.stream().max(BigDecimal::compareTo).orElseThrow();
+            case "AVERAGE" -> submittedScores.stream()
+                    .reduce(BigDecimal.ZERO, BigDecimal::add)
+                    .divide(BigDecimal.valueOf(submittedScores.size()), 2, RoundingMode.HALF_UP);
+            case "LAST" -> submittedScores.getLast();
+            default -> throw new IllegalStateException("Unsupported quiz grading method: " + gradingMethod);
+        };
     }
 
     public void gradeAttempt(QuizAttempt attempt) {

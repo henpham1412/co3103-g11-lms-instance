@@ -273,7 +273,9 @@ public class QuizAttemptService {
 
     private QuizAttemptResultResponse toResultResponse(QuizAttempt attempt) {
         BigDecimal requiredScore = attempt.getQuiz().getRequiredScore();
-        Boolean passed = requiredScore == null ? null : attempt.getScore().compareTo(requiredScore) >= 0;
+        BigDecimal finalScore = gradingService.calculateFinalGrade(attempt);
+        Boolean passed = requiredScore == null || finalScore == null
+                ? null : finalScore.compareTo(requiredScore) >= 0;
         return new QuizAttemptResultResponse(attempt.getId(), attempt.getStatus(), attempt.getAutoSubmitted(),
                 attempt.getScore(), requiredScore, passed, attempt.getSubmittedAt());
     }
