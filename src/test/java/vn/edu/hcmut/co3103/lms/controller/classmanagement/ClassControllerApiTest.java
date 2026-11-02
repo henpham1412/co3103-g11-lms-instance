@@ -11,7 +11,6 @@ import org.springframework.security.oauth2.server.resource.authentication.JwtAut
 import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.request.RequestPostProcessor;
 import org.springframework.test.web.servlet.setup.MockMvcBuilders;
-import org.springframework.mock.web.MockMultipartFile;
 import org.springframework.web.method.support.HandlerMethodArgumentResolver;
 import org.springframework.web.method.support.ModelAndViewContainer;
 import org.springframework.core.MethodParameter;
@@ -27,7 +26,6 @@ import vn.edu.hcmut.co3103.lms.entity.Class;
 import vn.edu.hcmut.co3103.lms.mapper.ClassMapper;
 import vn.edu.hcmut.co3103.lms.service.classmanagement.ClassMembershipService;
 import vn.edu.hcmut.co3103.lms.service.classmanagement.ClassService;
-import vn.edu.hcmut.co3103.lms.service.classmanagement.ClassThumbnailService;
 
 import java.time.Instant;
 import java.util.List;
@@ -40,7 +38,6 @@ import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
-import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.multipart;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.patch;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
@@ -51,14 +48,13 @@ class ClassControllerApiTest {
     private final ClassService classService = mock(ClassService.class);
     private final ClassMembershipService membershipService = mock(ClassMembershipService.class);
     private final ClassMapper mapper = new ClassMapper();
-    private final ClassThumbnailService thumbnailService = mock(ClassThumbnailService.class);
     private final UUID tutorId = UUID.randomUUID();
     private final UUID classId = UUID.randomUUID();
     private MockMvc mvc;
 
     @BeforeEach
     void setUp() {
-        ClassController controller = new ClassController(classService, membershipService, mapper, thumbnailService);
+        ClassController controller = new ClassController(classService, membershipService, mapper);
         mvc = MockMvcBuilders.standaloneSetup(controller)
                 .setCustomArgumentResolvers(new AuthenticationArgumentResolver())
                 .setControllerAdvice(new GlobalExceptionHandler())
@@ -150,22 +146,6 @@ class ClassControllerApiTest {
     }
 
     @Test
-    void tutorCanUploadClassThumbnailUsingMultipartContract() throws Exception {
-        String url = "http://localhost:8081/class-thumbnails/thumbnail.png";
-        when(thumbnailService.upload(eq(classId), eq(tutorId), any())).thenReturn(url);
-        MockMultipartFile image = new MockMultipartFile(
-                "file", "cover.png", MediaType.IMAGE_PNG_VALUE,
-                new byte[]{(byte) 0x89, 'P', 'N', 'G', 13, 10, 26, 10}
-        );
-
-        mvc.perform(multipart("/api/v1/classes/{id}/thumbnail", classId)
-                        .file(image).with(jwtAs("TUTOR")))
-                .andExpect(status().isOk())
-                .andExpect(jsonPath("$.thumbnail_url").value(url));
-        verify(thumbnailService).upload(eq(classId), eq(tutorId), any());
-    }
-
-    @Test
     void invalidEnrollmentPolicyUsesTheDocumentedErrorEnvelope() throws Exception {
         mvc.perform(get("/api/v1/classes").param("enrollment_policy", "INVALID"))
                 .andExpect(status().isBadRequest())
@@ -228,20 +208,6 @@ class ClassControllerApiTest {
                 .andExpect(jsonPath("$.details").isArray())
                 .andExpect(result -> org.junit.jupiter.api.Assertions.assertFalse(
                         result.getResponse().getContentAsString().contains("database detail")));
-    }
-
-    @Test
-    void thumbnailRequiresMultipartAndFilePartErrorsUseContractEnvelope() throws Exception {
-        mvc.perform(post("/api/v1/classes/{id}/thumbnail", classId).with(jwtAs("TUTOR"))
-                        .contentType(MediaType.APPLICATION_JSON).content("{}"))
-                .andExpect(status().isUnsupportedMediaType())
-                .andExpect(jsonPath("$.code").value("UNSUPPORTED_MEDIA_TYPE"))
-                .andExpect(jsonPath("$.details").isArray());
-
-        mvc.perform(multipart("/api/v1/classes/{id}/thumbnail", classId).with(jwtAs("TUTOR")))
-                .andExpect(status().isBadRequest())
-                .andExpect(jsonPath("$.code").value("INVALID_FILE"))
-                .andExpect(jsonPath("$.details").isArray());
     }
 
     @Test
