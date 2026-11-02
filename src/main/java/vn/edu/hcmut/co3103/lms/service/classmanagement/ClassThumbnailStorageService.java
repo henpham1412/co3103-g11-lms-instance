@@ -1,5 +1,6 @@
 package vn.edu.hcmut.co3103.lms.service.classmanagement;
 
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
@@ -20,6 +21,7 @@ public class ClassThumbnailStorageService {
     private final Path root;
     private final String publicBaseUrl;
 
+    @Autowired
     public ClassThumbnailStorageService(
             @Value("${lms.storage.class-thumbnails.directory:./var/class-thumbnails}") String directory,
             @Value("${lms.storage.class-thumbnails.public-base-url:http://localhost:8081}") String publicBaseUrl
