@@ -181,7 +181,7 @@ class BootstrapMigrationH2Test {
 
     private void migrateV3() {
         Flyway.configure().dataSource(url, "sa", "").baselineOnMigrate(true).baselineVersion("2")
-                .locations("classpath:db/migration").load().migrate();
+                .locations("classpath:db/migration").target("3").load().migrate();
     }
 
     private void insertUser(UUID id) throws SQLException {
