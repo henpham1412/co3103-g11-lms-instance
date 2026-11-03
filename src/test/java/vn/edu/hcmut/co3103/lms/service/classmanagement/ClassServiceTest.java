@@ -159,6 +159,50 @@ class ClassServiceTest {
         verify(classes, never()).searchCatalog(any(), any(), any());
     }
 
+    @Test
+    void classDetailsIncludeTutorAndLearningPrerequisiteInformation() {
+        ClassCatalogRow row = catalogRow(tutorId, "ACTIVE");
+        when(classes.findDetailsByClassId(classId)).thenReturn(Optional.of(row));
+
+        var details = service.getClassDetails(classId, UUID.randomUUID(), false, false);
+
+        assertEquals(classId, details.classId());
+        assertEquals("Programming", details.title());
+        assertEquals("Programming tutor", details.tutor().fullName());
+        assertEquals("Basic algebra", details.prerequisitesDescription());
+        assertEquals(3L, details.activeMemberCount());
+    }
+
+    @Test
+    void studentCannotViewArchivedClassWithoutActiveMembership() {
+        ClassCatalogRow row = catalogRow(tutorId, "ARCHIVED");
+        when(classes.findDetailsByClassId(classId)).thenReturn(Optional.of(row));
+        UUID studentId = UUID.randomUUID();
+        when(members.existsByClassIdAndStudentIdAndStatus(classId, studentId,
+                ClassMember.MembershipStatus.ACTIVE)).thenReturn(false);
+
+        ResponseStatusException error = assertThrows(ResponseStatusException.class,
+                () -> service.getClassDetails(classId, studentId, false, false));
+
+        assertEquals(HttpStatus.NOT_FOUND, error.getStatusCode());
+        assertEquals("CLASS_NOT_FOUND", error.getReason());
+    }
+
+    private ClassCatalogRow catalogRow(UUID ownerId, String status) {
+        ClassCatalogRow row = mock(ClassCatalogRow.class);
+        when(row.getClassId()).thenReturn(classId);
+        when(row.getClassCode()).thenReturn("CS101");
+        when(row.getTitle()).thenReturn("Programming");
+        when(row.getDescription()).thenReturn("Intro course");
+        when(row.getPrerequisitesDescription()).thenReturn("Basic algebra");
+        when(row.getTutorId()).thenReturn(ownerId);
+        when(row.getTutorName()).thenReturn("Programming tutor");
+        when(row.getEnrollmentPolicy()).thenReturn("OPEN");
+        when(row.getStatus()).thenReturn(status);
+        when(row.getActiveMemberCount()).thenReturn(3L);
+        when(row.getMaxCapacity()).thenReturn(10);
+        return row;
+    }
     private Class classEntity(UUID ownerId) {
         Class result = new Class(ownerId, "CS101", "Programming", null, null, 10,
                 Class.EnrollmentPolicy.OPEN);

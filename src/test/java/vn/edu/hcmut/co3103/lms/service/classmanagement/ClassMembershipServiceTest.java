@@ -301,6 +301,70 @@ class ClassMembershipServiceTest {
         verify(classMemberRepository, never()).save(any(ClassMember.class));
     }
 
+    @Test
+    void tutorCanRemoveActiveMemberAndRetainMembershipRecord() {
+        ClassMember active = membership(ClassMember.MembershipStatus.ACTIVE);
+        when(classMemberRepository.findByClassMemberIdAndClassId(active.getClassMemberId(), classId))
+                .thenReturn(Optional.of(active));
+        when(classMemberRepository.save(active)).thenReturn(active);
+
+        ClassMember removed = service.removeMember(classId, active.getClassMemberId(), tutorId);
+
+        assertEquals(ClassMember.MembershipStatus.INACTIVE, removed.getStatus());
+        verify(classMemberRepository).save(active);
+        verify(classMemberRepository, never()).delete(any(ClassMember.class));
+    }
+
+    @Test
+    void openJoinRejectsWhenEnrollmentPolicyChanged() {
+        ResponseStatusException error = assertThrows(ResponseStatusException.class,
+                () -> service.joinOpenClass(classId, studentId));
+
+        assertEquals(HttpStatus.CONFLICT, error.getStatusCode());
+        assertEquals("ENROLLMENT_POLICY_CHANGED", error.getReason());
+        verify(classMemberRepository, never()).save(any(ClassMember.class));
+    }
+
+    @Test
+    void approvalRequestRejectsWhenEnrollmentPolicyChanged() {
+        Class openClass = new Class(tutorId, "CS101", "Programming", null, null, 10,
+                Class.EnrollmentPolicy.OPEN);
+        ReflectionTestUtils.setField(openClass, "classId", classId);
+        when(classRepository.findByIdForUpdate(classId)).thenReturn(Optional.of(openClass));
+
+        ResponseStatusException error = assertThrows(ResponseStatusException.class,
+                () -> service.requestToJoin(classId, studentId));
+
+        assertEquals(HttpStatus.CONFLICT, error.getStatusCode());
+        assertEquals("ENROLLMENT_POLICY_CHANGED", error.getReason());
+        verify(classMemberRepository, never()).save(any(ClassMember.class));
+    }
+
+    @org.junit.jupiter.params.ParameterizedTest
+    @org.junit.jupiter.params.provider.CsvSource({
+            "OPEN, ACTIVE", "OPEN, PENDING", "APPROVAL_REQUIRED, ACTIVE", "APPROVAL_REQUIRED, PENDING"
+    })
+    void enrollmentRejectsDuplicateActiveOrPendingMemberships(String policyName, String statusName) {
+        Class.EnrollmentPolicy policy = Class.EnrollmentPolicy.valueOf(policyName);
+        Class configuredClass = new Class(tutorId, "CS101", "Programming", null, null, 10, policy);
+        ReflectionTestUtils.setField(configuredClass, "classId", classId);
+        when(classRepository.findByIdForUpdate(classId)).thenReturn(Optional.of(configuredClass));
+        ClassMember existing = membership(ClassMember.MembershipStatus.valueOf(statusName));
+        when(classMemberRepository.findByClassIdAndStudentId(classId, studentId))
+                .thenReturn(Optional.of(existing));
+
+        ResponseStatusException error = assertThrows(ResponseStatusException.class, () -> {
+            if (policy == Class.EnrollmentPolicy.OPEN) {
+                service.joinOpenClass(classId, studentId);
+            } else {
+                service.requestToJoin(classId, studentId);
+            }
+        });
+
+        assertEquals(HttpStatus.CONFLICT, error.getStatusCode());
+        assertEquals("INVALID_MEMBERSHIP_STATE", error.getReason());
+        verify(classMemberRepository, never()).save(any(ClassMember.class));
+    }
     private ClassMember membership(ClassMember.MembershipStatus status) {
         ClassMember result = new ClassMember(classId, studentId, status,
                 java.time.Instant.now(), status == ClassMember.MembershipStatus.ACTIVE
