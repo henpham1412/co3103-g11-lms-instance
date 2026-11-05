@@ -19,7 +19,9 @@ import java.util.UUID;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 
 class QuizAttemptResultFinalGradeTest {
@@ -44,6 +46,7 @@ class QuizAttemptResultFinalGradeTest {
         attempt.setStatus("SUBMITTED");
         attempt.setAutoSubmitted(false);
         attempt.setScore(new BigDecimal("80.00"));
+        attempt.setGradedAt(OffsetDateTime.parse("2026-10-31T10:01:00Z"));
         attempt.setSubmittedAt(OffsetDateTime.parse("2026-10-31T10:00:00Z"));
 
         when(attemptRepository.findById(attemptId)).thenReturn(Optional.of(attempt));
@@ -56,6 +59,7 @@ class QuizAttemptResultFinalGradeTest {
                 mock(QuestionOptionRepository.class),
                 accessService,
                 gradingService,
+                mock(QuizAttemptSubmissionService.class),
                 mock(AttemptAnswerRepository.class),
                 mock(AttemptAnswerOptionRepository.class));
 
@@ -63,5 +67,41 @@ class QuizAttemptResultFinalGradeTest {
 
         assertEquals(0, new BigDecimal("80.00").compareTo(response.score()));
         assertFalse(response.passed());
+    }
+
+    @Test
+    void submittedButUngradedAttemptReturnsPendingNullableGradeFields() {
+        QuizAttemptRepository attemptRepository = mock(QuizAttemptRepository.class);
+        QuizGradingService gradingService = mock(QuizGradingService.class);
+        QuizConfigurationAccessService accessService = mock(QuizConfigurationAccessService.class);
+        UUID attemptId = UUID.randomUUID();
+        UUID studentId = UUID.randomUUID();
+
+        Quiz quiz = new Quiz();
+        quiz.setId(UUID.randomUUID());
+        quiz.setGradingMethod("HIGHEST");
+        quiz.setRequiredScore(new BigDecimal("70.00"));
+        QuizAttempt attempt = new QuizAttempt();
+        attempt.setId(attemptId);
+        attempt.setQuiz(quiz);
+        attempt.setClassMember(new ClassMember(UUID.randomUUID(), studentId,
+                ClassMember.MembershipStatus.ACTIVE, null, null));
+        attempt.setStatus("SUBMITTED");
+        attempt.setAutoSubmitted(true);
+        attempt.setSubmittedAt(OffsetDateTime.parse("2026-10-31T10:00:00Z"));
+
+        when(attemptRepository.findById(attemptId)).thenReturn(Optional.of(attempt));
+        QuizAttemptService service = new QuizAttemptService(
+                mock(QuizRepository.class), attemptRepository,
+                mock(QuestionRepository.class), mock(QuestionOptionRepository.class), accessService,
+                gradingService, mock(QuizAttemptSubmissionService.class),
+                mock(AttemptAnswerRepository.class), mock(AttemptAnswerOptionRepository.class));
+
+        QuizAttemptResultResponse response = service.getResult(attemptId, studentId);
+
+        assertNull(response.score());
+        assertNull(response.passed());
+        assertEquals("SUBMITTED", response.status());
+        verifyNoInteractions(gradingService);
     }
 }

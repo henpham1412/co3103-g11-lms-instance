@@ -37,6 +37,7 @@ class QuizAttemptServiceDeadlineTest {
     private final QuizRepository quizRepository = mock(QuizRepository.class);
     private final QuizConfigurationAccessService accessService = mock(QuizConfigurationAccessService.class);
     private final QuizGradingService gradingService = mock(QuizGradingService.class);
+    private QuizAttemptSubmissionService submissionService;
     private final UUID attemptId = UUID.randomUUID();
     private final UUID quizId = UUID.randomUUID();
     private final UUID studentId = UUID.randomUUID();
@@ -48,6 +49,8 @@ class QuizAttemptServiceDeadlineTest {
 
     @BeforeEach
     void setUp() {
+        submissionService = new QuizAttemptSubmissionService(
+                attemptRepository, quizRepository, accessService, gradingService);
         service = new QuizAttemptService(
                 quizRepository,
                 attemptRepository,
@@ -55,6 +58,7 @@ class QuizAttemptServiceDeadlineTest {
                 mock(QuestionOptionRepository.class),
                 accessService,
                 gradingService,
+                submissionService,
                 mock(AttemptAnswerRepository.class),
                 mock(AttemptAnswerOptionRepository.class));
 
