@@ -81,6 +81,7 @@ public interface ClassRepository extends JpaRepository<Class, UUID> {
                    c.updated_at AS "updatedAt",
                    u.user_id AS "tutorId",
                    u.full_name AS "tutorName",
+                   u.email AS "tutorEmail",
                    (SELECT COUNT(*)
                     FROM class_member cm
                     WHERE cm.class_id = c.class_id
@@ -94,7 +95,7 @@ public interface ClassRepository extends JpaRepository<Class, UUID> {
             """,
             nativeQuery = true
     )
-    Optional<ClassCatalogRow> findDetailsByClassId(@Param("classId") UUID classId);
+    Optional<ClassDetailRow> findDetailsByClassId(@Param("classId") UUID classId);
     boolean existsByClassCode(String classCode);
 
     Optional<Class> findByClassCode(String classCode);

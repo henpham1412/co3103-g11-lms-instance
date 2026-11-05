@@ -10,11 +10,13 @@ import vn.edu.hcmut.co3103.lms.dto.request.ClassCreationRequest;
 import vn.edu.hcmut.co3103.lms.dto.request.ClassUpdateRequest;
 import vn.edu.hcmut.co3103.lms.dto.response.ClassCatalogResponse;
 import vn.edu.hcmut.co3103.lms.dto.response.ClassCreationResponse;
+import vn.edu.hcmut.co3103.lms.dto.response.ClassDetailResponse;
 import vn.edu.hcmut.co3103.lms.entity.Class;
 import vn.edu.hcmut.co3103.lms.entity.ClassMember;
 import vn.edu.hcmut.co3103.lms.exception.ClassCodeAlreadyExistsException;
 import vn.edu.hcmut.co3103.lms.mapper.ClassMapper;
 import vn.edu.hcmut.co3103.lms.repository.classmanagement.ClassCatalogRow;
+import vn.edu.hcmut.co3103.lms.repository.classmanagement.ClassDetailRow;
 import vn.edu.hcmut.co3103.lms.repository.classmanagement.ClassMemberRepository;
 import vn.edu.hcmut.co3103.lms.repository.classmanagement.ClassRepository;
 
@@ -101,22 +103,21 @@ public class ClassService {
     }
 
     @Transactional(readOnly = true)
-    public ClassCatalogResponse.Item getClassDetails(
+    public ClassDetailResponse getClassDetails(
             UUID classId,
             UUID viewerId,
-            boolean tutor,
             boolean administrator
     ) {
-        ClassCatalogRow row = classRepository.findDetailsByClassId(classId)
+        ClassDetailRow row = classRepository.findDetailsByClassId(classId)
                 .orElseThrow(() -> new ResponseStatusException(
                         HttpStatus.NOT_FOUND,
                         "CLASS_NOT_FOUND"
                 ));
 
-        if (tutor && !row.getTutorId().equals(viewerId)) {
-            throw new ResponseStatusException(HttpStatus.FORBIDDEN, "FORBIDDEN");
-        }
-        if (!tutor && !administrator
+        // Any authenticated caller may read an ACTIVE overview; ownership gates updates, not reads.
+        // Archived classes stay hidden from callers that neither own the class nor attend it.
+        if (!administrator
+                && !row.getTutorId().equals(viewerId)
                 && "ARCHIVED".equals(row.getStatus())
                 && !classMemberRepository.existsByClassIdAndStudentIdAndStatus(
                         classId,
@@ -126,7 +127,7 @@ public class ClassService {
             throw new ResponseStatusException(HttpStatus.NOT_FOUND, "CLASS_NOT_FOUND");
         }
 
-        return new ClassCatalogResponse.Item(
+        return new ClassDetailResponse(
                 row.getClassId(),
                 row.getClassCode(),
                 row.getTitle(),
@@ -135,7 +136,11 @@ public class ClassService {
                 row.getThumbnailUrl(),
                 row.getEnrollmentPolicy(),
                 row.getStatus(),
-                new ClassCatalogResponse.Tutor(row.getTutorId(), row.getTutorName()),
+                new ClassDetailResponse.Tutor(
+                        row.getTutorId(),
+                        row.getTutorName(),
+                        row.getTutorEmail()
+                ),
                 row.getActiveMemberCount(),
                 row.getMaxCapacity()
         );

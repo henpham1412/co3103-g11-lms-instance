@@ -174,6 +174,15 @@ Valid CORS preflight requests are handled before Bearer authentication and may b
 access. Disallowed CORS requests receive the standard JSON 403 envelope. Other API requests
 require a valid access token and active LMS-local access.
 
+Class thumbnail uploads are stored under `lms.storage.class-thumbnails.directory`
+(environment variable `LMS_CLASS_THUMBNAIL_DIRECTORY`), which defaults to
+`./var/class-thumbnails` and is git-ignored. Stored files are served from
+`/class-thumbnails/**` without authentication, and their public URLs are built from
+`lms.storage.class-thumbnails.public-base-url` (`LMS_PUBLIC_BASE_URL`, default
+`http://localhost:8081`). Set `LMS_PUBLIC_BASE_URL` to the base address browsers can
+reach when the instance runs behind a gateway or on another host; the default value is
+development-only.
+
 ### 5.6 Bootstrap the Initial Administrator
 
 Use the [administrator bootstrap CLI](docs/administrator-bootstrap.md) once for a new LMS database.
@@ -255,6 +264,12 @@ Follow DOC-01 through DOC-06 and the current API contracts in DOC-05 when implem
 - Keep entities, attributes, relationships, and constraints aligned with DOC-04.
 - Preserve the boundary between centralized authentication and LMS-local authorization.
 - Update relevant documentation when an agreed requirement, database design, or API contract changes.
+- Never edit a Flyway migration that has already been applied to a database you or a
+  teammate keeps; add the next `V<n>__*.sql` instead. `MigrationPolicyTest` pins the
+  checksums of the accepted migrations and `.gitattributes` keeps `*.sql` byte-identical
+  across checkouts. Recovering a local database that applied a superseded migration is an
+  explicit decision - recreate it or run a reviewed Flyway repair - never an automated
+  build step.
 - Run the available build and test checks before submitting a Pull Request.
 
 ## 10. Project Documentation

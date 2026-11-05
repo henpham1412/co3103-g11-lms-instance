@@ -2,6 +2,7 @@ package vn.edu.hcmut.co3103.lms.dto.request;
 
 import com.fasterxml.jackson.annotation.JsonAnySetter;
 import com.fasterxml.jackson.annotation.JsonProperty;
+import tools.jackson.databind.annotation.JsonDeserialize;
 import vn.edu.hcmut.co3103.lms.entity.Class;
 
 public class ClassUpdateRequest {
@@ -39,6 +40,7 @@ public class ClassUpdateRequest {
     }
 
     @JsonProperty("max_capacity")
+    @JsonDeserialize(using = StrictIntegerDeserializer.class)
     public void setMaxCapacity(Integer maxCapacity) {
         this.maxCapacityProvided = true;
         this.maxCapacity = maxCapacity;

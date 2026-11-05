@@ -19,6 +19,8 @@ import java.util.UUID;
 @Service
 public class ClassMembershipService {
 
+    private static final int MAX_SEARCH_QUERY_LENGTH = 100;
+
     private final ClassRepository classRepository;
     private final ClassMemberRepository classMemberRepository;
 
@@ -134,16 +136,27 @@ public class ClassMembershipService {
     public Page<ClassMember> listMembers(
             UUID classId,
             UUID tutorId,
+            String query,
             MembershipStatus status,
             Pageable pageable
     ) {
         Class targetClass = requireClass(classId);
         ensureTutorOwnsClass(targetClass, tutorId);
 
-        if (status == null) {
-            return classMemberRepository.findByClassId(classId, pageable);
+        if (query != null && query.length() > MAX_SEARCH_QUERY_LENGTH) {
+            throw new ResponseStatusException(
+                    HttpStatus.BAD_REQUEST,
+                    "INVALID_QUERY_PARAMETER"
+            );
         }
-        return classMemberRepository.findByClassIdAndStatus(classId, status, pageable);
+
+        String normalizedQuery = query == null || query.isBlank() ? null : query.trim();
+        return classMemberRepository.searchRoster(
+                classId,
+                status == null ? null : status.name(),
+                normalizedQuery,
+                pageable
+        );
     }
 
     @Transactional(readOnly = true)
