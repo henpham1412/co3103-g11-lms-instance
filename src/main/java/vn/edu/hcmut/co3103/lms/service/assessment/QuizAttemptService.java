@@ -47,6 +47,7 @@ public class QuizAttemptService {
     private final QuestionOptionRepository optionRepository;
     private final QuizConfigurationAccessService accessService;
     private final QuizGradingService gradingService;
+    private final QuizAttemptSubmissionService submissionService;
     private final AttemptAnswerRepository answerRepository;
     private final AttemptAnswerOptionRepository selectedOptionRepository;
 
@@ -117,7 +118,7 @@ public class QuizAttemptService {
         return !questionRepository.findByQuiz_IdOrderByOrderIndex(quiz.getId()).isEmpty();
     }
 
-    private static OffsetDateTime calculateEndAt(OffsetDateTime startedAt, Quiz quiz) {
+    static OffsetDateTime calculateEndAt(OffsetDateTime startedAt, Quiz quiz) {
         OffsetDateTime timeLimitEnd = startedAt.plusMinutes(quiz.getTimeLimitMinutes());
         return timeLimitEnd.isBefore(quiz.getDeadline()) ? timeLimitEnd : quiz.getDeadline();
     }
@@ -204,19 +205,10 @@ public class QuizAttemptService {
                 .ifPresent(answerRepository::delete);
     }
 
-    @Transactional
     public QuizAttemptResultResponse submit(UUID attemptId, UUID studentId) {
-        QuizAttempt attempt = lockOwnedStudentAttempt(attemptId, studentId, "ATTEMPT_NOT_FOUND");
-        accessService.requireEligibleStudent(attempt.getQuiz().getActivity(), studentId);
-        if (!"SUBMITTED".equals(attempt.getStatus())) {
-            OffsetDateTime now = OffsetDateTime.now();
-            OffsetDateTime endAt = calculateEndAt(attempt.getStartedAt(), attempt.getQuiz());
-            attempt.setAutoSubmitted(!now.isBefore(endAt));
-            attempt.setStatus("SUBMITTED");
-            attempt.setSubmittedAt(now);
-            gradingService.gradeAttempt(attempt);
-        }
-        return toResultResponse(attempt);
+        submissionService.submit(attemptId, studentId);
+        return submissionService.gradeIfPending(attemptId)
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "ATTEMPT_NOT_FOUND"));
     }
 
     @Transactional(readOnly = true)
@@ -273,8 +265,9 @@ public class QuizAttemptService {
 
     private QuizAttemptResultResponse toResultResponse(QuizAttempt attempt) {
         BigDecimal requiredScore = attempt.getQuiz().getRequiredScore();
-        BigDecimal finalScore = gradingService.calculateFinalGrade(attempt);
-        Boolean passed = requiredScore == null || finalScore == null
+        boolean graded = attempt.getScore() != null && attempt.getGradedAt() != null;
+        BigDecimal finalScore = graded ? gradingService.calculateFinalGrade(attempt) : null;
+        Boolean passed = !graded || requiredScore == null || finalScore == null
                 ? null : finalScore.compareTo(requiredScore) >= 0;
         return new QuizAttemptResultResponse(attempt.getId(), attempt.getStatus(), attempt.getAutoSubmitted(),
                 attempt.getScore(), requiredScore, passed, attempt.getSubmittedAt());
@@ -317,19 +310,12 @@ public class QuizAttemptService {
 
     public record StartResult(HttpStatus status, QuizAttemptStartResponse body) {}
 
-    @Transactional
     public void expireIfDue(UUID attemptId) {
-        QuizAttempt attempt = findLockedAttemptAndQuiz(attemptId).orElse(null);
-        if (attempt == null || !"IN_PROGRESS".equals(attempt.getStatus())) return;
+        if (submissionService.submitIfDueOrAlreadySubmitted(attemptId)) submissionService.gradeIfPending(attemptId);
+    }
 
-        OffsetDateTime now = OffsetDateTime.now();
-        OffsetDateTime endAt = calculateEndAt(attempt.getStartedAt(), attempt.getQuiz());
-        if (!hasReachedEndAt(endAt, now)) return;
-
-        attempt.setStatus("SUBMITTED");
-        attempt.setSubmittedAt(now);
-        attempt.setAutoSubmitted(true);
-        gradingService.gradeAttempt(attempt);
+    public void gradePendingSubmission(UUID attemptId) {
+        submissionService.gradeIfPending(attemptId);
     }
 }
 

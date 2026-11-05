@@ -31,11 +31,25 @@ public interface QuizAttemptRepository extends JpaRepository<QuizAttempt, UUID> 
             FROM quiz_attempt qa
             JOIN quiz q ON q.quiz_id = qa.quiz_id
             WHERE qa.status = 'IN_PROGRESS'
+              AND (CAST(:afterId AS uuid) IS NULL OR qa.attempt_id > CAST(:afterId AS uuid))
               AND (qa.started_at + (q.time_limit_minutes * INTERVAL '1 minute') <= :asOf
                    OR q.deadline <= :asOf)
-            ORDER BY LEAST(qa.started_at + (q.time_limit_minutes * INTERVAL '1 minute'), q.deadline)
+            ORDER BY qa.attempt_id
             LIMIT :batchSize
             """, nativeQuery = true)
-    List<UUID> findExpiredAttemptIds(@Param("asOf") OffsetDateTime asOf,
-                                    @Param("batchSize") int batchSize);
+    List<UUID> findExpiredAttemptIdsAfter(@Param("asOf") OffsetDateTime asOf,
+                                         @Param("afterId") UUID afterId,
+                                         @Param("batchSize") int batchSize);
+
+    @Query(value = """
+            SELECT qa.attempt_id
+            FROM quiz_attempt qa
+            WHERE qa.status = 'SUBMITTED'
+              AND (CAST(:afterId AS uuid) IS NULL OR qa.attempt_id > CAST(:afterId AS uuid))
+              AND (qa.score IS NULL OR qa.graded_at IS NULL)
+            ORDER BY qa.attempt_id
+            LIMIT :batchSize
+            """, nativeQuery = true)
+    List<UUID> findSubmittedUngradedAttemptIdsAfter(@Param("afterId") UUID afterId,
+                                                   @Param("batchSize") int batchSize);
 }

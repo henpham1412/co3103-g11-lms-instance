@@ -18,7 +18,6 @@ import java.math.BigDecimal;
 import java.math.RoundingMode;
 import java.time.OffsetDateTime;
 import java.util.List;
-import java.util.Objects;
 import java.util.Set;
 import java.util.UUID;
 import java.util.stream.Collectors;
@@ -40,15 +39,18 @@ public class QuizGradingService {
     }
 
     public BigDecimal calculateFinalGrade(QuizAttempt viewedAttempt) {
-        List<BigDecimal> submittedScores = attemptRepository
+        List<QuizAttempt> submittedAttempts = attemptRepository
                 .findByQuiz_IdAndClassMember_ClassMemberIdOrderByAttemptNumber(
                         viewedAttempt.getQuiz().getId(), viewedAttempt.getClassMember().getClassMemberId())
                 .stream()
                 .filter(attempt -> "SUBMITTED".equals(attempt.getStatus()))
-                .map(QuizAttempt::getScore)
-                .filter(Objects::nonNull)
                 .toList();
+        if (submittedAttempts.stream().anyMatch(attempt -> attempt.getScore() == null
+                || attempt.getGradedAt() == null)) {
+            return null;
+        }
 
+        List<BigDecimal> submittedScores = submittedAttempts.stream().map(QuizAttempt::getScore).toList();
         return aggregateFinalGrade(viewedAttempt.getQuiz().getGradingMethod(), submittedScores);
     }
 
