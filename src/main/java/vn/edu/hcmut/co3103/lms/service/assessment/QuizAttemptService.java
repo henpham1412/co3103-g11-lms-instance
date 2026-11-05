@@ -273,9 +273,10 @@ public class QuizAttemptService {
                 attempt.getScore(), requiredScore, passed, attempt.getSubmittedAt());
     }
 
-    private QuizAttempt lockOwnedStudentAttempt(UUID attemptId, UUID studentId, String notFoundCode) {
+    private QuizAttempt lockOwnedStudentAttempt(UUID attemptId, UUID studentId) {
         QuizAttempt attempt = findLockedAttemptAndQuiz(attemptId)
-                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, notFoundCode));
+                .orElseThrow(() -> new ResponseStatusException(
+                        HttpStatus.NOT_FOUND, "ATTEMPT_OR_QUESTION_NOT_FOUND"));
         if (!attempt.getClassMember().getStudentId().equals(studentId)) {
             throw new ResponseStatusException(HttpStatus.FORBIDDEN, "FORBIDDEN");
         }
@@ -291,8 +292,7 @@ public class QuizAttemptService {
     }
 
     private QuizAttempt requireEditableAttempt(UUID attemptId, UUID studentId) {
-        QuizAttempt attempt = lockOwnedStudentAttempt(
-                attemptId, studentId, "ATTEMPT_OR_QUESTION_NOT_FOUND");
+        QuizAttempt attempt = lockOwnedStudentAttempt(attemptId, studentId);
         if (!"IN_PROGRESS".equals(attempt.getStatus())) throw expiredAttempt();
         OffsetDateTime endAt = calculateEndAt(attempt.getStartedAt(), attempt.getQuiz());
         if (hasReachedEndAt(endAt, OffsetDateTime.now())) throw expiredAttempt();
@@ -318,5 +318,4 @@ public class QuizAttemptService {
         submissionService.gradeIfPending(attemptId);
     }
 }
-
 

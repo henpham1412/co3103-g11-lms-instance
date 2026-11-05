@@ -16,7 +16,7 @@ import java.time.OffsetDateTime;
 import java.util.Set;
 
 @Service
-@RequiredArgsConstructor // either field injection or constructor injection
+@RequiredArgsConstructor
 public class QuizService {
     private final QuizRepository quizRepository;
     private final QuizConfigurationAccessService accessService;
@@ -86,25 +86,4 @@ public class QuizService {
         throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "VALIDATION_ERROR");
     }
 
-    /*
-     * Contract-based alternative once the teammate's proposed Learning Content
-     * service is implemented. Their getActivity(activityId, userId) is the
-     * applicable function here: it should resolve the Activity and apply the
-     * common Tutor ownership / Student membership and published-path checks.
-     * QuizService then owns only assessment configuration lookup and mapping.
-     *
-     * public QuizConfigurationResponse getQuizConfiguration(UUID activityId, UUID userId) {
-     *     Activity activity = activityService.getActivity(activityId, userId);
-     *     Quiz quiz = quizRepository.findByActivity_Id(activity.getId())
-     *             .orElseThrow(() -> new ResponseStatusException(
-     *                     HttpStatus.NOT_FOUND, "QUIZ_NOT_FOUND"));
-     *     return new QuizConfigurationResponse(
-     *             quiz.getId(), quiz.getTimeLimitMinutes(), quiz.getAttemptsAllowed(),
-     *             quiz.getGradingMethod(), quiz.getOpeningTime(), quiz.getDeadline(),
-     *             quiz.getRequiredScore());
-     * }
-     *
-     * This endpoint intentionally returns quiz settings only, never questions/options.
-     */
 }
-
