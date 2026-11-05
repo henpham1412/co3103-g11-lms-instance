@@ -100,12 +100,61 @@ public class ClassService {
         );
     }
 
+    @Transactional(readOnly = true)
+    public ClassCatalogResponse.Item getClassDetails(
+            UUID classId,
+            UUID viewerId,
+            boolean tutor,
+            boolean administrator
+    ) {
+        ClassCatalogRow row = classRepository.findDetailsByClassId(classId)
+                .orElseThrow(() -> new ResponseStatusException(
+                        HttpStatus.NOT_FOUND,
+                        "CLASS_NOT_FOUND"
+                ));
+
+        if (tutor && !row.getTutorId().equals(viewerId)) {
+            throw new ResponseStatusException(HttpStatus.FORBIDDEN, "FORBIDDEN");
+        }
+        if (!tutor && !administrator
+                && "ARCHIVED".equals(row.getStatus())
+                && !classMemberRepository.existsByClassIdAndStudentIdAndStatus(
+                        classId,
+                        viewerId,
+                        ClassMember.MembershipStatus.ACTIVE
+                )) {
+            throw new ResponseStatusException(HttpStatus.NOT_FOUND, "CLASS_NOT_FOUND");
+        }
+
+        return new ClassCatalogResponse.Item(
+                row.getClassId(),
+                row.getClassCode(),
+                row.getTitle(),
+                row.getDescription(),
+                row.getPrerequisitesDescription(),
+                row.getThumbnailUrl(),
+                row.getEnrollmentPolicy(),
+                row.getStatus(),
+                new ClassCatalogResponse.Tutor(row.getTutorId(), row.getTutorName()),
+                row.getActiveMemberCount(),
+                row.getMaxCapacity()
+        );
+    }
+    @Transactional(readOnly = true)
+    public Page<ClassCreationResponse> listTutorClasses(UUID tutorId, Pageable pageable) {
+        return classRepository.findByTutorId(tutorId, pageable)
+                .map(classMapper::toCreationResponse);
+    }
+
     @Transactional
     public Class updateClass(
             UUID classId,
             UUID tutorId,
             ClassUpdateRequest request
     ) {
+        if (request == null) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "VALIDATION_ERROR");
+        }
         Class targetClass = classRepository.findByIdForUpdate(classId)
                 .orElseThrow(() -> new ResponseStatusException(
                         HttpStatus.NOT_FOUND,

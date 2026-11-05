@@ -13,6 +13,7 @@ import vn.edu.hcmut.co3103.lms.repository.classmanagement.ClassMemberRepository;
 import vn.edu.hcmut.co3103.lms.repository.classmanagement.ClassRepository;
 
 import java.time.Instant;
+import java.util.List;
 import java.util.UUID;
 
 @Service
@@ -58,7 +59,7 @@ public class ClassMembershipService {
     }
 
     @Transactional
-    public ClassMember requestToJoin(UUID classId, UUID studentId) {
+    public MembershipResult requestToJoin(UUID classId, UUID studentId) {
         Class targetClass = requireClassForUpdate(classId);
         ensureClassCanEnroll(targetClass);
 
@@ -71,7 +72,8 @@ public class ClassMembershipService {
                 .findByClassIdAndStudentId(classId, studentId)
                 .orElse(null);
 
-        if (membership == null) {
+        boolean created = membership == null;
+        if (created) {
             membership = new ClassMember(
                     classId,
                     studentId,
@@ -86,11 +88,11 @@ public class ClassMembershipService {
             membership.setJoinedAt(null);
         }
 
-        return classMemberRepository.save(membership);
+        return new MembershipResult(classMemberRepository.save(membership), created);
     }
 
     @Transactional
-    public ClassMember joinOpenClass(UUID classId, UUID studentId) {
+    public MembershipResult joinOpenClass(UUID classId, UUID studentId) {
         Class targetClass = requireClassForUpdate(classId);
         ensureClassCanEnroll(targetClass);
 
@@ -102,7 +104,8 @@ public class ClassMembershipService {
                 .findByClassIdAndStudentId(classId, studentId)
                 .orElse(null);
 
-        if (membership != null) {
+        boolean created = membership == null;
+        if (!created) {
             ensureReusableMembership(membership);
         }
         ensureHasCapacity(targetClass);
@@ -122,7 +125,7 @@ public class ClassMembershipService {
             membership.setJoinedAt(now);
         }
 
-        return classMemberRepository.save(membership);
+        return new MembershipResult(classMemberRepository.save(membership), created);
     }
 
     @Transactional(readOnly = true)
@@ -139,6 +142,14 @@ public class ClassMembershipService {
             return classMemberRepository.findByClassId(classId, pageable);
         }
         return classMemberRepository.findByClassIdAndStatus(classId, status, pageable);
+    }
+
+    @Transactional(readOnly = true)
+    public List<ClassMember> listCurrentStudentMemberships(UUID studentId) {
+        return classMemberRepository.findByStudentIdAndStatusInOrderByRequestedAtDesc(
+                studentId,
+                java.util.List.of(MembershipStatus.ACTIVE, MembershipStatus.PENDING)
+        );
     }
 
     @Transactional
@@ -281,5 +292,8 @@ public class ClassMembershipService {
 
     private ResponseStatusException conflict(String errorCode) {
         return new ResponseStatusException(HttpStatus.CONFLICT, errorCode);
+    }
+
+    public record MembershipResult(ClassMember membership, boolean created) {
     }
 }
