@@ -1,52 +1,70 @@
 package vn.edu.hcmut.co3103.lms.entity;
 
-import jakarta.persistence.*;
-import jakarta.validation.constraints.NotNull;
-import jakarta.validation.constraints.Size;
-import lombok.Getter;
-import lombok.Setter;
-import org.hibernate.annotations.ColumnDefault;
+import jakarta.persistence.Column;
+import jakarta.persistence.Entity;
+import jakarta.persistence.EnumType;
+import jakarta.persistence.Enumerated;
+import jakarta.persistence.GeneratedValue;
+import jakarta.persistence.GenerationType;
+import jakarta.persistence.Id;
+import jakarta.persistence.PrePersist;
+import jakarta.persistence.Table;
 
-import java.time.OffsetDateTime;
+import java.time.Instant;
 import java.util.UUID;
 
-@Getter
-@Setter
 @Entity
 @Table(name = "chapter")
 public class Chapter {
+
     @Id
     @GeneratedValue(strategy = GenerationType.UUID)
-    @Column(name = "chapter_id", nullable = false)
-    private UUID id;
+    @Column(name = "chapter_id", nullable = false, updatable = false)
+    private UUID chapterId;
 
-    @NotNull
-    @ManyToOne(fetch = FetchType.LAZY, optional = false)
-    @JoinColumn(name = "class_id", nullable = false)
-    private Class classField;
+    @Column(name = "class_id", nullable = false)
+    private UUID classId;
 
-    @Size(max = 150)
-    @NotNull
-    @Column(name = "title", nullable = false, length = 150)
+    @Column(name = "title", nullable = false, columnDefinition = "text")
     private String title;
 
-    @Column(name = "description", length = Integer.MAX_VALUE)
+    @Column(name = "description", columnDefinition = "text")
     private String description;
 
-    @NotNull
     @Column(name = "sequence_order", nullable = false)
-    private Integer sequenceOrder;
+    private int sequenceOrder;
 
-    @Size(max = 20)
-    @NotNull
-    @ColumnDefault("'HIDDEN'")
+    @Enumerated(EnumType.STRING)
     @Column(name = "status", nullable = false, length = 20)
-    private String status;
+    private VisibilityStatus status = VisibilityStatus.PUBLISHED;
 
-    @NotNull
-    @ColumnDefault("CURRENT_TIMESTAMP")
-    @Column(name = "created_at", nullable = false)
-    private OffsetDateTime createdAt;
+    @Column(name = "created_at", nullable = false, updatable = false)
+    private Instant createdAt;
 
+    protected Chapter() { }
 
+    public Chapter(UUID classId, String title, String description, int sequenceOrder, VisibilityStatus status) {
+        this.classId = classId;
+        this.title = title;
+        this.description = description;
+        this.sequenceOrder = sequenceOrder;
+        this.status = status == null ? VisibilityStatus.PUBLISHED : status;
+    }
+
+    @PrePersist
+    void setCreatedAt() { if (createdAt == null) createdAt = Instant.now(); }
+
+    public UUID getChapterId() { return chapterId; }
+    public UUID getClassId() { return classId; }
+    public String getTitle() { return title; }
+    public String getDescription() { return description; }
+    public int getSequenceOrder() { return sequenceOrder; }
+    public VisibilityStatus getStatus() { return status; }
+    public Instant getCreatedAt() { return createdAt; }
+    public void setTitle(String title) { this.title = title; }
+    public void setDescription(String description) { this.description = description; }
+    public void setSequenceOrder(int sequenceOrder) { this.sequenceOrder = sequenceOrder; }
+    public void setStatus(VisibilityStatus status) { this.status = status; }
+
+    public enum VisibilityStatus { PUBLISHED, HIDDEN }
 }

@@ -72,8 +72,9 @@ public class ClassMembershipService {
                 .findByClassIdAndStudentId(classId, studentId)
                 .orElse(null);
 
-        boolean created = membership == null;
-        if (created) {
+        boolean created;
+        if (membership == null) {
+            created = true;
             membership = new ClassMember(
                     classId,
                     studentId,
@@ -82,6 +83,7 @@ public class ClassMembershipService {
                     null
             );
         } else {
+            created = false;
             ensureReusableMembership(membership);
             membership.setStatus(MembershipStatus.PENDING);
             membership.setRequestedAt(now);
