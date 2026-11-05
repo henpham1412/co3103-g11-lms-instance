@@ -11,6 +11,7 @@ import org.springframework.security.oauth2.server.resource.authentication.JwtAut
 import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.request.RequestPostProcessor;
 import org.springframework.test.web.servlet.setup.MockMvcBuilders;
+import org.springframework.mock.web.MockMultipartFile;
 import org.springframework.web.method.support.HandlerMethodArgumentResolver;
 import org.springframework.web.method.support.ModelAndViewContainer;
 import org.springframework.core.MethodParameter;
@@ -20,24 +21,31 @@ import vn.edu.hcmut.co3103.lms.dto.request.ClassCreationRequest;
 import vn.edu.hcmut.co3103.lms.dto.request.ClassUpdateRequest;
 import vn.edu.hcmut.co3103.lms.dto.response.ClassCatalogResponse;
 import vn.edu.hcmut.co3103.lms.dto.response.ClassCreationResponse;
+import vn.edu.hcmut.co3103.lms.dto.response.ClassDetailResponse;
 import vn.edu.hcmut.co3103.lms.exception.GlobalExceptionHandler;
 import vn.edu.hcmut.co3103.lms.exception.ClassCodeAlreadyExistsException;
 import vn.edu.hcmut.co3103.lms.entity.Class;
 import vn.edu.hcmut.co3103.lms.mapper.ClassMapper;
 import vn.edu.hcmut.co3103.lms.service.classmanagement.ClassMembershipService;
 import vn.edu.hcmut.co3103.lms.service.classmanagement.ClassService;
+import vn.edu.hcmut.co3103.lms.service.classmanagement.ClassThumbnailService;
 
 import java.time.Instant;
 import java.util.List;
 import java.util.UUID;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.multipart;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.patch;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
@@ -48,13 +56,14 @@ class ClassControllerApiTest {
     private final ClassService classService = mock(ClassService.class);
     private final ClassMembershipService membershipService = mock(ClassMembershipService.class);
     private final ClassMapper mapper = new ClassMapper();
+    private final ClassThumbnailService thumbnailService = mock(ClassThumbnailService.class);
     private final UUID tutorId = UUID.randomUUID();
     private final UUID classId = UUID.randomUUID();
     private MockMvc mvc;
 
     @BeforeEach
     void setUp() {
-        ClassController controller = new ClassController(classService, membershipService, mapper);
+        ClassController controller = new ClassController(classService, membershipService, mapper, thumbnailService);
         mvc = MockMvcBuilders.standaloneSetup(controller)
                 .setCustomArgumentResolvers(new AuthenticationArgumentResolver())
                 .setControllerAdvice(new GlobalExceptionHandler())
@@ -96,18 +105,83 @@ class ClassControllerApiTest {
     }
 
     @Test
-    void classDetailEndpointReturnsTutorAndClassInformation() throws Exception {
+    void classDetailEndpointSerializesInstructorEmail() throws Exception {
         UUID tutor = UUID.randomUUID();
-        var item = new ClassCatalogResponse.Item(classId, "CS101", "Intro to Java", "Basics",
-                "None", null, "OPEN", "ACTIVE", new ClassCatalogResponse.Tutor(tutor, "Tutor One"), 4, 20);
-        when(classService.getClassDetails(eq(classId), any(), eq(false), eq(false))).thenReturn(item);
+        var detail = new ClassDetailResponse(classId, "CS101", "Intro to Java", "Basics",
+                "None", null, "OPEN", "ACTIVE",
+                new ClassDetailResponse.Tutor(tutor, "Tutor One", "tutor.one@example.test"), 4, 20);
+        when(classService.getClassDetails(eq(classId), any(), eq(false))).thenReturn(detail);
 
         mvc.perform(get("/api/v1/classes/{id}", classId).with(jwtAs("STUDENT")))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.class_id").value(classId.toString()))
                 .andExpect(jsonPath("$.title").value("Intro to Java"))
                 .andExpect(jsonPath("$.tutor.user_id").value(tutor.toString()))
-                .andExpect(jsonPath("$.tutor.full_name").value("Tutor One"));
+                .andExpect(jsonPath("$.tutor.full_name").value("Tutor One"))
+                .andExpect(jsonPath("$.tutor.email").value("tutor.one@example.test"));
+    }
+
+    @Test
+    void catalogItemsKeepTutorNameAndIdOnly() throws Exception {
+        var item = new ClassCatalogResponse.Item(classId, "CS101", "Intro to Java", "Basics",
+                "None", null, "OPEN", "ACTIVE",
+                new ClassCatalogResponse.Tutor(UUID.randomUUID(), "Tutor One"), 4, 20);
+        when(classService.browseClasses(any(), any(), any()))
+                .thenReturn(new ClassCatalogResponse(List.of(item), 1, 12, 1, 1));
+
+        mvc.perform(get("/api/v1/classes").with(jwtAs("STUDENT")))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.items[0].tutor.full_name").value("Tutor One"))
+                .andExpect(jsonPath("$.items[0].tutor.email").doesNotExist());
+    }
+
+    @Test
+    void fractionalCapacityOnCreateIsRejectedBeforeAnyClassIsWritten() throws Exception {
+        mvc.perform(post("/api/v1/classes").with(jwtAs("TUTOR"))
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {"title":"Intro","class_code":"CS101",
+                                 "max_capacity":1.5,"enrollment_policy":"OPEN"}
+                                """))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.code").value("VALIDATION_ERROR"))
+                .andExpect(jsonPath("$.message").isNotEmpty())
+                .andExpect(jsonPath("$.details").isArray());
+
+        org.mockito.Mockito.verify(classService, org.mockito.Mockito.never())
+                .createClass(any(), any());
+    }
+
+    @Test
+    void fractionalCapacityOnUpdateIsRejectedBeforeAnyClassIsWritten() throws Exception {
+        mvc.perform(patch("/api/v1/classes/{id}", classId).with(jwtAs("TUTOR"))
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"max_capacity\":2.9}"))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.code").value("VALIDATION_ERROR"))
+                .andExpect(jsonPath("$.details").isArray());
+
+        org.mockito.Mockito.verify(classService, org.mockito.Mockito.never())
+                .updateClass(any(), any(), any());
+    }
+
+    @Test
+    void integerValuedCapacityStillBindsToTheExactRequestedNumber() throws Exception {
+        when(classService.createClass(any(ClassCreationRequest.class), any())).thenReturn(
+                new ClassCreationResponse(classId, tutorId, "CS101", "Intro", null, null,
+                        20, Class.EnrollmentPolicy.OPEN, Class.ClassStatus.ACTIVE, null,
+                        Instant.parse("2026-10-01T00:00:00Z"), Instant.parse("2026-10-01T00:00:00Z")));
+
+        mvc.perform(post("/api/v1/classes").with(jwtAs("TUTOR"))
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"title\":\"Intro\",\"class_code\":\"CS101\","
+                                + "\"max_capacity\":20,\"enrollment_policy\":\"OPEN\"}"))
+                .andExpect(status().isCreated())
+                .andExpect(jsonPath("$.max_capacity").value(20));
+
+        var captor = org.mockito.ArgumentCaptor.forClass(ClassCreationRequest.class);
+        verify(classService).createClass(captor.capture(), any());
+        assertEquals(20, captor.getValue().getMaxCapacity());
     }
 
     @Test
@@ -143,6 +217,72 @@ class ClassControllerApiTest {
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.class_id").value(classId.toString()))
                 .andExpect(jsonPath("$.title").value("Updated title"));
+    }
+
+    @Test
+    void patchDistinguishesNullCapacityFromOmittedCapacity() throws Exception {
+        Class updated = new Class(tutorId, "CS101", "Kept", null, null, 20,
+                Class.EnrollmentPolicy.OPEN);
+        org.springframework.test.util.ReflectionTestUtils.setField(updated, "classId", classId);
+        when(classService.updateClass(eq(classId), any(), any(ClassUpdateRequest.class)))
+                .thenReturn(updated);
+
+        mvc.perform(patch("/api/v1/classes/{id}", classId).with(jwtAs("TUTOR"))
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"title\":\"Kept\",\"max_capacity\":null}"))
+                .andExpect(status().isOk());
+
+        var explicitNull = org.mockito.ArgumentCaptor.forClass(ClassUpdateRequest.class);
+        verify(classService).updateClass(eq(classId), any(), explicitNull.capture());
+        assertTrue(explicitNull.getValue().isMaxCapacityProvided());
+        assertNull(explicitNull.getValue().getMaxCapacity());
+
+        mvc.perform(patch("/api/v1/classes/{id}", classId).with(jwtAs("TUTOR"))
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"title\":\"Kept\"}"))
+                .andExpect(status().isOk());
+
+        var omitted = org.mockito.ArgumentCaptor.forClass(ClassUpdateRequest.class);
+        verify(classService, org.mockito.Mockito.times(2))
+                .updateClass(eq(classId), any(), omitted.capture());
+        assertFalse(omitted.getValue().isMaxCapacityProvided());
+    }
+
+    @Test
+    void tutorCanUploadClassThumbnailUsingMultipartContract() throws Exception {
+        String url = "http://localhost:8081/class-thumbnails/thumbnail.png";
+        when(thumbnailService.upload(eq(classId), eq(tutorId), any())).thenReturn(url);
+        MockMultipartFile image = new MockMultipartFile(
+                "file", "cover.png", MediaType.IMAGE_PNG_VALUE,
+                new byte[]{(byte) 0x89, 'P', 'N', 'G', 13, 10, 26, 10}
+        );
+
+        mvc.perform(multipart("/api/v1/classes/{id}/thumbnail", classId)
+                        .file(image).with(jwtAs("TUTOR")))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.thumbnail_url").value(url));
+        verify(thumbnailService).upload(eq(classId), eq(tutorId), any());
+    }
+
+    @Test
+    void uploadWithoutTheFilePartUsesTheDocumentedErrorEnvelope() throws Exception {
+        mvc.perform(multipart("/api/v1/classes/{id}/thumbnail", classId).with(jwtAs("TUTOR")))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.code").value("INVALID_FILE"))
+                .andExpect(jsonPath("$.message").isNotEmpty())
+                .andExpect(jsonPath("$.details").isArray());
+
+        verify(thumbnailService, never()).upload(any(), any(), any());
+    }
+
+    @Test
+    void uploadWithNonMultipartContentTypeIsRejectedBeforeTheServiceRuns() throws Exception {
+        mvc.perform(post("/api/v1/classes/{id}/thumbnail", classId).with(jwtAs("TUTOR"))
+                        .contentType(MediaType.APPLICATION_JSON).content("{}"))
+                .andExpect(status().isUnsupportedMediaType())
+                .andExpect(jsonPath("$.code").value("UNSUPPORTED_MEDIA_TYPE"));
+
+        verify(thumbnailService, never()).upload(any(), any(), any());
     }
 
     @Test
@@ -241,6 +381,56 @@ class ClassControllerApiTest {
     }
 
     @Test
+    void tutorDetailReadIsDelegatedToTheServiceWithoutAnOwnershipCheck() throws Exception {
+        var detail = new ClassDetailResponse(classId, "CS101", "Intro to Java", "Basics",
+                null, null, "OPEN", "ACTIVE",
+                new ClassDetailResponse.Tutor(UUID.randomUUID(), "Other Tutor", "other@example.test"),
+                4, 20);
+        when(classService.getClassDetails(eq(classId), any(), eq(false))).thenReturn(detail);
+
+        mvc.perform(get("/api/v1/classes/{id}", classId).with(jwtAs("TUTOR")))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.tutor.full_name").value("Other Tutor"));
+    }
+
+    @Test
+    void rosterEndpointPassesIdentitySearchAndPagingToService() throws Exception {
+        UUID memberId = UUID.randomUUID();
+        UUID student = UUID.randomUUID();
+        var member = new vn.edu.hcmut.co3103.lms.entity.ClassMember(
+                classId, student,
+                vn.edu.hcmut.co3103.lms.entity.ClassMember.MembershipStatus.ACTIVE,
+                null, Instant.now());
+        org.springframework.test.util.ReflectionTestUtils.setField(member, "classMemberId", memberId);
+        when(membershipService.listMembers(eq(classId), any(), eq("ada"),
+                eq(vn.edu.hcmut.co3103.lms.entity.ClassMember.MembershipStatus.ACTIVE), any()))
+                .thenReturn(new org.springframework.data.domain.PageImpl<>(
+                        List.of(member), org.springframework.data.domain.PageRequest.of(1, 20), 21L));
+
+        mvc.perform(get("/api/v1/classes/{id}/members", classId).with(jwtAs("TUTOR"))
+                        .param("q", "ada")
+                        .param("status", "ACTIVE")
+                        .param("page", "2")
+                        .param("size", "20")
+                        .param("sort", "joined_at,asc"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.items[0].class_member_id").value(memberId.toString()))
+                .andExpect(jsonPath("$.items[0].student_id").value(student.toString()))
+                .andExpect(jsonPath("$.items[0].status").value("ACTIVE"))
+                .andExpect(jsonPath("$.page").value(2))
+                .andExpect(jsonPath("$.total_items").value(21))
+                .andExpect(jsonPath("$.total_pages").value(2));
+
+        var pageable = org.mockito.ArgumentCaptor.forClass(org.springframework.data.domain.Pageable.class);
+        verify(membershipService).listMembers(eq(classId), any(), eq("ada"),
+                eq(vn.edu.hcmut.co3103.lms.entity.ClassMember.MembershipStatus.ACTIVE), pageable.capture());
+        assertEquals(1, pageable.getValue().getPageNumber());
+        assertEquals(20, pageable.getValue().getPageSize());
+        assertEquals("joined_at",
+                pageable.getValue().getSort().getOrderFor("joined_at").getProperty());
+    }
+
+    @Test
     void tutorApprovalEndpointReturnsUpdatedMembershipState() throws Exception {
         UUID memberId = UUID.randomUUID();
         UUID studentId = UUID.randomUUID();
@@ -262,6 +452,7 @@ class ClassControllerApiTest {
         assertRole("browseClasses", "hasRole('STUDENT')");
         assertRole("createClass", "hasRole('TUTOR')");
         assertRole("updateClass", "hasRole('TUTOR')");
+        assertRole("uploadClassThumbnail", "hasRole('TUTOR')");
         assertRole("joinOpenClass", "hasRole('STUDENT')");
         assertRole("approveJoinRequest", "hasRole('TUTOR')");
     }

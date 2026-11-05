@@ -20,13 +20,17 @@ import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
+import org.springframework.web.bind.annotation.RequestPart;
 import org.springframework.web.bind.annotation.RestController;
+import org.springframework.web.multipart.MultipartFile;
 import org.springframework.web.server.ResponseStatusException;
 import vn.edu.hcmut.co3103.lms.dto.request.ClassCreationRequest;
 import vn.edu.hcmut.co3103.lms.dto.request.ClassUpdateRequest;
 import vn.edu.hcmut.co3103.lms.dto.response.ClassCatalogResponse;
 import vn.edu.hcmut.co3103.lms.dto.response.ClassCreationResponse;
+import vn.edu.hcmut.co3103.lms.dto.response.ClassDetailResponse;
 import vn.edu.hcmut.co3103.lms.dto.response.ClassMemberResponse;
+import vn.edu.hcmut.co3103.lms.dto.response.ClassThumbnailResponse;
 import vn.edu.hcmut.co3103.lms.dto.response.CurrentMembershipResponse;
 import vn.edu.hcmut.co3103.lms.dto.response.MembershipActionResponse;
 import vn.edu.hcmut.co3103.lms.dto.response.PageResponse;
@@ -35,6 +39,7 @@ import vn.edu.hcmut.co3103.lms.entity.ClassMember;
 import vn.edu.hcmut.co3103.lms.mapper.ClassMapper;
 import vn.edu.hcmut.co3103.lms.service.classmanagement.ClassMembershipService;
 import vn.edu.hcmut.co3103.lms.service.classmanagement.ClassService;
+import vn.edu.hcmut.co3103.lms.service.classmanagement.ClassThumbnailService;
 
 import java.util.Map;
 import java.util.List;
@@ -57,23 +62,26 @@ public class ClassController {
             "class_code", "class_code"
     );
     private static final Map<String, String> MEMBER_SORT_FIELDS = Map.of(
-            "requested_at", "requestedAt",
-            "joined_at", "joinedAt",
+            "requested_at", "requested_at",
+            "joined_at", "joined_at",
             "status", "status"
     );
 
     private final ClassService classService;
     private final ClassMembershipService membershipService;
     private final ClassMapper classMapper;
+    private final ClassThumbnailService thumbnailService;
 
     public ClassController(
             ClassService classService,
             ClassMembershipService membershipService,
-            ClassMapper classMapper
+            ClassMapper classMapper,
+            ClassThumbnailService thumbnailService
     ) {
         this.classService = classService;
         this.membershipService = membershipService;
         this.classMapper = classMapper;
+        this.thumbnailService = thumbnailService;
     }
 
     @GetMapping("/classes")
@@ -95,16 +103,14 @@ public class ClassController {
 
     @GetMapping("/classes/{classId}")
     @PreAuthorize("hasAnyRole('STUDENT', 'TUTOR', 'ADMINISTRATOR')")
-    public ClassCatalogResponse.Item getClassDetails(
+    public ClassDetailResponse getClassDetails(
             @AuthenticationPrincipal Jwt jwt,
             Authentication authentication,
             @PathVariable UUID classId
     ) {
-        boolean tutor = authentication.getAuthorities().stream()
-                .anyMatch(authority -> "ROLE_TUTOR".equals(authority.getAuthority()));
         boolean administrator = authentication.getAuthorities().stream()
                 .anyMatch(authority -> "ROLE_ADMINISTRATOR".equals(authority.getAuthority()));
-        return classService.getClassDetails(classId, userId(jwt), tutor, administrator);
+        return classService.getClassDetails(classId, userId(jwt), administrator);
     }
 
     @GetMapping("/me/classes")
@@ -153,12 +159,23 @@ public class ClassController {
         );
     }
 
+    @PostMapping(path = "/classes/{classId}/thumbnail", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
+    @PreAuthorize("hasRole('TUTOR')")
+    public ClassThumbnailResponse uploadClassThumbnail(
+            @AuthenticationPrincipal Jwt jwt,
+            @PathVariable UUID classId,
+            @RequestPart("file") MultipartFile file
+    ) {
+        return new ClassThumbnailResponse(thumbnailService.upload(classId, userId(jwt), file));
+    }
+
     @GetMapping("/classes/{classId}/members")
     @PreAuthorize("hasRole('TUTOR')")
     public PageResponse<ClassMemberResponse> listMembers(
             @AuthenticationPrincipal Jwt jwt,
             @PathVariable UUID classId,
             @RequestParam(required = false) ClassMember.MembershipStatus status,
+            @RequestParam(name = "q", required = false) String query,
             @RequestParam(defaultValue = "1") int page,
             @RequestParam(defaultValue = "20") int size,
             @RequestParam(defaultValue = "requested_at,desc") String sort
@@ -166,6 +183,7 @@ public class ClassController {
         Page<ClassMemberResponse> result = membershipService.listMembers(
                 classId,
                 userId(jwt),
+                query,
                 status,
                 pageable(page, size, sort, MEMBER_SORT_FIELDS)
         ).map(ClassMemberResponse::from);

@@ -6,6 +6,7 @@ import jakarta.validation.constraints.NotNull;
 import jakarta.validation.constraints.Pattern;
 import jakarta.validation.constraints.Positive;
 import jakarta.validation.constraints.Size;
+import tools.jackson.databind.annotation.JsonDeserialize;
 import vn.edu.hcmut.co3103.lms.entity.Class;
 
 public class ClassCreationRequest {
@@ -29,6 +30,7 @@ public class ClassCreationRequest {
     private String prerequisitesDescription;
 
     @JsonProperty("max_capacity")
+    @JsonDeserialize(using = StrictIntegerDeserializer.class)
     @Positive
     private Integer maxCapacity;
 

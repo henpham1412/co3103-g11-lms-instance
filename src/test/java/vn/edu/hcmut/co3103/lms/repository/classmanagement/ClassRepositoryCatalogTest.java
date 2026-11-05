@@ -51,6 +51,18 @@ class ClassRepositoryCatalogTest {
         assertThat(result.getContent().getFirst().getTutorName()).isEqualTo("Ada Lovelace");
     }
 
+    @Test
+    void detailProjectionReadsTheTutorEmailFromLocalIdentityData() {
+        UUID tutorId = saveUser("Ada Lovelace", LmsRole.TUTOR);
+        Class saved = classRepository.save(new Class(tutorId, "CS-C", "Compiler Design", null, null,
+                15, Class.EnrollmentPolicy.OPEN));
+
+        var row = classRepository.findDetailsByClassId(saved.getClassId()).orElseThrow();
+
+        assertThat(row.getTutorName()).isEqualTo("Ada Lovelace");
+        assertThat(row.getTutorEmail()).isEqualTo(tutorId + "@example.test");
+    }
+
     private UUID saveUser(String name, LmsRole role) {
         UUID id = UUID.randomUUID();
         userRepository.saveAndFlush(new LmsUserAccess(id, name, id + "@example.test", role,

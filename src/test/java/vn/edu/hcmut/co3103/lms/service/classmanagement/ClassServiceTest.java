@@ -14,6 +14,7 @@ import vn.edu.hcmut.co3103.lms.entity.ClassMember;
 import vn.edu.hcmut.co3103.lms.exception.ClassCodeAlreadyExistsException;
 import vn.edu.hcmut.co3103.lms.mapper.ClassMapper;
 import vn.edu.hcmut.co3103.lms.repository.classmanagement.ClassCatalogRow;
+import vn.edu.hcmut.co3103.lms.repository.classmanagement.ClassDetailRow;
 import vn.edu.hcmut.co3103.lms.repository.classmanagement.ClassMemberRepository;
 import vn.edu.hcmut.co3103.lms.repository.classmanagement.ClassRepository;
 
@@ -160,36 +161,81 @@ class ClassServiceTest {
     }
 
     @Test
-    void classDetailsIncludeTutorAndLearningPrerequisiteInformation() {
-        ClassCatalogRow row = catalogRow(tutorId, "ACTIVE");
+    void classDetailsIncludeTutorEmailAndLearningPrerequisiteInformation() {
+        ClassDetailRow row = detailRow(tutorId, "ACTIVE");
         when(classes.findDetailsByClassId(classId)).thenReturn(Optional.of(row));
 
-        var details = service.getClassDetails(classId, UUID.randomUUID(), false, false);
+        var details = service.getClassDetails(classId, UUID.randomUUID(), false);
 
         assertEquals(classId, details.classId());
         assertEquals("Programming", details.title());
         assertEquals("Programming tutor", details.tutor().fullName());
+        assertEquals("programming.tutor@example.test", details.tutor().email());
         assertEquals("Basic algebra", details.prerequisitesDescription());
         assertEquals(3L, details.activeMemberCount());
     }
 
     @Test
+    void anotherTutorCanReadActiveClassOverview() {
+        ClassDetailRow row = detailRow(tutorId, "ACTIVE");
+        when(classes.findDetailsByClassId(classId)).thenReturn(Optional.of(row));
+
+        var details = service.getClassDetails(classId, UUID.randomUUID(), false);
+
+        assertEquals(classId, details.classId());
+        assertEquals("ACTIVE", details.status());
+        assertEquals("Programming tutor", details.tutor().fullName());
+    }
+
+    @Test
+    void anotherTutorCannotReadArchivedClass() {
+        ClassDetailRow row = detailRow(tutorId, "ARCHIVED");
+        when(classes.findDetailsByClassId(classId)).thenReturn(Optional.of(row));
+
+        ResponseStatusException error = assertThrows(ResponseStatusException.class,
+                () -> service.getClassDetails(classId, UUID.randomUUID(), false));
+
+        assertEquals(HttpStatus.NOT_FOUND, error.getStatusCode());
+        assertEquals("CLASS_NOT_FOUND", error.getReason());
+    }
+
+    @Test
+    void owningTutorAndAdministratorStillSeeArchivedClass() {
+        ClassDetailRow row = detailRow(tutorId, "ARCHIVED");
+        when(classes.findDetailsByClassId(classId)).thenReturn(Optional.of(row));
+
+        assertEquals("ARCHIVED", service.getClassDetails(classId, tutorId, false).status());
+        assertEquals("ARCHIVED", service.getClassDetails(classId, UUID.randomUUID(), true).status());
+    }
+
+    @Test
     void studentCannotViewArchivedClassWithoutActiveMembership() {
-        ClassCatalogRow row = catalogRow(tutorId, "ARCHIVED");
+        ClassDetailRow row = detailRow(tutorId, "ARCHIVED");
         when(classes.findDetailsByClassId(classId)).thenReturn(Optional.of(row));
         UUID studentId = UUID.randomUUID();
         when(members.existsByClassIdAndStudentIdAndStatus(classId, studentId,
                 ClassMember.MembershipStatus.ACTIVE)).thenReturn(false);
 
         ResponseStatusException error = assertThrows(ResponseStatusException.class,
-                () -> service.getClassDetails(classId, studentId, false, false));
+                () -> service.getClassDetails(classId, studentId, false));
 
         assertEquals(HttpStatus.NOT_FOUND, error.getStatusCode());
         assertEquals("CLASS_NOT_FOUND", error.getReason());
     }
 
-    private ClassCatalogRow catalogRow(UUID ownerId, String status) {
-        ClassCatalogRow row = mock(ClassCatalogRow.class);
+    @Test
+    void enrolledStudentCanViewArchivedClassTheyAttended() {
+        ClassDetailRow row = detailRow(tutorId, "ARCHIVED");
+        when(classes.findDetailsByClassId(classId)).thenReturn(Optional.of(row));
+        UUID studentId = UUID.randomUUID();
+        when(members.existsByClassIdAndStudentIdAndStatus(classId, studentId,
+                ClassMember.MembershipStatus.ACTIVE)).thenReturn(true);
+
+        assertEquals("ARCHIVED", service.getClassDetails(classId, studentId, false).status());
+    }
+
+    private ClassDetailRow detailRow(UUID ownerId, String status) {
+        ClassDetailRow row = mock(ClassDetailRow.class);
         when(row.getClassId()).thenReturn(classId);
         when(row.getClassCode()).thenReturn("CS101");
         when(row.getTitle()).thenReturn("Programming");
@@ -197,6 +243,7 @@ class ClassServiceTest {
         when(row.getPrerequisitesDescription()).thenReturn("Basic algebra");
         when(row.getTutorId()).thenReturn(ownerId);
         when(row.getTutorName()).thenReturn("Programming tutor");
+        when(row.getTutorEmail()).thenReturn("programming.tutor@example.test");
         when(row.getEnrollmentPolicy()).thenReturn("OPEN");
         when(row.getStatus()).thenReturn(status);
         when(row.getActiveMemberCount()).thenReturn(3L);
