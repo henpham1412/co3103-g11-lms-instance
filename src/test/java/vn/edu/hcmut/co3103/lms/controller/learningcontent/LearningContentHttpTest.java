@@ -4,6 +4,9 @@ import com.nimbusds.jose.JOSEException;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.Arguments;
+import org.junit.jupiter.params.provider.MethodSource;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.test.context.TestConfiguration;
@@ -12,8 +15,11 @@ import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Import;
 import org.springframework.context.annotation.Primary;
 import org.springframework.http.MediaType;
+import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.test.context.DynamicPropertyRegistry;
 import org.springframework.test.context.DynamicPropertySource;
+import org.springframework.transaction.PlatformTransactionManager;
+import org.springframework.transaction.support.TransactionTemplate;
 import tools.jackson.databind.JsonNode;
 import tools.jackson.databind.ObjectMapper;
 import vn.edu.hcmut.co3103.lms.domain.AccessStatus;
@@ -49,6 +55,10 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
+import java.util.concurrent.TimeUnit;
 import java.util.stream.Stream;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -109,6 +119,10 @@ class LearningContentHttpTest {
     private LmsUserAccessRepository userRepository;
     @Autowired
     private ObjectMapper objectMapper;
+    @Autowired
+    private JdbcTemplate jdbcTemplate;
+    @Autowired
+    private PlatformTransactionManager transactions;
 
     private final HttpClient client = HttpClient.newBuilder().version(HttpClient.Version.HTTP_1_1).build();
     private final List<UUID> classIds = new ArrayList<>();
@@ -119,6 +133,7 @@ class LearningContentHttpTest {
     private String tutorToken;
     private String studentToken;
     private UUID classId;
+    private List<UUID> raceChapterIds = List.of();
 
     @BeforeEach
     void createCourse() throws Exception {
@@ -294,6 +309,99 @@ class LearningContentHttpTest {
         assertThat(activities(lessonId)).isEmpty();
     }
 
+    /**
+     * The interleaving F05 measured: a content write reads ACTIVE, an archive transaction commits
+     * ARCHIVED, and the write then commits anyway. The write here is proven to be parked on the
+     * Class row lock by pg_stat_activity before the archive is allowed to commit, so the
+     * interleaving is fixed by observation instead of by timing.
+     */
+    @ParameterizedTest
+    @MethodSource("contentWritesThatRaceWithArchive")
+    void aContentWriteParkedBehindAnArchiveObservesTheArchivedClassAndStoresNothing(String label,
+            ContentWrite write) throws Exception {
+        raceChapterIds = List.of(createChapter("{\"title\":\"First\"}"), createChapter("{\"title\":\"Second\"}"));
+
+        HttpResponse<String> response = writeWhileArchiveCommits(write);
+
+        assertThat(response.statusCode()).isEqualTo(409);
+        assertThat(json(response).get("code").asString()).isEqualTo("CLASS_ARCHIVED");
+        assertThat(classRepository.findById(classId).orElseThrow().getStatus())
+                .isEqualTo(Class.ClassStatus.ARCHIVED);
+        assertThat(chapters()).extracting(Chapter::getTitle).containsExactly("First", "Second");
+        assertThat(chapters()).extracting(Chapter::getSequenceOrder).containsExactly(0, 1);
+    }
+
+    private HttpResponse<String> writeWhileArchiveCommits(ContentWrite write) throws Exception {
+        ExecutorService executor = Executors.newSingleThreadExecutor();
+        try {
+            Future<HttpResponse<String>> parked = new TransactionTemplate(transactions).execute(status -> {
+                Class target = classRepository.findByIdForUpdate(classId).orElseThrow();
+                target.setStatus(Class.ClassStatus.ARCHIVED);
+                classRepository.saveAndFlush(target);
+                Future<HttpResponse<String>> attempt = executor.submit(() -> write.apply(this));
+                awaitParkedOnTheClassLock(attempt);
+                return attempt;
+            });
+            // Committing the archive is what releases the parked write.
+            return parked.get(30, TimeUnit.SECONDS);
+        } catch (java.util.concurrent.TimeoutException timedOut) {
+            throw new AssertionError("the content write stayed blocked after the archive committed", timedOut);
+        } finally {
+            executor.shutdownNow();
+        }
+    }
+
+    /**
+     * Parks the caller until the content write is provably queued behind this transaction on the
+     * Class row. pg_stat_activity.query cannot be used for that: PostgreSQL refreshes it lazily, so
+     * a backend already waiting inside SELECT ... FOR UPDATE still reports its previous statement.
+     * The lock table is exact instead — the writer holds the tuple lock on "class" and waits on a
+     * transaction lock this very backend granted itself.
+     */
+    private void awaitParkedOnTheClassLock(Future<HttpResponse<String>> attempt) {
+        long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(10);
+        while (System.nanoTime() < deadline) {
+            if (attempt.isDone()) {
+                throw new AssertionError("the content write completed without waiting for the archive");
+            }
+            Integer parked = jdbcTemplate.queryForObject("""
+                    SELECT count(*) FROM pg_stat_activity a
+                    JOIN pg_locks queued ON queued.pid = a.pid AND queued.locktype = 'transactionid'
+                         AND NOT queued.granted
+                    WHERE a.datname = current_database() AND a.pid <> pg_backend_pid()
+                      AND pg_blocking_pids(a.pid) @> ARRAY[pg_backend_pid()]
+                      AND EXISTS (SELECT 1 FROM pg_locks taken WHERE taken.pid = a.pid
+                          AND taken.locktype = 'tuple' AND taken.relation = 'class'::regclass
+                          AND taken.granted)
+                    """, Integer.class);
+            if (parked != null && parked > 0) return;
+            try {
+                Thread.sleep(25);
+            } catch (InterruptedException interrupted) {
+                Thread.currentThread().interrupt();
+                throw new AssertionError(interrupted);
+            }
+        }
+        throw new AssertionError("the content write never queued behind the archive on the Class row");
+    }
+
+    private interface ContentWrite {
+        HttpResponse<String> apply(LearningContentHttpTest test) throws Exception;
+    }
+
+    private static Stream<Arguments> contentWritesThatRaceWithArchive() {
+        return Stream.of(
+                Arguments.of("create", (ContentWrite) test -> test.post(
+                        "/api/v1/classes/" + test.classId + "/chapters", test.tutorToken, "{\"title\":\"Late\"}")),
+                Arguments.of("update", (ContentWrite) test -> test.patch(
+                        "/api/v1/chapters/" + test.raceChapterIds.getFirst(), test.tutorToken,
+                        "{\"title\":\"Renamed\"}")),
+                Arguments.of("reorder", (ContentWrite) test -> test.put(
+                        "/api/v1/classes/" + test.classId + "/chapter-order", test.tutorToken,
+                        test.objectMapper.writeValueAsString(
+                                Map.of("chapter_ids", test.raceChapterIds.reversed())))));
+    }
+
     @Test
     void forbiddenAndUnknownContentShareTheDocumentedErrorEnvelope() throws Exception {
         UUID chapterId = createChapter("{\"title\":\"Basics\"}");
@@ -368,6 +476,10 @@ class LearningContentHttpTest {
 
     private HttpResponse<String> patch(String path, String token, String body) throws Exception {
         return jsonRequest("PATCH", path, token, body);
+    }
+
+    private HttpResponse<String> put(String path, String token, String body) throws Exception {
+        return jsonRequest("PUT", path, token, body);
     }
 
     private HttpResponse<String> delete(String path, String token) throws Exception {
