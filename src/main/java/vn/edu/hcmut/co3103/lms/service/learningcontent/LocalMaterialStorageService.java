@@ -1,5 +1,6 @@
 package vn.edu.hcmut.co3103.lms.service.learningcontent;
 
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
@@ -13,7 +14,10 @@ import java.nio.file.AtomicMoveNotSupportedException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.StandardCopyOption;
+import java.util.List;
 import java.util.Locale;
+import java.util.Set;
+import java.nio.charset.StandardCharsets;
 import java.util.UUID;
 import java.util.zip.ZipFile;
 
@@ -21,8 +25,14 @@ import java.util.zip.ZipFile;
 public class LocalMaterialStorageService {
     public static final long DOCUMENT_MAX_BYTES = 50L * 1024 * 1024;
     public static final long VIDEO_MAX_BYTES = 200L * 1024 * 1024;
+    private static final Set<String> MP4_VIDEO_BRANDS = Set.of(
+            "isom", "iso2", "iso4", "iso5", "iso6", "isoj", "mp41", "mp42", "mp71", "avc1", "M4V ", "dash", "msdh");
+    private static final int EBML_HEAD_BYTES = 1024;
+    private static final String FILE_KEY_PATTERN =
+            "[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}\\.(pdf|docx|pptx|mp4|webm)";
     private final Path root;
 
+    @Autowired
     public LocalMaterialStorageService(
             @Value("${lms.storage.local.directory:./var/lms-files}") String directory) {
         this(Path.of(directory));
@@ -72,7 +82,7 @@ public class LocalMaterialStorageService {
     }
 
     public Path resolve(String key) {
-        if (key == null || !key.matches("[0-9a-fA-F-]{36}\\.(pdf|docx|pptx|mp4|webm)")) {
+        if (key == null || !key.matches(FILE_KEY_PATTERN)) {
             throw new ResponseStatusException(HttpStatus.NOT_FOUND, "FILE_NOT_FOUND");
         }
         Path resolved = root.resolve(key).normalize();
@@ -108,13 +118,54 @@ public class LocalMaterialStorageService {
                 return "application/vnd.openxmlformats-officedocument.presentationml.presentation";
             }
         } else {
-            if (read >= 8 && header[4] == 'f' && header[5] == 't' && header[6] == 'y' && header[7] == 'p') {
+            if (read >= 12 && header[4] == 'f' && header[5] == 't' && header[6] == 'y' && header[7] == 'p'
+                    && isMp4VideoBrand(header, read)) {
                 return "video/mp4";
             }
             if (read >= 4 && (header[0] & 0xff) == 0x1a && (header[1] & 0xff) == 0x45
-                    && (header[2] & 0xff) == 0xdf && (header[3] & 0xff) == 0xa3) return "video/webm";
+                    && (header[2] & 0xff) == 0xdf && (header[3] & 0xff) == 0xa3
+                    && "webm".equals(ebmlDocType(file))) return "video/webm";
         }
         throw new ResponseStatusException(HttpStatus.UNSUPPORTED_MEDIA_TYPE, "UNSUPPORTED_MEDIA_TYPE");
+    }
+
+    /**
+     * An ISO base media file always opens with an {@code ftyp} box, but the brand inside it decides
+     * what the container actually holds: QuickTime and audio-only MPEG-4 files share the magic bytes
+     * with MP4 video, so the major brand and compatible-brand list have to say video.
+     */
+    private boolean isMp4VideoBrand(byte[] header, int read) {
+        List<String> audioOnly = List.of("qt  ", "M4A ", "M4B ", "M4P ", "mp4a", "3gp", "3g2");
+        String major = new String(header, 8, 4, StandardCharsets.US_ASCII);
+        if (audioOnly.contains(major)) return false;
+        if (MP4_VIDEO_BRANDS.contains(major)) return true;
+        for (int offset = 16; offset + 4 <= read; offset += 4) {
+            String compatible = new String(header, offset, 4, StandardCharsets.US_ASCII);
+            if (audioOnly.contains(compatible)) return false;
+            if (MP4_VIDEO_BRANDS.contains(compatible)) return true;
+        }
+        return false;
+    }
+
+    /**
+     * WebM and Matroska share the EBML magic, so the DocType string is the only thing that tells
+     * them apart. It is read straight out of the header instead of parsing the whole tree.
+     */
+    private String ebmlDocType(Path file) throws IOException {
+        byte[] head;
+        try (InputStream input = Files.newInputStream(file)) {
+            head = input.readNBytes(EBML_HEAD_BYTES);
+        }
+        for (int offset = 4; offset + 4 <= head.length; offset++) {
+            if ((head[offset] & 0xff) != 0x42 || (head[offset + 1] & 0xff) != 0x82) continue;
+            int length = head[offset + 2] & 0xff;
+            // A one-byte EBML size descriptor carries lengths 1..127 in its low seven bits.
+            if (length < 0x81 || length > 0x8f) return null;
+            int size = length - 0x80;
+            if (offset + 3 + size > head.length) return null;
+            return new String(head, offset + 3, size, StandardCharsets.US_ASCII);
+        }
+        return null;
     }
 
     private boolean isOfficeDocument(Path file, String requiredEntry) {

@@ -45,3 +45,21 @@ CREATE TABLE material (
 );
 
 CREATE INDEX idx_material_lesson_order ON material(lesson_id, sequence_order);
+
+-- Placement of an assessment inside a lesson. Learning Content owns the row; the Quiz or
+-- Assignment configuration behind activity_type is created by the Assessment module and
+-- references this table, so deleting a placed activity is blocked until that is removed.
+CREATE TABLE activity (
+    activity_id UUID PRIMARY KEY,
+    lesson_id UUID NOT NULL REFERENCES lesson(lesson_id),
+    title TEXT NOT NULL,
+    description TEXT,
+    activity_type VARCHAR(20) NOT NULL
+        CHECK (activity_type IN ('QUIZ', 'ASSIGNMENT')),
+    sequence_order INTEGER NOT NULL CHECK (sequence_order >= 0),
+    status VARCHAR(20) NOT NULL DEFAULT 'PUBLISHED'
+        CHECK (status IN ('PUBLISHED', 'HIDDEN')),
+    created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE INDEX idx_activity_lesson_order ON activity(lesson_id, sequence_order);

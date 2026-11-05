@@ -1,6 +1,7 @@
 package vn.edu.hcmut.co3103.lms.dto.response;
 
 import com.fasterxml.jackson.annotation.JsonProperty;
+import vn.edu.hcmut.co3103.lms.entity.Activity;
 import vn.edu.hcmut.co3103.lms.entity.Chapter;
 import vn.edu.hcmut.co3103.lms.entity.Material;
 import java.time.Instant;
@@ -17,10 +18,14 @@ public record ClassOutlineResponse(
     public record LessonItem(@JsonProperty("lesson_id") UUID lessonId, String title, String description,
                              @JsonProperty("estimated_duration") Integer estimatedDuration,
                              @JsonProperty("sequence_order") int sequenceOrder, Chapter.VisibilityStatus status,
-                             List<MaterialItem> materials) { }
+                             List<MaterialItem> materials, List<ActivityItem> activities) { }
     public record MaterialItem(@JsonProperty("material_id") UUID materialId, String title,
                                @JsonProperty("material_type") Material.MaterialType materialType,
                                @JsonProperty("file_url") String fileUrl, String content,
+                               @JsonProperty("sequence_order") int sequenceOrder, Chapter.VisibilityStatus status,
+                               @JsonProperty("created_at") Instant createdAt) { }
+    public record ActivityItem(@JsonProperty("activity_id") UUID activityId, String title, String description,
+                               @JsonProperty("activity_type") Activity.ActivityType activityType,
                                @JsonProperty("sequence_order") int sequenceOrder, Chapter.VisibilityStatus status,
                                @JsonProperty("created_at") Instant createdAt) { }
 }
