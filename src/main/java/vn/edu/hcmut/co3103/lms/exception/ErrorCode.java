@@ -9,6 +9,7 @@ public enum ErrorCode {
     CLASS_ACCESS_DENIED("Access to this class is denied", HttpStatus.FORBIDDEN),
     SKILL_TOPIC_NAME_DUPLICATE("A topic with this name already exists in the class", HttpStatus.CONFLICT),
     INVALID_SKILL_TOPIC("Skill topic data is invalid", HttpStatus.BAD_REQUEST),
+    VALIDATION_ERROR("SkillTopic update is invalid", HttpStatus.BAD_REQUEST),
     SKILL_TOPIC_REFERENCED("Cannot delete a referenced skill topic", HttpStatus.CONFLICT),
     PREREQUISITE_SELF_REFERENCE("A topic cannot be its own prerequisite", HttpStatus.BAD_REQUEST),
     PREREQUISITE_CLASS_MISMATCH("Prerequisite topics must belong to the same class", HttpStatus.BAD_REQUEST),

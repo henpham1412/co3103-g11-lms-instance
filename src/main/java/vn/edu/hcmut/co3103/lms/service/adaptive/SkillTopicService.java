@@ -15,6 +15,7 @@ import vn.edu.hcmut.co3103.lms.repository.adaptive.SkillTopicRepository;
 import vn.edu.hcmut.co3103.lms.service.adaptive.integration.ClassAccess;
 
 import java.util.List;
+import java.util.Objects;
 import java.util.UUID;
 
 /** Register as a transactional Spring bean only with a real ClassAccess adapter. */
@@ -69,24 +70,32 @@ public class SkillTopicService {
         return topic;
     }
 
-    /** Replaces all editable metadata; null description clears it; difficulty is required. */
+    /** Partial update: validate the merged candidate before touching the managed entity. */
     @Transactional
     public SkillTopic update(UUID topicId, UpdateSkillTopicCommand command) {
-        if (command == null) {
-            throw new AppException(ErrorCode.INVALID_SKILL_TOPIC);
+        if (command == null || !command.hasFields()) {
+            throw new AppException(ErrorCode.VALIDATION_ERROR);
         }
         SkillTopic topic = lockTopic(topicId);
         // Validate a detached candidate before modifying the managed entity.
         SkillTopic candidate = new SkillTopic(topicId, topic.getClassId(),
-                command.name(), command.description(), command.difficulty());
-        validate(candidate);
-        if (topics.existsByClassIdAndNameAndSkillTopicIdNot(
+                command.nameProvided() ? command.name() : topic.getName(),
+                command.descriptionProvided() ? command.description() : topic.getDescription(),
+                command.difficultyProvided() ? command.difficulty() : topic.getDifficultyLevel());
+        validate(candidate, ErrorCode.VALIDATION_ERROR);
+        boolean nameChanged = !Objects.equals(topic.getName(), candidate.getName());
+        boolean descriptionChanged = !Objects.equals(topic.getDescription(), candidate.getDescription());
+        boolean difficultyChanged = topic.getDifficultyLevel() != candidate.getDifficultyLevel();
+        if (!nameChanged && !descriptionChanged && !difficultyChanged) {
+            return topic;
+        }
+        if (nameChanged && topics.existsByClassIdAndNameAndSkillTopicIdNot(
                 topic.getClassId(), candidate.getName(), topicId)) {
             throw new AppException(ErrorCode.SKILL_TOPIC_NAME_DUPLICATE);
         }
-        topic.setName(candidate.getName());
-        topic.setDescription(command.description());
-        topic.setDifficultyLevel(command.difficulty());
+        if (nameChanged) topic.setName(candidate.getName());
+        if (descriptionChanged) topic.setDescription(candidate.getDescription());
+        if (difficultyChanged) topic.setDifficultyLevel(candidate.getDifficultyLevel());
         return topics.saveAndFlush(topic);
     }
 
@@ -112,9 +121,13 @@ public class SkillTopicService {
     }
 
     private void validate(SkillTopic topic) {
+        validate(topic, ErrorCode.INVALID_SKILL_TOPIC);
+    }
+
+    private void validate(SkillTopic topic, ErrorCode errorCode) {
         var violations = validator.validate(topic);
         if (!violations.isEmpty()) {
-            throw new AppException(ErrorCode.INVALID_SKILL_TOPIC);
+            throw new AppException(errorCode);
         }
     }
 }

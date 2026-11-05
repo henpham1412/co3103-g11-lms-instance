@@ -99,26 +99,26 @@ class AdaptiveControllersTest {
                 {"name":" Algebra ","description":"Updated description","difficulty_level":"MEDIUM"}
                 """))
                 .andExpect(status().isOk()).andExpect(jsonPath("$.skill_topic_id").value(TOPIC.toString()));
-        verify(topics).update(TOPIC, new UpdateSkillTopicCommand(" Algebra ", "Updated description", TopicDifficulty.MEDIUM));
+        verify(topics).update(TOPIC, new UpdateSkillTopicCommand(
+                true, " Algebra ", true, "Updated description", true, TopicDifficulty.MEDIUM));
     }
 
     @ParameterizedTest
     @ValueSource(strings = {"{\"name\":\"Algebra\",\"difficulty_level\":\"MEDIUM\"}",
             "{\"name\":\"Algebra\",\"difficulty_level\":\"MEDIUM\",\"description\":null}"})
-    void omittedAndNullDescriptionBothMapToClearingCommand(String body) throws Exception {
+    void omittedAndNullDescriptionRemainDistinctInTheCommand(String body) throws Exception {
         when(topics.update(eq(TOPIC), any())).thenReturn(topic());
         mvc.perform(patch(TOPIC_PATH).contentType(MediaType.APPLICATION_JSON).content(body)).andExpect(status().isOk());
-        verify(topics).update(TOPIC, new UpdateSkillTopicCommand("Algebra", null, TopicDifficulty.MEDIUM));
+        verify(topics).update(TOPIC, new UpdateSkillTopicCommand(
+                true, "Algebra", body.contains("description"), null, true, TopicDifficulty.MEDIUM));
     }
 
     @ParameterizedTest
-    @ValueSource(strings = {"{\"description\":\"Only description\"}",
-            "{\"name\":\"Algebra\"}", "{\"difficulty_level\":\"MEDIUM\"}",
-            "{\"name\":\" \",\"difficulty_level\":\"MEDIUM\"}",
-            "{\"name\":\"Algebra\",\"difficulty_level\":null}"})
-    void patchRequiresNameAndDifficultyAsReviewed(String body) throws Exception {
+    @ValueSource(strings = {"{}", "{\"name\":null}", "{\"name\":\" \"}",
+            "{\"difficulty_level\":null}"})
+    void patchRejectsEmptyOrInvalidSuppliedFields(String body) throws Exception {
         mvc.perform(patch(TOPIC_PATH).contentType(MediaType.APPLICATION_JSON).content(body))
-                .andExpect(status().isBadRequest());
+                .andExpect(status().isBadRequest()).andExpect(jsonPath("$.code").value("VALIDATION_ERROR"));
         verifyNoInteractions(topics);
     }
 

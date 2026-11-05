@@ -20,7 +20,10 @@ public final class SkillTopicApiMapper {
     }
 
     public static UpdateSkillTopicCommand toCommand(UpdateSkillTopicRequest request) {
-        return new UpdateSkillTopicCommand(request.name(), request.description(), request.difficultyLevel());
+        return new UpdateSkillTopicCommand(
+                request.nameProvided(), request.name(),
+                request.descriptionProvided(), request.description(),
+                request.difficultyProvided(), request.difficultyLevel());
     }
 
     public static SkillTopicResponse toResponse(SkillTopic topic) {

@@ -106,7 +106,7 @@ class SkillTopicServiceTest {
         assertError(INVALID_SKILL_TOPIC,
                 () -> service.create(CLASS_ID, new CreateSkillTopicCommand("Valid", null, null)));
         assertError(INVALID_SKILL_TOPIC, () -> service.create(CLASS_ID, null));
-        assertError(INVALID_SKILL_TOPIC, () -> service.update(TOPIC_ID, null));
+        assertError(VALIDATION_ERROR, () -> service.update(TOPIC_ID, null));
         verify(topics, never()).saveAndFlush(any());
     }
 
@@ -120,8 +120,8 @@ class SkillTopicServiceTest {
     @Test
     void invalidUpdateDifficultyLeavesExistingMetadataUnchanged() {
         SkillTopic existing = existingTopic();
-        assertError(INVALID_SKILL_TOPIC,
-                () -> service.update(TOPIC_ID, new UpdateSkillTopicCommand("Changed", null, null)));
+        assertError(VALIDATION_ERROR,
+                () -> service.update(TOPIC_ID, new UpdateSkillTopicCommand(true, "Changed", true, null, true, null)));
         assertEquals("Original", existing.getName());
         assertEquals(TopicDifficulty.EASY, existing.getDifficultyLevel());
         verify(topics, never()).saveAndFlush(any());
@@ -131,7 +131,8 @@ class SkillTopicServiceTest {
     void updateExcludesOwnIdAndDoesNotMoveTheTopic() {
         SkillTopic existing = existingTopic();
         when(topics.saveAndFlush(existing)).thenReturn(existing);
-        assertSame(existing, service.update(TOPIC_ID, new UpdateSkillTopicCommand(" Updated ", null, TopicDifficulty.HARD)));
+        assertSame(existing, service.update(TOPIC_ID, new UpdateSkillTopicCommand(
+                true, " Updated ", true, null, true, TopicDifficulty.HARD)));
         assertEquals(TOPIC_ID, existing.getSkillTopicId());
         assertEquals(CLASS_ID, existing.getClassId());
         assertEquals("Updated", existing.getName());
@@ -149,9 +150,11 @@ class SkillTopicServiceTest {
         when(topics.existsByClassIdAndNameAndSkillTopicIdNot(CLASS_ID, "Taken", TOPIC_ID))
                 .thenReturn(true);
         assertError(SKILL_TOPIC_NAME_DUPLICATE,
-                () -> service.update(TOPIC_ID, new UpdateSkillTopicCommand(" Taken ", "changed", TopicDifficulty.HARD)));
-        assertError(INVALID_SKILL_TOPIC,
-                () -> service.update(TOPIC_ID, new UpdateSkillTopicCommand(null, "changed", TopicDifficulty.HARD)));
+                () -> service.update(TOPIC_ID, new UpdateSkillTopicCommand(
+                        true, " Taken ", true, "changed", true, TopicDifficulty.HARD)));
+        assertError(VALIDATION_ERROR,
+                () -> service.update(TOPIC_ID, new UpdateSkillTopicCommand(
+                        true, null, true, "changed", true, TopicDifficulty.HARD)));
         assertEquals("Original", existing.getName());
         assertEquals("description", existing.getDescription());
         verify(topics, never()).saveAndFlush(any());
@@ -193,6 +196,14 @@ class SkillTopicServiceTest {
         assertEquals(List.of(existing), service.listByClass(CLASS_ID));
         assertSame(existing, service.get(TOPIC_ID));
         verify(access, times(2)).requireReadAccess(CLASS_ID);
+    }
+
+    @Test
+    void emptyOrNullPatchCommandIsRejectedBeforeReadingOrWriting() {
+        assertError(VALIDATION_ERROR, () -> service.update(TOPIC_ID, null));
+        assertError(VALIDATION_ERROR, () -> service.update(TOPIC_ID,
+                new UpdateSkillTopicCommand(false, null, false, null, false, null)));
+        verifyNoInteractions(topics, access);
     }
 
     @Test

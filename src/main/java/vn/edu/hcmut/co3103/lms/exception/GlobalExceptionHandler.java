@@ -12,6 +12,7 @@ import org.springframework.security.access.AccessDeniedException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
 import org.springframework.web.context.request.WebRequest;
+import org.springframework.web.context.request.ServletWebRequest;
 import org.springframework.web.servlet.mvc.method.annotation.ResponseEntityExceptionHandler;
 
 import java.util.List;
@@ -29,8 +30,9 @@ public class GlobalExceptionHandler extends ResponseEntityExceptionHandler {
 
     // Jakarta Bean Validation is a caller-input error, not a database constraint failure.
     @ExceptionHandler(ConstraintViolationException.class)
-    public ResponseEntity<Map<String, Object>> handleBeanValidation(ConstraintViolationException exception) {
-        return response(ErrorCode.INVALID_REQUEST);
+    public ResponseEntity<Map<String, Object>> handleBeanValidation(
+            ConstraintViolationException exception, WebRequest request) {
+        return response(inputErrorCode(request));
     }
 
     @Override
@@ -38,7 +40,7 @@ public class GlobalExceptionHandler extends ResponseEntityExceptionHandler {
             HttpHeaders headers, HttpStatusCode status, WebRequest request) {
         // Discard framework detail text: rejected values and implementation details are not public.
         ErrorCode code = switch (status.value()) {
-            case 400 -> ErrorCode.INVALID_REQUEST;
+            case 400 -> inputErrorCode(request);
             case 404 -> ErrorCode.RESOURCE_NOT_FOUND;
             case 405 -> ErrorCode.METHOD_NOT_ALLOWED;
             case 406 -> ErrorCode.NOT_ACCEPTABLE;
@@ -88,6 +90,19 @@ public class GlobalExceptionHandler extends ResponseEntityExceptionHandler {
     public ResponseEntity<Map<String, Object>> handleUnexpected(Exception exception) {
         log.error("Unexpected application error", exception);
         return response(ErrorCode.INTERNAL_ERROR);
+    }
+
+    private ErrorCode inputErrorCode(WebRequest request) {
+        // Limit the new validation contract to the existing SkillTopic PATCH operation.
+        // Other MVC endpoints keep their established INVALID_REQUEST code.
+        if (request instanceof ServletWebRequest servlet) {
+            var http = servlet.getRequest();
+            String path = http.getRequestURI().substring(http.getContextPath().length());
+            if ("PATCH".equals(http.getMethod()) && path.matches("/api/v1/skill-topics/[^/]+")) {
+                return ErrorCode.VALIDATION_ERROR;
+            }
+        }
+        return ErrorCode.INVALID_REQUEST;
     }
 
     private ResponseEntity<Map<String, Object>> response(ErrorCode code) {
