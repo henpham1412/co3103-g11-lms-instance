@@ -20,11 +20,6 @@ spring:
     username: ${DB_USERNAME:postgres}
     password: ${DB_PASSWORD:36363636}
 
-  servlet:
-    multipart:
-      max-file-size: 5MB
-      max-request-size: 6MB
-
   jpa:
     hibernate:
       ddl-auto: none
