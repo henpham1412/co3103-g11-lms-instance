@@ -121,7 +121,7 @@ public class QuizQuestionService {
         question.setPointsDeducted(newPointsDeducted);
         question.setOrderIndex(newOrderIndex);
 
-        if (hasAttempts && gradingChanged) recalculateSubmittedAttempts(quiz);
+        if (hasAttempts && gradingChanged) gradingService.recalculateSubmittedAttempts(quiz);
         return toResponse(question, optionRepository.findByQuestion_IdOrderByOrderIndex(questionId));
     }
 
@@ -195,10 +195,6 @@ public class QuizQuestionService {
             finalOptions.add(option);
         }
         optionRepository.saveAll(finalOptions);
-    }
-
-    private void recalculateSubmittedAttempts(Quiz quiz) {
-        gradingService.recalculateSubmittedAttempts(quiz);
     }
 
     private QuestionResponse toResponse(Question question, List<QuestionOption> options) {
