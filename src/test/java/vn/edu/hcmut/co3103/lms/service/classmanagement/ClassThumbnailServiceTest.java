@@ -1,5 +1,6 @@
 package vn.edu.hcmut.co3103.lms.service.classmanagement;
 
+import vn.edu.hcmut.co3103.lms.support.ThumbnailImages;
 import org.junit.jupiter.api.Test;
 import org.springframework.http.HttpStatus;
 import org.springframework.mock.web.MockMultipartFile;
@@ -26,7 +27,7 @@ class ClassThumbnailServiceTest {
     private final UUID classId = UUID.randomUUID();
     private final UUID ownerId = UUID.randomUUID();
     private final MockMultipartFile file = new MockMultipartFile(
-            "file", "cover.png", "image/png", new byte[]{1, 2, 3});
+            "file", "cover.png", "image/png", ThumbnailImages.png());
 
     @Test
     void savesThumbnailUrlForOwningTutor() {

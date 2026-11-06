@@ -1,7 +1,10 @@
 package vn.edu.hcmut.co3103.lms.service.classmanagement;
 
+import vn.edu.hcmut.co3103.lms.support.ThumbnailImages;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.MethodSource;
 import org.springframework.http.HttpStatus;
 import org.springframework.mock.web.MockMultipartFile;
 import org.springframework.web.server.ResponseStatusException;
@@ -21,9 +24,26 @@ class ClassThumbnailStorageServiceTest {
         return new ClassThumbnailStorageService(directory, "http://localhost:8081");
     }
 
+    static java.util.stream.Stream<ThumbnailImages.InvalidImage> invalidImages() {
+        return ThumbnailImages.invalidImages().stream();
+    }
+
+    @ParameterizedTest
+    @MethodSource("invalidImages")
+    void rejectsIncompleteAndCorruptedImagesBeforeWriting(
+            ThumbnailImages.InvalidImage image) throws Exception {
+        ResponseStatusException error = assertThrows(ResponseStatusException.class,
+                () -> service().store(new MockMultipartFile("file", "cover", image.mimeType(), image.bytes())));
+        assertEquals(HttpStatus.BAD_REQUEST, error.getStatusCode());
+        assertEquals("INVALID_FILE", error.getReason());
+        try (var files = Files.list(directory)) {
+            assertEquals(0, files.count());
+        }
+    }
+
     @Test
     void storesSupportedPngAndReturnsPublicUrl() throws Exception {
-        byte[] png = {(byte) 0x89, 'P', 'N', 'G', 13, 10, 26, 10};
+        byte[] png = ThumbnailImages.png();
         var stored = service().store(new MockMultipartFile("file", "cover.png", "image/png", png));
 
         assertEquals("image/png", stored.mimeType());
@@ -36,9 +56,9 @@ class ClassThumbnailStorageServiceTest {
     @Test
     void storesSupportedJpegAndWebpAndLeavesNoTemporaryPartFile() throws Exception {
         var jpeg = service().store(new MockMultipartFile("file", "cover.jpg", "image/jpeg",
-                new byte[]{(byte) 0xff, (byte) 0xd8, (byte) 0xff, (byte) 0xe0}));
+                ThumbnailImages.jpeg()));
         var webp = service().store(new MockMultipartFile("file", "cover.webp", "image/webp",
-                new byte[]{'R', 'I', 'F', 'F', 4, 0, 0, 0, 'W', 'E', 'B', 'P'}));
+                ThumbnailImages.webp()));
 
         assertEquals(".jpg", jpeg.fileName().substring(jpeg.fileName().lastIndexOf('.')));
         assertEquals(".webp", webp.fileName().substring(webp.fileName().lastIndexOf('.')));
@@ -96,7 +116,7 @@ class ClassThumbnailStorageServiceTest {
     void deletesOnlyGeneratedThumbnailFiles() throws Exception {
         var service = service();
         var stored = service.store(new MockMultipartFile("file", "cover.jpg", "image/jpeg",
-                new byte[]{(byte) 0xff, (byte) 0xd8, (byte) 0xff}));
+                ThumbnailImages.jpeg()));
         service.delete(stored.fileName());
 
         assertFalse(Files.exists(directory.resolve(stored.fileName())));

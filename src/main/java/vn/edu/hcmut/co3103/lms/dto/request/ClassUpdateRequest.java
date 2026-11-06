@@ -1,10 +1,17 @@
 package vn.edu.hcmut.co3103.lms.dto.request;
 
 import com.fasterxml.jackson.annotation.JsonAnySetter;
+import com.fasterxml.jackson.annotation.JsonAutoDetect;
 import com.fasterxml.jackson.annotation.JsonProperty;
 import tools.jackson.databind.annotation.JsonDeserialize;
 import vn.edu.hcmut.co3103.lms.entity.Class;
 
+// Only explicitly annotated business setters participate in JSON binding. In particular,
+// is...Provided getters must not expose their backing fields as inferred mutators.
+@JsonAutoDetect(fieldVisibility = JsonAutoDetect.Visibility.NONE,
+        getterVisibility = JsonAutoDetect.Visibility.NONE,
+        isGetterVisibility = JsonAutoDetect.Visibility.NONE,
+        setterVisibility = JsonAutoDetect.Visibility.NONE)
 public class ClassUpdateRequest {
 
     private String title;

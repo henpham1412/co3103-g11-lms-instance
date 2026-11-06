@@ -8,11 +8,19 @@ import org.springframework.web.multipart.MultipartFile;
 import org.springframework.web.server.ResponseStatusException;
 
 import java.io.IOException;
+import java.io.ByteArrayInputStream;
+import java.nio.ByteBuffer;
+import java.nio.ByteOrder;
 import java.nio.file.AtomicMoveNotSupportedException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.StandardCopyOption;
 import java.util.UUID;
+import java.util.Arrays;
+import java.util.zip.CRC32;
+import javax.imageio.ImageIO;
+import javax.imageio.ImageReader;
+import javax.imageio.stream.MemoryCacheImageInputStream;
 
 @Service
 public class ClassThumbnailStorageService {
@@ -59,6 +67,7 @@ public class ClassThumbnailStorageService {
             if (declaredType == null || !image.mimeType().equalsIgnoreCase(declaredType)) {
                 throw invalidFile();
             }
+            validateImage(bytes, image);
 
             Files.createDirectories(root);
             Path temporary = Files.createTempFile(root, ".thumbnail-", ".part");
@@ -121,6 +130,60 @@ public class ClassThumbnailStorageService {
         return "image/jpeg".equalsIgnoreCase(mimeType)
                 || "image/png".equalsIgnoreCase(mimeType)
                 || "image/webp".equalsIgnoreCase(mimeType);
+    }
+
+    private void validateImage(byte[] bytes, DetectedImage image) {
+        // Readers may tolerate a missing trailer. Require a complete container too.
+        if (image.mimeType().equals("image/png")) {
+            validatePngChunks(bytes);
+        } else if (image.mimeType().equals("image/jpeg")) {
+            if (bytes.length < 4 || (bytes[bytes.length - 2] & 0xff) != 0xff
+                    || (bytes[bytes.length - 1] & 0xff) != 0xd9) {
+                throw invalidFile();
+            }
+        } else if (bytes.length < 12
+                || Integer.toUnsignedLong(ByteBuffer.wrap(bytes, 4, 4)
+                        .order(ByteOrder.LITTLE_ENDIAN).getInt()) != bytes.length - 8L) {
+            throw invalidFile();
+        }
+
+        // Keep decode failures separate from storage failures, and never create a file
+        // until the complete image has been read. Use memory rather than ImageIO disk caches.
+        try (var input = new MemoryCacheImageInputStream(new ByteArrayInputStream(bytes))) {
+            var readers = ImageIO.getImageReaders(input);
+            if (!readers.hasNext()) throw invalidFile();
+            ImageReader reader = readers.next();
+            try {
+                reader.addIIOReadWarningListener((source, warning) -> { throw invalidFile(); });
+                reader.setInput(input);
+                if (reader.read(0) == null) throw invalidFile();
+            } finally {
+                reader.dispose();
+            }
+        } catch (IOException | RuntimeException exception) {
+            throw invalidFile();
+        }
+    }
+
+    private void validatePngChunks(byte[] bytes) {
+        int offset = 8;
+        while (offset <= bytes.length - 12) {
+            long length = Integer.toUnsignedLong(ByteBuffer.wrap(bytes, offset, 4).getInt());
+            if (length > bytes.length - offset - 12L) throw invalidFile();
+            int size = (int) length;
+            CRC32 crc = new CRC32();
+            crc.update(bytes, offset + 4, size + 4);
+            long expected = Integer.toUnsignedLong(ByteBuffer.wrap(bytes, offset + 8 + size, 4).getInt());
+            if (crc.getValue() != expected) throw invalidFile();
+            boolean end = Arrays.equals(bytes, offset + 4, offset + 8,
+                    new byte[]{'I', 'E', 'N', 'D'}, 0, 4);
+            offset += size + 12;
+            if (end) {
+                if (size != 0 || offset != bytes.length) throw invalidFile();
+                return;
+            }
+        }
+        throw invalidFile();
     }
 
     private boolean startsWith(byte[] bytes, byte[] prefix) {
