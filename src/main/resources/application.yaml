@@ -18,7 +18,7 @@ spring:
   datasource:
     url: ${DB_URL:jdbc:postgresql://localhost:5432/lms_instance_dev}
     username: ${DB_USERNAME:postgres}
-    password: ${DB_PASSWORD:36363636}
+    password: ${DB_PASSWORD}
 
   jpa:
     hibernate:
@@ -38,6 +38,8 @@ spring:
 lms:
   allowed-origins: ${LMS_ALLOWED_ORIGINS:http://localhost:3000,http://localhost:5173}
   storage:
+    local:
+      directory: ${LMS_STORAGE_LOCAL_DIRECTORY:./var/lms-files}
     class-thumbnails:
       directory: ${LMS_CLASS_THUMBNAIL_DIRECTORY:./var/class-thumbnails}
       public-base-url: ${LMS_PUBLIC_BASE_URL:http://localhost:8081}

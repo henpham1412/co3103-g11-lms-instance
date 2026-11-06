@@ -193,9 +193,9 @@ administrator's UUID; subsequent attempts cannot rewrite it or reopen setup.
 V1 permits duplicate display emails, V2 widens columns without adding uniqueness,
 and V3 creates/seeds setup state. Local identity remains keyed by UUID.
 
-### 5.6 Local Learning-Material Storage
+### 5.7 Local Learning-Material Storage
 
-The learning-content API stores uploaded files outside the repository. By default, files are written to `./var/lms-files`; set `LMS_LOCAL_STORAGE_DIRECTORY` to choose another directory. Keep this directory persistent and include it in deployment backups.
+The learning-content API stores uploaded files outside the repository. By default, files are written to `var/lms-files` under the process working directory; set `LMS_STORAGE_LOCAL_DIRECTORY` to choose another directory. The default is relative, so a service started from a different working directory resolves it against that directory — give deployments an absolute path. Keep this directory persistent and include it in deployment backups.
 
 For `DOCUMENT` and uploaded `VIDEO` materials, send multipart form data to `POST /api/v1/lessons/{lessonId}/materials` with a JSON `metadata` part and a `file` part. Documents are limited to 50 MiB (PDF, DOCX, PPTX); uploaded videos are limited to 200 MiB (MP4, WebM). The server checks file contents and serves stored files through the authenticated URL returned as `file_url`. Students must have active class membership and the material must be published; tutors must own the class.
 

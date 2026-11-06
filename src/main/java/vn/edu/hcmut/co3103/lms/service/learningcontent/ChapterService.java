@@ -6,11 +6,13 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.web.server.ResponseStatusException;
+import vn.edu.hcmut.co3103.lms.dto.request.ActivityRequest;
 import vn.edu.hcmut.co3103.lms.dto.request.ChapterRequest;
 import vn.edu.hcmut.co3103.lms.dto.request.LessonRequest;
 import vn.edu.hcmut.co3103.lms.dto.request.MaterialRequest;
 import vn.edu.hcmut.co3103.lms.dto.response.ClassOutlineResponse;
 import vn.edu.hcmut.co3103.lms.dto.response.ContentItemResponse;
+import vn.edu.hcmut.co3103.lms.entity.Activity;
 import vn.edu.hcmut.co3103.lms.entity.Chapter;
 import vn.edu.hcmut.co3103.lms.entity.Class;
 import vn.edu.hcmut.co3103.lms.entity.ClassMember;
@@ -18,6 +20,7 @@ import vn.edu.hcmut.co3103.lms.entity.Lesson;
 import vn.edu.hcmut.co3103.lms.entity.Material;
 import vn.edu.hcmut.co3103.lms.repository.classmanagement.ClassMemberRepository;
 import vn.edu.hcmut.co3103.lms.repository.classmanagement.ClassRepository;
+import vn.edu.hcmut.co3103.lms.repository.learningcontent.ActivityRepository;
 import vn.edu.hcmut.co3103.lms.repository.learningcontent.ChapterRepository;
 import vn.edu.hcmut.co3103.lms.repository.learningcontent.LessonRepository;
 import vn.edu.hcmut.co3103.lms.repository.learningcontent.MaterialRepository;
@@ -27,32 +30,42 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.HashSet;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
 import java.util.UUID;
+import java.util.function.IntSupplier;
 import org.springframework.transaction.support.TransactionSynchronization;
 import org.springframework.transaction.support.TransactionSynchronizationManager;
 import org.springframework.web.multipart.MultipartFile;
 
 @Service
 public class ChapterService {
+    private static final String LOCAL_FILE_URL_PREFIX = "/api/v1/materials/files/";
+    /** Hosts whose embedded player we can trust to stream without probing the resource. */
+    private static final Set<String> VERIFIED_VIDEO_DOMAINS = Set.of("youtube.com", "youtube-nocookie.com", "vimeo.com");
+    private static final Set<String> VIDEO_STREAM_EXTENSIONS = Set.of("mp4", "webm");
+
     private final ClassRepository classRepository;
     private final ClassMemberRepository classMemberRepository;
     private final ChapterRepository chapterRepository;
     private final LessonRepository lessonRepository;
     private final MaterialRepository materialRepository;
+    private final ActivityRepository activityRepository;
     private final LocalMaterialStorageService materialStorage;
 
     @Autowired
     public ChapterService(ClassRepository classRepository, ClassMemberRepository classMemberRepository,
                           ChapterRepository chapterRepository, LessonRepository lessonRepository,
-                          MaterialRepository materialRepository, LocalMaterialStorageService materialStorage) {
+                          MaterialRepository materialRepository, ActivityRepository activityRepository,
+                          LocalMaterialStorageService materialStorage) {
         this.classRepository = classRepository;
         this.classMemberRepository = classMemberRepository;
         this.chapterRepository = chapterRepository;
         this.lessonRepository = lessonRepository;
         this.materialRepository = materialRepository;
+        this.activityRepository = activityRepository;
         this.materialStorage = materialStorage;
     }
 
@@ -70,9 +83,13 @@ public class ChapterService {
                 List<Material> materials = tutor
                         ? materialRepository.findByLessonIdOrderBySequenceOrderAsc(lesson.getLessonId())
                         : materialRepository.findByLessonIdAndStatusOrderBySequenceOrderAsc(lesson.getLessonId(), Chapter.VisibilityStatus.PUBLISHED);
+                List<Activity> activities = tutor
+                        ? activityRepository.findByLessonIdOrderBySequenceOrderAsc(lesson.getLessonId())
+                        : activityRepository.findByLessonIdAndStatusOrderBySequenceOrderAsc(lesson.getLessonId(), Chapter.VisibilityStatus.PUBLISHED);
                 return new ClassOutlineResponse.LessonItem(lesson.getLessonId(), lesson.getTitle(), lesson.getDescription(),
                         lesson.getEstimatedDuration(), lesson.getSequenceOrder(), lesson.getStatus(),
-                        materials.stream().map(this::toOutlineMaterial).toList());
+                        materials.stream().map(this::toOutlineMaterial).toList(),
+                        activities.stream().map(this::toOutlineActivity).toList());
             }).toList();
             return new ClassOutlineResponse.ChapterItem(chapter.getChapterId(), chapter.getTitle(), chapter.getDescription(),
                     chapter.getSequenceOrder(), chapter.getStatus(), lessonItems);
@@ -82,12 +99,11 @@ public class ChapterService {
 
     @Transactional
     public Chapter createChapter(UUID classId, UUID tutorId, ChapterRequest request) {
-        Class target = requireClassAccess(classId, tutorId, true);
-        ensureClassEditable(target);
+        requireWritableClass(classId, tutorId);
         validateContentTitle(request.title());
-        validateOrder(request.sequence_order());
         return chapterRepository.save(new Chapter(classId, request.title().trim(), request.description(),
-                request.sequence_order(), request.status()));
+                resolveOrder(request.sequence_order(), () -> chapterRepository.nextSequenceOrderForClass(classId)),
+                request.status()));
     }
 
     @Transactional(readOnly = true)
@@ -110,8 +126,7 @@ public class ChapterService {
     @Transactional
     public Chapter updateChapter(UUID chapterId, UUID tutorId, Map<String, Object> patch) {
         Chapter chapter = requireChapter(chapterId);
-        Class target = requireClassAccess(chapter.getClassId(), tutorId, true);
-        ensureClassEditable(target);
+        requireWritableClass(chapter.getClassId(), tutorId);
         validatePatch(patch, Set.of("title", "description", "sequence_order", "status"));
         if (patch.containsKey("title")) { validateContentTitle(text(patch, "title")); chapter.setTitle(text(patch, "title").trim()); }
         if (patch.containsKey("description")) chapter.setDescription(nullableText(patch, "description"));
@@ -122,8 +137,7 @@ public class ChapterService {
 
     @Transactional
     public void reorderChapters(UUID classId, UUID tutorId, List<UUID> chapterIds) {
-        Class target = requireClassAccess(classId, tutorId, true);
-        ensureClassEditable(target);
+        requireWritableClass(classId, tutorId);
         List<Chapter> chapters = chapterRepository.findByClassIdOrderBySequenceOrderAsc(classId);
         ensureExactOrder(chapters.stream()
                 .map(chapter -> Objects.requireNonNull(chapter, "Chapter must not be null").getChapterId())
@@ -140,8 +154,7 @@ public class ChapterService {
     @Transactional
     public void deleteChapter(UUID chapterId, UUID tutorId) {
         Chapter chapter = requireChapter(chapterId);
-        Class target = requireClassAccess(chapter.getClassId(), tutorId, true);
-        ensureClassEditable(target);
+        requireWritableClass(chapter.getClassId(), tutorId);
         try {
             chapterRepository.delete(chapter);
             chapterRepository.flush();
@@ -153,13 +166,13 @@ public class ChapterService {
     @Transactional
     public Lesson createLesson(UUID chapterId, UUID tutorId, LessonRequest request) {
         Chapter chapter = requireChapter(chapterId);
-        Class target = requireClassAccess(chapter.getClassId(), tutorId, true);
-        ensureClassEditable(target);
+        requireWritableClass(chapter.getClassId(), tutorId);
         validateContentTitle(request.title());
-        validateOrder(request.sequence_order());
         validateDuration(request.estimated_duration());
         return lessonRepository.save(new Lesson(chapterId, request.title().trim(), request.description(),
-                request.estimated_duration(), request.sequence_order(), request.status()));
+                request.estimated_duration(),
+                resolveOrder(request.sequence_order(), () -> lessonRepository.nextSequenceOrderForChapter(chapterId)),
+                request.status()));
     }
 
     @Transactional(readOnly = true)
@@ -178,7 +191,7 @@ public class ChapterService {
         Lesson lesson = requireLesson(lessonId);
         Chapter chapter = requireChapter(lesson.getChapterId());
         requireClassAccess(chapter.getClassId(), userId, tutor);
-        if (!tutor && (chapter.getStatus() != Chapter.VisibilityStatus.PUBLISHED || lesson.getStatus() != Chapter.VisibilityStatus.PUBLISHED)) throw notFound("LESSON_NOT_FOUND");
+        if (!tutor && !isVisibleToStudent(chapter, lesson)) throw notFound("LESSON_NOT_FOUND");
         return ContentItemResponse.LessonItem.from(lesson);
     }
 
@@ -186,8 +199,7 @@ public class ChapterService {
     public Lesson updateLesson(UUID lessonId, UUID tutorId, Map<String, Object> patch) {
         Lesson lesson = requireLesson(lessonId);
         Chapter chapter = requireChapter(lesson.getChapterId());
-        Class target = requireClassAccess(chapter.getClassId(), tutorId, true);
-        ensureClassEditable(target);
+        requireWritableClass(chapter.getClassId(), tutorId);
         validatePatch(patch, Set.of("title", "description", "estimated_duration", "sequence_order", "status"));
         if (patch.containsKey("title")) { validateContentTitle(text(patch, "title")); lesson.setTitle(text(patch, "title").trim()); }
         if (patch.containsKey("description")) lesson.setDescription(nullableText(patch, "description"));
@@ -200,8 +212,7 @@ public class ChapterService {
     @Transactional
     public void reorderLessons(UUID chapterId, UUID tutorId, List<UUID> lessonIds) {
         Chapter chapter = requireChapter(chapterId);
-        Class target = requireClassAccess(chapter.getClassId(), tutorId, true);
-        ensureClassEditable(target);
+        requireWritableClass(chapter.getClassId(), tutorId);
         List<Lesson> lessons = lessonRepository.findByChapterIdOrderBySequenceOrderAsc(chapterId);
         ensureExactOrder(lessons.stream()
                 .map(lesson -> Objects.requireNonNull(lesson, "Lesson must not be null").getLessonId())
@@ -219,8 +230,7 @@ public class ChapterService {
     public void deleteLesson(UUID lessonId, UUID tutorId) {
         Lesson lesson = requireLesson(lessonId);
         Chapter chapter = requireChapter(lesson.getChapterId());
-        Class target = requireClassAccess(chapter.getClassId(), tutorId, true);
-        ensureClassEditable(target);
+        requireWritableClass(chapter.getClassId(), tutorId);
         try {
             lessonRepository.delete(lesson);
             lessonRepository.flush();
@@ -233,32 +243,33 @@ public class ChapterService {
     public Material createMaterial(UUID lessonId, UUID tutorId, MaterialRequest request) {
         Lesson lesson = requireLesson(lessonId);
         Chapter chapter = requireChapter(lesson.getChapterId());
-        Class target = requireClassAccess(chapter.getClassId(), tutorId, true);
-        ensureClassEditable(target);
+        requireWritableClass(chapter.getClassId(), tutorId);
         validateTitle(request.title());
-        validateOrder(request.sequence_order());
-        if (request.material_type() == Material.MaterialType.VIDEO && isLocalFileUrl(request.file_url())) throw badRequest();
+        // A stored asset key is only minted by the upload endpoint, which validates the bytes.
+        if (isLocalFileUrl(request.file_url())) throw badRequest();
         validateMaterialPayload(request.material_type(), request.file_url(), request.content());
         return materialRepository.save(new Material(lessonId, request.title().trim(), request.material_type(),
-                request.file_url(), request.content(), request.sequence_order(), request.status()));
+                request.file_url(), request.content(),
+                resolveOrder(request.sequence_order(), () -> materialRepository.nextSequenceOrderForLesson(lessonId)),
+                request.status()));
     }
 
     @Transactional
     public Material createUploadedMaterial(UUID lessonId, UUID tutorId, MaterialRequest request, MultipartFile file) {
         Lesson lesson = requireLesson(lessonId);
         Chapter chapter = requireChapter(lesson.getChapterId());
-        Class target = requireClassAccess(chapter.getClassId(), tutorId, true);
-        ensureClassEditable(target);
+        requireWritableClass(chapter.getClassId(), tutorId);
         validateTitle(request.title());
-        validateOrder(request.sequence_order());
         if (request.material_type() != Material.MaterialType.DOCUMENT
                 && request.material_type() != Material.MaterialType.VIDEO) throw badRequest();
         if (request.file_url() != null || request.content() != null) throw badRequest();
 
         LocalMaterialStorageService.StoredFile stored = materialStorage.store(file, request.material_type());
-        String fileUrl = "/api/v1/materials/files/" + stored.key();
+        String fileUrl = LOCAL_FILE_URL_PREFIX + stored.key();
         Material material = new Material(lessonId, request.title().trim(), request.material_type(), fileUrl,
-                null, request.sequence_order(), request.status());
+                null,
+                resolveOrder(request.sequence_order(), () -> materialRepository.nextSequenceOrderForLesson(lessonId)),
+                request.status());
         deleteFileAfterRollback(stored.key());
         try {
             return materialRepository.saveAndFlush(material);
@@ -273,7 +284,7 @@ public class ChapterService {
         Lesson lesson = requireLesson(lessonId);
         Chapter chapter = requireChapter(lesson.getChapterId());
         requireClassAccess(chapter.getClassId(), userId, tutor);
-        if (!tutor && (chapter.getStatus() != Chapter.VisibilityStatus.PUBLISHED || lesson.getStatus() != Chapter.VisibilityStatus.PUBLISHED)) return List.of();
+        if (!tutor && !isVisibleToStudent(chapter, lesson)) return List.of();
         List<Material> materials = tutor
                 ? materialRepository.findByLessonIdOrderBySequenceOrderAsc(lessonId)
                 : materialRepository.findByLessonIdAndStatusOrderBySequenceOrderAsc(lessonId, Chapter.VisibilityStatus.PUBLISHED);
@@ -286,13 +297,13 @@ public class ChapterService {
         Lesson lesson = requireLesson(material.getLessonId());
         Chapter chapter = requireChapter(lesson.getChapterId());
         requireClassAccess(chapter.getClassId(), userId, tutor);
-        if (!tutor && (chapter.getStatus() != Chapter.VisibilityStatus.PUBLISHED || lesson.getStatus() != Chapter.VisibilityStatus.PUBLISHED || material.getStatus() != Chapter.VisibilityStatus.PUBLISHED)) throw notFound("MATERIAL_NOT_FOUND");
+        if (!tutor && (!isVisibleToStudent(chapter, lesson) || material.getStatus() != Chapter.VisibilityStatus.PUBLISHED)) throw notFound("MATERIAL_NOT_FOUND");
         return ContentItemResponse.MaterialItem.from(material);
     }
 
     @Transactional(readOnly = true)
     public DownloadableMaterial getMaterialFile(String fileKey, UUID userId, boolean tutor) {
-        String fileUrl = "/api/v1/materials/files/" + fileKey;
+        String fileUrl = LOCAL_FILE_URL_PREFIX + fileKey;
         Material material = materialRepository.findByFileUrl(fileUrl)
                 .orElseThrow(() -> notFound("FILE_NOT_FOUND"));
         getMaterial(material.getMaterialId(), userId, tutor);
@@ -317,20 +328,19 @@ public class ChapterService {
         Material material = requireMaterial(materialId);
         Lesson lesson = requireLesson(material.getLessonId());
         Chapter chapter = requireChapter(lesson.getChapterId());
-        Class target = requireClassAccess(chapter.getClassId(), tutorId, true);
-        ensureClassEditable(target);
+        requireWritableClass(chapter.getClassId(), tutorId);
         validatePatch(patch, Set.of("title", "content", "file_url", "sequence_order", "status"));
         if (patch.containsKey("title")) { validateTitle(text(patch, "title")); material.setTitle(text(patch, "title").trim()); }
         if (patch.containsKey("content")) material.setContent(nullableText(patch, "content"));
         if (patch.containsKey("file_url")) {
+            String replacement = nullableText(patch, "file_url");
+            // DOCUMENT and VIDEO rows can address an uploaded asset by its stored key. Swapping
+            // that key through a JSON patch would orphan the file and skip upload validation, so
+            // replacing an asset has to go through delete plus a fresh upload.
+            if (isLocalFileUrl(material.getFileUrl()) || isLocalFileUrl(replacement)) throw badRequest();
             if (material.getMaterialType() != Material.MaterialType.URL
                     && material.getMaterialType() != Material.MaterialType.VIDEO) throw badRequest();
-            // Uploaded video files are addressed through their stored file key. Replacing
-            // that key through a JSON patch would orphan the file and bypass upload checks.
-            if (material.getMaterialType() == Material.MaterialType.VIDEO
-                    && isLocalFileUrl(material.getFileUrl())) throw badRequest();
-            if (material.getMaterialType() == Material.MaterialType.VIDEO && isLocalFileUrl(nullableText(patch, "file_url"))) throw badRequest();
-            material.setFileUrl(nullableText(patch, "file_url"));
+            material.setFileUrl(replacement);
         }
         if (patch.containsKey("sequence_order")) material.setSequenceOrder(nonNegativeInt(patch, "sequence_order"));
         if (patch.containsKey("status")) material.setStatus(visibility(patch, "status"));
@@ -343,21 +353,94 @@ public class ChapterService {
         Material material = requireMaterial(materialId);
         Lesson lesson = requireLesson(material.getLessonId());
         Chapter chapter = requireChapter(lesson.getChapterId());
-        Class target = requireClassAccess(chapter.getClassId(), tutorId, true);
-        ensureClassEditable(target);
+        requireWritableClass(chapter.getClassId(), tutorId);
+        String fileUrl = material.getFileUrl();
+        String fileKey = localFileKey(fileUrl);
         try {
             materialRepository.delete(material);
             materialRepository.flush();
-            String fileKey = localFileKey(material.getFileUrl());
-            if (fileKey != null) deleteFileAfterCommit(fileKey);
         } catch (DataIntegrityViolationException exception) {
-            throw conflict("CONTENT_HAS_DEPENDENT_DATA");
+            throw conflict("CONTENT_HAS_DEPENDENT_LEARNING_DATA");
+        }
+        if (fileKey == null) return;
+        // Another Material can point at the same stored asset, so the file may only be removed
+        // once the row itself is gone.
+        if (!materialRepository.existsByFileUrlAndMaterialIdNot(fileUrl, material.getMaterialId())) {
+            deleteFileAfterCommit(fileKey);
+        }
+    }
+
+    @Transactional
+    public Activity createActivity(UUID lessonId, UUID tutorId, ActivityRequest request) {
+        Lesson lesson = requireLesson(lessonId);
+        Chapter chapter = requireChapter(lesson.getChapterId());
+        requireWritableClass(chapter.getClassId(), tutorId);
+        if (request.carriesAssessmentConfiguration()) {
+            throw conflict("ASSESSMENT_CONFIGURATION_MISMATCH");
+        }
+        if (!request.extraFields().isEmpty()) throw badRequest();
+        validateContentTitle(request.title());
+        return activityRepository.save(new Activity(lessonId, request.title().trim(), request.description(),
+                request.activity_type(),
+                resolveOrder(request.sequence_order(), () -> activityRepository.nextSequenceOrderForLesson(lessonId)),
+                request.status()));
+    }
+
+    @Transactional(readOnly = true)
+    public List<ContentItemResponse.ActivityItem> listActivities(UUID lessonId, UUID userId, boolean tutor) {
+        Lesson lesson = requireLesson(lessonId);
+        Chapter chapter = requireChapter(lesson.getChapterId());
+        requireClassAccess(chapter.getClassId(), userId, tutor);
+        if (!tutor && !isVisibleToStudent(chapter, lesson)) return List.of();
+        List<Activity> activities = tutor
+                ? activityRepository.findByLessonIdOrderBySequenceOrderAsc(lessonId)
+                : activityRepository.findByLessonIdAndStatusOrderBySequenceOrderAsc(lessonId, Chapter.VisibilityStatus.PUBLISHED);
+        return activities.stream().map(ContentItemResponse.ActivityItem::from).toList();
+    }
+
+    @Transactional(readOnly = true)
+    public ContentItemResponse.ActivityItem getActivity(UUID activityId, UUID userId, boolean tutor) {
+        Activity activity = requireActivity(activityId);
+        Lesson lesson = requireLesson(activity.getLessonId());
+        Chapter chapter = requireChapter(lesson.getChapterId());
+        requireClassAccess(chapter.getClassId(), userId, tutor);
+        if (!tutor && (!isVisibleToStudent(chapter, lesson) || activity.getStatus() != Chapter.VisibilityStatus.PUBLISHED)) throw notFound("ACTIVITY_NOT_FOUND");
+        return ContentItemResponse.ActivityItem.from(activity);
+    }
+
+    @Transactional
+    public Activity updateActivity(UUID activityId, UUID tutorId, Map<String, Object> patch) {
+        Activity activity = requireActivity(activityId);
+        Lesson lesson = requireLesson(activity.getLessonId());
+        Chapter chapter = requireChapter(lesson.getChapterId());
+        requireWritableClass(chapter.getClassId(), tutorId);
+        // activity_type is deliberately not patchable: switching it would leave the Quiz or
+        // Assignment configuration owned by the Assessment module bound to the wrong activity.
+        validatePatch(patch, Set.of("title", "description", "sequence_order", "status"));
+        if (patch.containsKey("title")) { validateContentTitle(text(patch, "title")); activity.setTitle(text(patch, "title").trim()); }
+        if (patch.containsKey("description")) activity.setDescription(nullableText(patch, "description"));
+        if (patch.containsKey("sequence_order")) activity.setSequenceOrder(nonNegativeInt(patch, "sequence_order"));
+        if (patch.containsKey("status")) activity.setStatus(visibility(patch, "status"));
+        return activityRepository.save(activity);
+    }
+
+    @Transactional
+    public void deleteActivity(UUID activityId, UUID tutorId) {
+        Activity activity = requireActivity(activityId);
+        Lesson lesson = requireLesson(activity.getLessonId());
+        Chapter chapter = requireChapter(lesson.getChapterId());
+        requireWritableClass(chapter.getClassId(), tutorId);
+        try {
+            activityRepository.delete(activity);
+            activityRepository.flush();
+        } catch (DataIntegrityViolationException exception) {
+            throw conflict("CONTENT_HAS_DEPENDENT_LEARNING_DATA");
         }
     }
 
     private String localFileKey(String fileUrl) {
-        String prefix = "/api/v1/materials/files/";
-        return fileUrl != null && fileUrl.startsWith(prefix) ? fileUrl.substring(prefix.length()) : null;
+        return fileUrl != null && fileUrl.startsWith(LOCAL_FILE_URL_PREFIX)
+                ? fileUrl.substring(LOCAL_FILE_URL_PREFIX.length()) : null;
     }
 
     private void deleteFileAfterCommit(String fileKey) {
@@ -381,6 +464,12 @@ public class ChapterService {
     private ClassOutlineResponse.MaterialItem toOutlineMaterial(Material material) {
         return new ClassOutlineResponse.MaterialItem(material.getMaterialId(), material.getTitle(), material.getMaterialType(), material.getFileUrl(), material.getContent(), material.getSequenceOrder(), material.getStatus(), material.getCreatedAt());
     }
+
+    private ClassOutlineResponse.ActivityItem toOutlineActivity(Activity activity) {
+        return new ClassOutlineResponse.ActivityItem(activity.getActivityId(), activity.getTitle(), activity.getDescription(),
+                activity.getActivityType(), activity.getSequenceOrder(), activity.getStatus(), activity.getCreatedAt());
+    }
+
     private Class requireClassAccess(UUID classId, UUID userId, boolean tutor) {
         Class target = classRepository.findById(classId).orElseThrow(() -> notFound("CLASS_NOT_FOUND"));
         if (tutor) {
@@ -390,32 +479,85 @@ public class ChapterService {
         }
         return target;
     }
+
+    /**
+     * Writes take the same pessimistic Class lock LMS-3 uses, so a content mutation cannot slip
+     * between an archive transition and the ownership check, and server-assigned ordering
+     * positions are serialised per Class.
+     */
+    private Class requireWritableClass(UUID classId, UUID tutorId) {
+        Class target = classRepository.findByIdForUpdate(classId).orElseThrow(() -> notFound("CLASS_NOT_FOUND"));
+        if (!target.getTutorId().equals(tutorId)) throw forbidden();
+        ensureClassEditable(target);
+        return target;
+    }
+
+    private static boolean isVisibleToStudent(Chapter chapter, Lesson lesson) {
+        return chapter.getStatus() == Chapter.VisibilityStatus.PUBLISHED
+                && lesson.getStatus() == Chapter.VisibilityStatus.PUBLISHED;
+    }
+
     private void ensureClassEditable(Class target) { if (target.getStatus() == Class.ClassStatus.ARCHIVED) throw conflict("CLASS_ARCHIVED"); }
     private Chapter requireChapter(UUID id) { return chapterRepository.findById(id).orElseThrow(() -> notFound("CHAPTER_NOT_FOUND")); }
     private Lesson requireLesson(UUID id) { return lessonRepository.findById(id).orElseThrow(() -> notFound("LESSON_NOT_FOUND")); }
     private Material requireMaterial(UUID id) { return materialRepository.findById(id).orElseThrow(() -> notFound("MATERIAL_NOT_FOUND")); }
+    private Activity requireActivity(UUID id) { return activityRepository.findById(id).orElseThrow(() -> notFound("ACTIVITY_NOT_FOUND")); }
     private void validateTitle(String title) { if (title == null || title.isBlank()) throw badRequest(); }
     private void validateContentTitle(String title) {
         validateTitle(title);
         if (title.trim().length() > 150) throw badRequest();
     }
-    private void validateOrder(int order) { if (order < 0) throw badRequest(); }
     private void validateDuration(Integer duration) { if (duration != null && (duration < 0 || duration > 1440)) throw badRequest(); }
+
+    /** An omitted position is assigned under the Class lock as the next free slot. */
+    private int resolveOrder(Integer requested, IntSupplier nextPosition) {
+        if (requested == null) return nextPosition.getAsInt();
+        if (requested < 0) throw badRequest();
+        return requested;
+    }
+
     private void validateMaterialPayload(Material.MaterialType type, String fileUrl, String content) {
         if (type == null) throw badRequest();
-        if (type == Material.MaterialType.TEXT && (content == null || content.isBlank())) throw badRequest();
-        if (type != Material.MaterialType.TEXT && (fileUrl == null || fileUrl.isBlank())) throw badRequest();
-        if (type == Material.MaterialType.URL || type == Material.MaterialType.VIDEO) {
-            try {
-                URI uri = URI.create(fileUrl);
-                if (isLocalFileUrl(fileUrl)) {
-                    if (type == Material.MaterialType.URL) throw badRequest();
-                } else if (!"https".equalsIgnoreCase(uri.getScheme()) || uri.getHost() == null) throw badRequest();
-            }
-            catch (IllegalArgumentException exception) { throw badRequest(); }
+        if (type == Material.MaterialType.TEXT) {
+            if (content == null || content.isBlank()) throw badRequest();
+            return;
         }
+        if (fileUrl == null || fileUrl.isBlank()) throw badRequest();
+        if (isLocalFileUrl(fileUrl)) {
+            // Only the upload endpoint mints these keys, and it never produces a URL material.
+            if (type == Material.MaterialType.URL) throw badRequest();
+            return;
+        }
+        URI uri = parseHttpUrl(fileUrl);
+        if (type == Material.MaterialType.VIDEO
+                && !isVerifiedVideoHost(uri.getHost())
+                && !VIDEO_STREAM_EXTENSIONS.contains(pathExtension(uri))) throw badRequest();
     }
-    private boolean isLocalFileUrl(String fileUrl) { return fileUrl != null && fileUrl.startsWith("/api/v1/materials/files/"); }
+
+    private URI parseHttpUrl(String fileUrl) {
+        URI uri;
+        try { uri = URI.create(fileUrl); }
+        catch (IllegalArgumentException exception) { throw badRequest(); }
+        if (!"https".equalsIgnoreCase(uri.getScheme()) || uri.getHost() == null) throw badRequest();
+        return uri;
+    }
+
+    private boolean isVerifiedVideoHost(String host) {
+        String normalized = host.toLowerCase(Locale.ROOT);
+        return VERIFIED_VIDEO_DOMAINS.stream().anyMatch(domain ->
+                normalized.equals(domain) || normalized.endsWith("." + domain));
+    }
+
+    private String pathExtension(URI uri) {
+        String path = uri.getPath();
+        if (path == null) return "";
+        int dot = path.lastIndexOf('.');
+        int slash = path.lastIndexOf('/');
+        if (dot < 0 || dot < slash) return "";
+        return path.substring(dot + 1).toLowerCase(Locale.ROOT);
+    }
+
+    private boolean isLocalFileUrl(String fileUrl) { return fileUrl != null && fileUrl.startsWith(LOCAL_FILE_URL_PREFIX); }
     private void validatePatch(Map<String, Object> patch, Set<String> fields) {
         if (patch == null || patch.isEmpty() || !fields.containsAll(patch.keySet())) throw badRequest();
     }

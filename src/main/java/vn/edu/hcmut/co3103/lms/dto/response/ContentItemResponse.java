@@ -1,6 +1,7 @@
 package vn.edu.hcmut.co3103.lms.dto.response;
 
 import com.fasterxml.jackson.annotation.JsonProperty;
+import vn.edu.hcmut.co3103.lms.entity.Activity;
 import vn.edu.hcmut.co3103.lms.entity.Chapter;
 import vn.edu.hcmut.co3103.lms.entity.Lesson;
 import vn.edu.hcmut.co3103.lms.entity.Material;
@@ -26,5 +27,12 @@ public final class ContentItemResponse {
                                @JsonProperty("sequence_order") int sequenceOrder, Chapter.VisibilityStatus status,
                                @JsonProperty("created_at") Instant createdAt) {
         public static MaterialItem from(Material m) { return new MaterialItem(m.getMaterialId(), m.getLessonId(), m.getTitle(), m.getMaterialType(), m.getFileUrl(), m.getContent(), m.getSequenceOrder(), m.getStatus(), m.getCreatedAt()); }
+    }
+    public record ActivityItem(@JsonProperty("activity_id") UUID activityId, @JsonProperty("lesson_id") UUID lessonId,
+                               String title, String description,
+                               @JsonProperty("activity_type") Activity.ActivityType activityType,
+                               @JsonProperty("sequence_order") int sequenceOrder, Chapter.VisibilityStatus status,
+                               @JsonProperty("created_at") Instant createdAt) {
+        public static ActivityItem from(Activity a) { return new ActivityItem(a.getActivityId(), a.getLessonId(), a.getTitle(), a.getDescription(), a.getActivityType(), a.getSequenceOrder(), a.getStatus(), a.getCreatedAt()); }
     }
 }

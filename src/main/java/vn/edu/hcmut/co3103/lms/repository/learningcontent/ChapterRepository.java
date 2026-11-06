@@ -1,6 +1,8 @@
 package vn.edu.hcmut.co3103.lms.repository.learningcontent;
 
 import org.springframework.data.jpa.repository.JpaRepository;
+import org.springframework.data.jpa.repository.Query;
+import org.springframework.data.repository.query.Param;
 import vn.edu.hcmut.co3103.lms.entity.Chapter;
 import java.util.List;
 import java.util.Optional;
@@ -11,4 +13,7 @@ public interface ChapterRepository extends JpaRepository<Chapter, UUID> {
     List<Chapter> findByClassIdAndStatusOrderBySequenceOrderAsc(UUID classId, Chapter.VisibilityStatus status);
     Optional<Chapter> findByChapterIdAndClassId(UUID chapterId, UUID classId);
     boolean existsByClassIdAndChapterId(UUID classId, UUID chapterId);
+
+    @Query("select coalesce(max(c.sequenceOrder) + 1, 0) from Chapter c where c.classId = :classId")
+    int nextSequenceOrderForClass(@Param("classId") UUID classId);
 }

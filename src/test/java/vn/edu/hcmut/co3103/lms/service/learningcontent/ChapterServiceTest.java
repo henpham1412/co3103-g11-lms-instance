@@ -8,15 +8,18 @@ import org.springframework.test.util.ReflectionTestUtils;
 import org.springframework.mock.web.MockMultipartFile;
 import org.springframework.web.server.ResponseStatusException;
 import vn.edu.hcmut.co3103.lms.entity.Chapter;
+import vn.edu.hcmut.co3103.lms.entity.Activity;
 import vn.edu.hcmut.co3103.lms.entity.Class;
 import vn.edu.hcmut.co3103.lms.entity.ClassMember;
 import vn.edu.hcmut.co3103.lms.entity.Lesson;
 import vn.edu.hcmut.co3103.lms.entity.Material;
+import vn.edu.hcmut.co3103.lms.dto.request.ActivityRequest;
 import vn.edu.hcmut.co3103.lms.dto.request.ChapterRequest;
 import vn.edu.hcmut.co3103.lms.dto.request.LessonRequest;
 import vn.edu.hcmut.co3103.lms.dto.request.MaterialRequest;
 import vn.edu.hcmut.co3103.lms.repository.classmanagement.ClassMemberRepository;
 import vn.edu.hcmut.co3103.lms.repository.classmanagement.ClassRepository;
+import vn.edu.hcmut.co3103.lms.repository.learningcontent.ActivityRepository;
 import vn.edu.hcmut.co3103.lms.repository.learningcontent.ChapterRepository;
 import vn.edu.hcmut.co3103.lms.repository.learningcontent.LessonRepository;
 import vn.edu.hcmut.co3103.lms.repository.learningcontent.MaterialRepository;
@@ -40,9 +43,10 @@ class ChapterServiceTest {
     private final ChapterRepository chapterRepository = mock(ChapterRepository.class);
     private final LessonRepository lessonRepository = mock(LessonRepository.class);
     private final MaterialRepository materialRepository = mock(MaterialRepository.class);
+    private final ActivityRepository activityRepository = mock(ActivityRepository.class);
     private final LocalMaterialStorageService materialStorage = mock(LocalMaterialStorageService.class);
     private final ChapterService service = new ChapterService(classRepository, memberRepository,
-            chapterRepository, lessonRepository, materialRepository, materialStorage);
+            chapterRepository, lessonRepository, materialRepository, activityRepository, materialStorage);
 
     private final UUID classId = UUID.randomUUID();
     private final UUID tutorId = UUID.randomUUID();
@@ -56,6 +60,7 @@ class ChapterServiceTest {
                 Class.EnrollmentPolicy.OPEN);
         ReflectionTestUtils.setField(target, "classId", classId);
         when(classRepository.findById(classId)).thenReturn(Optional.of(target));
+        when(classRepository.findByIdForUpdate(classId)).thenReturn(Optional.of(target));
     }
 
     @Test
@@ -397,8 +402,7 @@ class ChapterServiceTest {
     }
 
     @Test
-    void rejectsChapterAndLessonTitlesLongerThan150Characters() {
-        Chapter chapter = new Chapter(classId, "Chapter", null, 0, null);
+    void rejectsChapterAndLessonTitlesLongerThan150Characters() {        Chapter chapter = new Chapter(classId, "Chapter", null, 0, null);
         ReflectionTestUtils.setField(chapter, "chapterId", chapterId);
         when(chapterRepository.findById(chapterId)).thenReturn(Optional.of(chapter));
         String tooLongTitle = "x".repeat(151);
@@ -414,5 +418,274 @@ class ChapterServiceTest {
         assertEquals(HttpStatus.BAD_REQUEST, lessonException.getStatusCode());
         verify(chapterRepository, never()).save(any(Chapter.class));
         verify(lessonRepository, never()).save(any(Lesson.class));
+    }
+
+    @Test
+    void contentWritesTakeTheClassLockBeforeCheckingOwnershipOrArchiveState() {
+        when(chapterRepository.save(any(Chapter.class))).thenAnswer(invocation -> invocation.getArgument(0));
+
+        service.createChapter(classId, tutorId, new ChapterRequest("Basics", null, 0, null));
+
+        verify(classRepository).findByIdForUpdate(classId);
+        verify(classRepository, never()).findById(classId);
+    }
+
+    @Test
+    void archivedClassRejectsEveryContentWriteWithConflict() {
+        Class archived = new Class(tutorId, "CS101", "Programming", null, null, 20,
+                Class.EnrollmentPolicy.OPEN);
+        ReflectionTestUtils.setField(archived, "classId", classId);
+        archived.setStatus(Class.ClassStatus.ARCHIVED);
+        when(classRepository.findByIdForUpdate(classId)).thenReturn(Optional.of(archived));
+
+        ResponseStatusException exception = assertThrows(ResponseStatusException.class,
+                () -> service.createChapter(classId, tutorId, new ChapterRequest("Basics", null, 0, null)));
+
+        assertEquals(HttpStatus.CONFLICT, exception.getStatusCode());
+        assertEquals("CLASS_ARCHIVED", exception.getReason());
+        verify(chapterRepository, never()).save(any(Chapter.class));
+    }
+
+    @Test
+    void omittedPositionIsAssignedAsTheNextFreeSlot() {
+        when(chapterRepository.save(any(Chapter.class))).thenAnswer(invocation -> invocation.getArgument(0));
+        when(lessonRepository.save(any(Lesson.class))).thenAnswer(invocation -> invocation.getArgument(0));
+        when(materialRepository.save(any(Material.class))).thenAnswer(invocation -> invocation.getArgument(0));
+        when(chapterRepository.nextSequenceOrderForClass(classId)).thenReturn(3);
+        Chapter chapter = new Chapter(classId, "Chapter", null, 0, null);
+        ReflectionTestUtils.setField(chapter, "chapterId", chapterId);
+        Lesson lesson = new Lesson(chapterId, "Lesson", null, 30, 4, null);
+        ReflectionTestUtils.setField(lesson, "lessonId", lessonId);
+        when(chapterRepository.findById(chapterId)).thenReturn(Optional.of(chapter));
+        when(lessonRepository.findById(lessonId)).thenReturn(Optional.of(lesson));
+        when(lessonRepository.nextSequenceOrderForChapter(chapterId)).thenReturn(7);
+        when(materialRepository.nextSequenceOrderForLesson(lessonId)).thenReturn(2);
+
+        assertEquals(3, service.createChapter(classId, tutorId,
+                new ChapterRequest("Basics", null, null, null)).getSequenceOrder());
+        assertEquals(7, service.createLesson(chapterId, tutorId,
+                new LessonRequest("Variables", null, 20, null, null)).getSequenceOrder());
+        assertEquals(2, service.createMaterial(lessonId, tutorId,
+                new MaterialRequest("Notes", Material.MaterialType.TEXT, null, "Read", null, null)).getSequenceOrder());
+    }
+
+    @Test
+    void aNegativePositionIsRejectedWithoutSavingAnything() {
+        ResponseStatusException exception = assertThrows(ResponseStatusException.class,
+                () -> service.createChapter(classId, tutorId, new ChapterRequest("Basics", null, -1, null)));
+
+        assertEquals(HttpStatus.BAD_REQUEST, exception.getStatusCode());
+        verify(chapterRepository, never()).save(any(Chapter.class));
+        verify(chapterRepository, never()).nextSequenceOrderForClass(any());
+    }
+
+    @Test
+    void tutorCanPlaceAnActivityAndStudentsSeeItOnlyWhenTheWholeChainIsPublished() {
+        Lesson lesson = new Lesson(chapterId, "Lesson", null, 30, 0, Chapter.VisibilityStatus.PUBLISHED);
+        ReflectionTestUtils.setField(lesson, "lessonId", lessonId);
+        Chapter chapter = new Chapter(classId, "Chapter", null, 0, Chapter.VisibilityStatus.PUBLISHED);
+        ReflectionTestUtils.setField(chapter, "chapterId", chapterId);
+        Activity activity = new Activity(lessonId, "Week 1 quiz", null, Activity.ActivityType.QUIZ, 0,
+                Chapter.VisibilityStatus.PUBLISHED);
+        UUID activityId = UUID.randomUUID();
+        ReflectionTestUtils.setField(activity, "activityId", activityId);
+        when(lessonRepository.findById(lessonId)).thenReturn(Optional.of(lesson));
+        when(chapterRepository.findById(chapterId)).thenReturn(Optional.of(chapter));
+        when(activityRepository.save(any(Activity.class))).thenAnswer(invocation -> invocation.getArgument(0));
+        when(activityRepository.findById(activityId)).thenReturn(Optional.of(activity));
+        when(memberRepository.existsByClassIdAndStudentIdAndStatus(classId, studentId,
+                ClassMember.MembershipStatus.ACTIVE)).thenReturn(true);
+
+        Activity placed = service.createActivity(lessonId, tutorId,
+                activityRequest("{\"title\":\"Week 1 quiz\",\"activity_type\":\"QUIZ\",\"sequence_order\":0}"));
+
+        assertEquals(lessonId, placed.getLessonId());
+        assertEquals(Activity.ActivityType.QUIZ, placed.getActivityType());
+        assertEquals(Chapter.VisibilityStatus.PUBLISHED, placed.getStatus());
+        assertEquals(activityId, service.getActivity(activityId, studentId, false).activityId());
+
+        activity.setStatus(Chapter.VisibilityStatus.HIDDEN);
+        ResponseStatusException hidden = assertThrows(ResponseStatusException.class,
+                () -> service.getActivity(activityId, studentId, false));
+        assertEquals(HttpStatus.NOT_FOUND, hidden.getStatusCode());
+        assertEquals("ACTIVITY_NOT_FOUND", hidden.getReason());
+    }
+
+    @Test
+    void activityPlacementRefusesToCarryAssessmentConfiguration() {
+        Lesson lesson = new Lesson(chapterId, "Lesson", null, 30, 0, null);
+        ReflectionTestUtils.setField(lesson, "lessonId", lessonId);
+        when(lessonRepository.findById(lessonId)).thenReturn(Optional.of(lesson));
+        when(chapterRepository.findById(chapterId)).thenReturn(Optional.of(
+                new Chapter(classId, "Chapter", null, 0, null)));
+
+        ResponseStatusException mismatch = assertThrows(ResponseStatusException.class,
+                () -> service.createActivity(lessonId, tutorId, activityRequest(
+                        "{\"title\":\"Quiz\",\"activity_type\":\"QUIZ\",\"quiz\":{\"time_limit\":60}}")));
+        ResponseStatusException unknown = assertThrows(ResponseStatusException.class,
+                () -> service.createActivity(lessonId, tutorId, activityRequest(
+                        "{\"title\":\"Quiz\",\"activity_type\":\"QUIZ\",\"time_limit\":60}")));
+
+        assertEquals(HttpStatus.CONFLICT, mismatch.getStatusCode());
+        assertEquals("ASSESSMENT_CONFIGURATION_MISMATCH", mismatch.getReason());
+        assertEquals(HttpStatus.BAD_REQUEST, unknown.getStatusCode());
+        verify(activityRepository, never()).save(any(Activity.class));
+    }
+
+    @Test
+    void activityTypeCannotBeReplacedAndAnActivityWithAssessmentRowsCannotBeDeleted() {
+        Lesson lesson = new Lesson(chapterId, "Lesson", null, 30, 0, null);
+        ReflectionTestUtils.setField(lesson, "lessonId", lessonId);
+        Chapter chapter = new Chapter(classId, "Chapter", null, 0, null);
+        ReflectionTestUtils.setField(chapter, "chapterId", chapterId);
+        Activity activity = new Activity(lessonId, "Quiz", null, Activity.ActivityType.QUIZ, 0, null);
+        UUID activityId = UUID.randomUUID();
+        ReflectionTestUtils.setField(activity, "activityId", activityId);
+        when(lessonRepository.findById(lessonId)).thenReturn(Optional.of(lesson));
+        when(chapterRepository.findById(chapterId)).thenReturn(Optional.of(chapter));
+        when(activityRepository.findById(activityId)).thenReturn(Optional.of(activity));
+
+        ResponseStatusException retype = assertThrows(ResponseStatusException.class,
+                () -> service.updateActivity(activityId, tutorId,
+                        java.util.Map.of("activity_type", "ASSIGNMENT")));
+        assertEquals(HttpStatus.BAD_REQUEST, retype.getStatusCode());
+        assertEquals(Activity.ActivityType.QUIZ, activity.getActivityType());
+
+        org.mockito.Mockito.doThrow(new DataIntegrityViolationException("quiz rows still reference it"))
+                .when(activityRepository).flush();
+        ResponseStatusException delete = assertThrows(ResponseStatusException.class,
+                () -> service.deleteActivity(activityId, tutorId));
+        assertEquals(HttpStatus.CONFLICT, delete.getStatusCode());
+        assertEquals("CONTENT_HAS_DEPENDENT_LEARNING_DATA", delete.getReason());
+    }
+
+    @Test
+    void nonOwningTutorCannotPlaceAnActivity() {
+        Lesson lesson = new Lesson(chapterId, "Lesson", null, 30, 0, null);
+        ReflectionTestUtils.setField(lesson, "lessonId", lessonId);
+        when(lessonRepository.findById(lessonId)).thenReturn(Optional.of(lesson));
+        when(chapterRepository.findById(chapterId)).thenReturn(Optional.of(
+                new Chapter(classId, "Chapter", null, 0, null)));
+
+        ResponseStatusException exception = assertThrows(ResponseStatusException.class,
+                () -> service.createActivity(lessonId, UUID.randomUUID(), activityRequest(
+                        "{\"title\":\"Quiz\",\"activity_type\":\"QUIZ\",\"sequence_order\":0}")));
+
+        assertEquals(HttpStatus.FORBIDDEN, exception.getStatusCode());
+        verify(activityRepository, never()).save(any(Activity.class));
+    }
+
+    @Test
+    void outlinePlacesActivitiesAlongsideMaterialsInStoredOrder() {
+        Chapter chapter = new Chapter(classId, "Chapter", null, 0, Chapter.VisibilityStatus.PUBLISHED);
+        ReflectionTestUtils.setField(chapter, "chapterId", chapterId);
+        Lesson lesson = new Lesson(chapterId, "Lesson", null, 25, 0, Chapter.VisibilityStatus.PUBLISHED);
+        ReflectionTestUtils.setField(lesson, "lessonId", lessonId);
+        Activity activity = new Activity(lessonId, "Quiz", null, Activity.ActivityType.QUIZ, 1,
+                Chapter.VisibilityStatus.PUBLISHED);
+        UUID activityId = UUID.randomUUID();
+        ReflectionTestUtils.setField(activity, "activityId", activityId);
+        when(memberRepository.existsByClassIdAndStudentIdAndStatus(classId, studentId,
+                ClassMember.MembershipStatus.ACTIVE)).thenReturn(true);
+        when(chapterRepository.findByClassIdAndStatusOrderBySequenceOrderAsc(classId,
+                Chapter.VisibilityStatus.PUBLISHED)).thenReturn(List.of(chapter));
+        when(lessonRepository.findByChapterIdAndStatusOrderBySequenceOrderAsc(chapterId,
+                Chapter.VisibilityStatus.PUBLISHED)).thenReturn(List.of(lesson));
+        when(activityRepository.findByLessonIdAndStatusOrderBySequenceOrderAsc(lessonId,
+                Chapter.VisibilityStatus.PUBLISHED)).thenReturn(List.of(activity));
+
+        var outline = service.getOutline(classId, studentId, false);
+
+        assertEquals(activityId, outline.chapters().get(0).lessons().get(0).activities().get(0).activityId());
+        assertEquals(Activity.ActivityType.QUIZ,
+                outline.chapters().get(0).lessons().get(0).activities().get(0).activityType());
+    }
+
+    @Test
+    void aStoredAssetKeyCannotBeSuppliedOrReplacedThroughTheJsonApi() {
+        Lesson lesson = new Lesson(chapterId, "Lesson", null, 30, 0, null);
+        ReflectionTestUtils.setField(lesson, "lessonId", lessonId);
+        when(lessonRepository.findById(lessonId)).thenReturn(Optional.of(lesson));
+        when(chapterRepository.findById(chapterId)).thenReturn(Optional.of(
+                new Chapter(classId, "Chapter", null, 0, null)));
+        String storedUrl = "/api/v1/materials/files/2d8f5627-6550-47db-aae0-3b262cc8e34c.pdf";
+
+        ResponseStatusException create = assertThrows(ResponseStatusException.class,
+                () -> service.createMaterial(lessonId, tutorId, new MaterialRequest("Notes",
+                        Material.MaterialType.DOCUMENT, storedUrl, null, 0, null)));
+        assertEquals(HttpStatus.BAD_REQUEST, create.getStatusCode());
+
+        Material uploaded = new Material(lessonId, "Notes", Material.MaterialType.DOCUMENT, storedUrl,
+                null, 0, Chapter.VisibilityStatus.PUBLISHED);
+        UUID materialId = UUID.randomUUID();
+        ReflectionTestUtils.setField(uploaded, "materialId", materialId);
+        when(materialRepository.findById(materialId)).thenReturn(Optional.of(uploaded));
+
+        ResponseStatusException patch = assertThrows(ResponseStatusException.class,
+                () -> service.updateMaterial(materialId, tutorId,
+                        java.util.Map.of("file_url", "https://example.com/other.pdf")));
+
+        assertEquals(HttpStatus.BAD_REQUEST, patch.getStatusCode());
+        assertEquals(storedUrl, uploaded.getFileUrl());
+        verify(materialRepository, never()).save(any(Material.class));
+    }
+
+    @Test
+    void deletingAMaterialOnlyRemovesAnAssetThatNoOtherRowPointsAt() {
+        Lesson lesson = new Lesson(chapterId, "Lesson", null, 30, 0, null);
+        ReflectionTestUtils.setField(lesson, "lessonId", lessonId);
+        Chapter chapter = new Chapter(classId, "Chapter", null, 0, null);
+        ReflectionTestUtils.setField(chapter, "chapterId", chapterId);
+        String storedUrl = "/api/v1/materials/files/2d8f5627-6550-47db-aae0-3b262cc8e34c.pdf";
+        Material material = new Material(lessonId, "Notes", Material.MaterialType.DOCUMENT, storedUrl,
+                null, 0, Chapter.VisibilityStatus.PUBLISHED);
+        UUID materialId = UUID.randomUUID();
+        ReflectionTestUtils.setField(material, "materialId", materialId);
+        when(lessonRepository.findById(lessonId)).thenReturn(Optional.of(lesson));
+        when(chapterRepository.findById(chapterId)).thenReturn(Optional.of(chapter));
+        when(materialRepository.findById(materialId)).thenReturn(Optional.of(material));
+
+        when(materialRepository.existsByFileUrlAndMaterialIdNot(storedUrl, materialId)).thenReturn(true);
+        service.deleteMaterial(materialId, tutorId);
+        verify(materialStorage, never()).delete("2d8f5627-6550-47db-aae0-3b262cc8e34c.pdf");
+
+        when(materialRepository.existsByFileUrlAndMaterialIdNot(storedUrl, materialId)).thenReturn(false);
+        service.deleteMaterial(materialId, tutorId);
+        verify(materialStorage).delete("2d8f5627-6550-47db-aae0-3b262cc8e34c.pdf");
+    }
+
+    @Test
+    void videoMaterialsMustStreamFromAVerifiedHostOrAMediaFile() {
+        Lesson lesson = new Lesson(chapterId, "Lesson", null, 30, 0, null);
+        ReflectionTestUtils.setField(lesson, "lessonId", lessonId);
+        Chapter chapter = new Chapter(classId, "Chapter", null, 0, null);
+        ReflectionTestUtils.setField(chapter, "chapterId", chapterId);
+        when(lessonRepository.findById(lessonId)).thenReturn(Optional.of(lesson));
+        when(chapterRepository.findById(chapterId)).thenReturn(Optional.of(chapter));
+        when(materialRepository.save(any(Material.class))).thenAnswer(invocation -> invocation.getArgument(0));
+
+        service.createMaterial(lessonId, tutorId, new MaterialRequest("Lecture",
+                Material.MaterialType.VIDEO, "https://www.youtube.com/watch?v=abc", null, 0, null));
+        service.createMaterial(lessonId, tutorId, new MaterialRequest("Lecture",
+                Material.MaterialType.VIDEO, "https://cdn.example.com/lecture.mp4", null, 1, null));
+
+        ResponseStatusException page = assertThrows(ResponseStatusException.class,
+                () -> service.createMaterial(lessonId, tutorId, new MaterialRequest("Lecture",
+                        Material.MaterialType.VIDEO, "https://example.com/some/page", null, 2, null)));
+        ResponseStatusException lookalike = assertThrows(ResponseStatusException.class,
+                () -> service.createMaterial(lessonId, tutorId, new MaterialRequest("Lecture",
+                        Material.MaterialType.VIDEO, "https://youtube.com.evil.example/watch", null, 3, null)));
+        ResponseStatusException insecureDocument = assertThrows(ResponseStatusException.class,
+                () -> service.createMaterial(lessonId, tutorId, new MaterialRequest("Notes",
+                        Material.MaterialType.DOCUMENT, "http://example.com/notes.pdf", null, 4, null)));
+
+        assertEquals(HttpStatus.BAD_REQUEST, page.getStatusCode());
+        assertEquals(HttpStatus.BAD_REQUEST, lookalike.getStatusCode());
+        assertEquals(HttpStatus.BAD_REQUEST, insecureDocument.getStatusCode());
+        verify(materialRepository, org.mockito.Mockito.times(2)).save(any(Material.class));
+    }
+
+    private static ActivityRequest activityRequest(String json) {
+        return new tools.jackson.databind.ObjectMapper().readValue(json, ActivityRequest.class);
     }
 }

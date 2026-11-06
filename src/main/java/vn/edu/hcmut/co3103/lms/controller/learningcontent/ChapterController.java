@@ -23,6 +23,7 @@ import org.springframework.web.bind.annotation.RequestPart;
 import org.springframework.web.bind.annotation.RestController;
 import org.springframework.web.multipart.MultipartFile;
 import org.springframework.web.server.ResponseStatusException;
+import vn.edu.hcmut.co3103.lms.dto.request.ActivityRequest;
 import vn.edu.hcmut.co3103.lms.dto.request.ChapterRequest;
 import vn.edu.hcmut.co3103.lms.dto.request.LessonRequest;
 import vn.edu.hcmut.co3103.lms.dto.request.MaterialRequest;
@@ -162,6 +163,21 @@ public class ChapterController {
                 chapterService.createUploadedMaterial(lessonId, userId(jwt), request, file)));
     }
 
+    @GetMapping("/lessons/{lessonId}/activities")
+    @PreAuthorize("hasAnyRole('STUDENT', 'TUTOR')")
+    public List<ContentItemResponse.ActivityItem> listActivities(@AuthenticationPrincipal Jwt jwt,
+            Authentication authentication, @PathVariable UUID lessonId) {
+        return chapterService.listActivities(lessonId, userId(jwt), isTutor(authentication));
+    }
+
+    @PostMapping("/lessons/{lessonId}/activities")
+    @PreAuthorize("hasRole('TUTOR')")
+    public ResponseEntity<ContentItemResponse.ActivityItem> createActivity(@AuthenticationPrincipal Jwt jwt,
+            @PathVariable UUID lessonId, @Valid @RequestBody ActivityRequest request) {
+        return ResponseEntity.status(HttpStatus.CREATED)
+                .body(ContentItemResponse.ActivityItem.from(chapterService.createActivity(lessonId, userId(jwt), request)));
+    }
+
     @GetMapping("/materials/files/{fileKey}")
     @PreAuthorize("hasAnyRole('STUDENT', 'TUTOR')")
     public ResponseEntity<Resource> downloadMaterial(@AuthenticationPrincipal Jwt jwt, Authentication authentication,
@@ -192,6 +208,27 @@ public class ChapterController {
     @PreAuthorize("hasRole('TUTOR')")
     public ResponseEntity<Void> deleteMaterial(@AuthenticationPrincipal Jwt jwt, @PathVariable UUID materialId) {
         chapterService.deleteMaterial(materialId, userId(jwt));
+        return ResponseEntity.noContent().build();
+    }
+
+    @GetMapping("/activities/{activityId}")
+    @PreAuthorize("hasAnyRole('STUDENT', 'TUTOR')")
+    public ContentItemResponse.ActivityItem getActivity(@AuthenticationPrincipal Jwt jwt, Authentication authentication,
+                                                         @PathVariable UUID activityId) {
+        return chapterService.getActivity(activityId, userId(jwt), isTutor(authentication));
+    }
+
+    @PatchMapping("/activities/{activityId}")
+    @PreAuthorize("hasRole('TUTOR')")
+    public ContentItemResponse.ActivityItem updateActivity(@AuthenticationPrincipal Jwt jwt,
+            @PathVariable UUID activityId, @RequestBody Map<String, Object> patch) {
+        return ContentItemResponse.ActivityItem.from(chapterService.updateActivity(activityId, userId(jwt), patch));
+    }
+
+    @DeleteMapping("/activities/{activityId}")
+    @PreAuthorize("hasRole('TUTOR')")
+    public ResponseEntity<Void> deleteActivity(@AuthenticationPrincipal Jwt jwt, @PathVariable UUID activityId) {
+        chapterService.deleteActivity(activityId, userId(jwt));
         return ResponseEntity.noContent().build();
     }
 
