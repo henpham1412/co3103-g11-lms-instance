@@ -5,6 +5,10 @@ import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.MethodSource;
+import org.springframework.jdbc.core.JdbcTemplate;
+import vn.edu.hcmut.co3103.lms.support.ThumbnailImages;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.test.context.TestConfiguration;
@@ -57,7 +61,7 @@ class ClassThumbnailUploadHttpTest {
     private static final String BOUNDARY = "lms-thumbnail-http-boundary";
     private static final Path STORAGE_DIRECTORY = createStorageDirectory();
     private static final JwtTestSupport TOKENS = startTokens();
-    private static final byte[] PNG = {(byte) 0x89, 'P', 'N', 'G', 13, 10, 26, 10, 0, 0, 0, 13};
+    private static final byte[] PNG = ThumbnailImages.png();
 
     private static JwtTestSupport startTokens() {
         try {
@@ -102,9 +106,91 @@ class ClassThumbnailUploadHttpTest {
     @Autowired
     private ObjectMapper objectMapper;
 
+    @Autowired
+    private JdbcTemplate jdbc;
+
     private final HttpClient client = HttpClient.newBuilder().version(HttpClient.Version.HTTP_1_1).build();
     private final List<UUID> classIds = new ArrayList<>();
     private final List<UUID> userIds = new ArrayList<>();
+
+    static Stream<ThumbnailImages.InvalidImage> invalidImages() {
+        return ThumbnailImages.invalidImages().stream();
+    }
+
+    static Stream<ThumbnailImages.DimensionImage> allowedDimensions() {
+        return ThumbnailImages.dimensionImages().stream().filter(ThumbnailImages.DimensionImage::accepted);
+    }
+
+    static Stream<ThumbnailImages.DimensionImage> excessiveDimensions() {
+        return ThumbnailImages.dimensionImages().stream().filter(image -> !image.accepted());
+    }
+
+    @ParameterizedTest
+    @MethodSource("allowedDimensions")
+    void acceptsFourKAndExactPixelBoundaryImages(ThumbnailImages.DimensionImage image) throws Exception {
+        LmsUserAccess tutor = saveUser(LmsRole.TUTOR);
+        UUID classId = saveClass(tutor.getUserId());
+        byte[] bytes = image.bytes();
+        HttpResponse<String> response = upload(classId, bearer(tutor), image.fileName(), bytes, image.mimeType());
+        assertThat(response.statusCode()).isEqualTo(200);
+        String url = objectMapper.readTree(response.body()).get("thumbnail_url").asString();
+        assertThat(jdbc.queryForObject("SELECT thumbnail_url FROM class WHERE class_id = ?", String.class, classId))
+                .isEqualTo(url);
+        String fileName = url.substring(url.lastIndexOf('/') + 1);
+        HttpResponse<byte[]> served = get(PUBLIC_PATH + fileName);
+        assertThat(served.statusCode()).isEqualTo(200);
+        assertThat(served.body()).containsExactly(bytes);
+    }
+
+    @ParameterizedTest
+    @MethodSource("excessiveDimensions")
+    void rejectsDimensionAndPixelExcessWithoutChangingDatabaseOrFiles(ThumbnailImages.DimensionImage image)
+            throws Exception {
+        LmsUserAccess tutor = saveUser(LmsRole.TUTOR);
+        UUID classId = saveClass(tutor.getUserId());
+        String token = bearer(tutor);
+        assertThat(upload(classId, token, "original.png", PNG).statusCode()).isEqualTo(200);
+        var before = jdbc.queryForMap("SELECT * FROM class WHERE class_id = ?", classId);
+        List<Path> filesBefore;
+        try (var files = Files.list(STORAGE_DIRECTORY)) { filesBefore = files.sorted().toList(); }
+
+        var rejected = upload(classId, token, image.fileName(), image.bytes(), image.mimeType());
+
+        assertThat(rejected.statusCode()).isEqualTo(400);
+        assertThat(objectMapper.readTree(rejected.body()).get("code").asString()).isEqualTo("INVALID_FILE");
+        assertThat(jdbc.queryForMap("SELECT * FROM class WHERE class_id = ?", classId)).isEqualTo(before);
+        try (var files = Files.list(STORAGE_DIRECTORY)) {
+            assertThat(files.sorted().toList()).isEqualTo(filesBefore);
+        }
+        assertThat(filesBefore).hasSize(1);
+        assertThat(filesBefore.getFirst()).hasBinaryContent(PNG);
+    }
+
+    @ParameterizedTest
+    @MethodSource("invalidImages")
+    void malformedImagesDoNotReplacePersistedThumbnailOrChangeTimestamp(ThumbnailImages.InvalidImage image)
+            throws Exception {
+        LmsUserAccess tutor = saveUser(LmsRole.TUTOR);
+        UUID classId = saveClass(tutor.getUserId());
+        String token = bearer(tutor);
+        HttpResponse<String> initial = upload(classId, token, "cover.png", PNG);
+        assertThat(initial.statusCode()).isEqualTo(200);
+        var before = jdbc.queryForMap("SELECT thumbnail_url, updated_at FROM class WHERE class_id = ?", classId);
+        List<Path> filesBefore;
+        try (var files = Files.list(STORAGE_DIRECTORY)) { filesBefore = files.sorted().toList(); }
+
+        HttpResponse<String> rejected = upload(classId, token, "cover", image.bytes(), image.mimeType());
+
+        assertThat(rejected.statusCode()).isEqualTo(400);
+        assertThat(objectMapper.readTree(rejected.body()).get("code").asString()).isEqualTo("INVALID_FILE");
+        assertThat(jdbc.queryForMap("SELECT thumbnail_url, updated_at FROM class WHERE class_id = ?", classId))
+                .isEqualTo(before);
+        try (var files = Files.list(STORAGE_DIRECTORY)) {
+            assertThat(files.sorted().toList()).isEqualTo(filesBefore);
+        }
+        assertThat(filesBefore).hasSize(1);
+        assertThat(filesBefore.getFirst()).hasBinaryContent(PNG);
+    }
 
     @BeforeEach
     void clearStorage() throws IOException {
@@ -172,9 +258,14 @@ class ClassThumbnailUploadHttpTest {
 
     private HttpResponse<String> upload(UUID classId, String accessToken, String fileName, byte[] content)
             throws Exception {
+        return upload(classId, accessToken, fileName, content, MediaType.IMAGE_PNG_VALUE);
+    }
+
+    private HttpResponse<String> upload(UUID classId, String accessToken, String fileName, byte[] content,
+                                        String mimeType) throws Exception {
         ByteArrayOutputStream body = new ByteArrayOutputStream();
         body.writeBytes(("--" + BOUNDARY + "\r\nContent-Disposition: form-data; name=\"file\"; filename=\""
-                + fileName + "\"\r\nContent-Type: " + MediaType.IMAGE_PNG_VALUE + "\r\n\r\n")
+                + fileName + "\"\r\nContent-Type: " + mimeType + "\r\n\r\n")
                 .getBytes(StandardCharsets.UTF_8));
         body.writeBytes(content);
         body.writeBytes(("\r\n--" + BOUNDARY + "--\r\n").getBytes(StandardCharsets.UTF_8));

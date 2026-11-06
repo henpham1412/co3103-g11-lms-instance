@@ -1,5 +1,6 @@
 package vn.edu.hcmut.co3103.lms.controller.classmanagement;
 
+import vn.edu.hcmut.co3103.lms.support.ThumbnailImages;
 import com.nimbusds.jose.JOSEException;
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.Test;
@@ -323,15 +324,15 @@ class ClassThumbnailUploadIntegrationTest {
     }
 
     private static byte[] png() {
-        return new byte[]{(byte) 0x89, 'P', 'N', 'G', 13, 10, 26, 10, 0, 0, 0, 13};
+        return ThumbnailImages.png();
     }
 
     private static byte[] jpeg() {
-        return new byte[]{(byte) 0xff, (byte) 0xd8, (byte) 0xff, (byte) 0xe0, 0, 0};
+        return ThumbnailImages.jpeg();
     }
 
     private static byte[] webp() {
-        return new byte[]{'R', 'I', 'F', 'F', 4, 0, 0, 0, 'W', 'E', 'B', 'P', 'V', 'P', '8', 'L'};
+        return ThumbnailImages.webp();
     }
 
     @TestConfiguration(proxyBeanMethods = false)
