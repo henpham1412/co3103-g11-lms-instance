@@ -54,7 +54,7 @@ public class QuizConfigurationAccessService {
         if (targetClass.getStatus() != Class.ClassStatus.ACTIVE
                 || chapter.getStatus() != Chapter.VisibilityStatus.PUBLISHED
                 || lesson.getStatus() != Chapter.VisibilityStatus.PUBLISHED
-                || !"PUBLISHED".equals(activity.getStatus())) {
+                || activity.getStatus() != Chapter.VisibilityStatus.PUBLISHED) {
             throw new ResponseStatusException(HttpStatus.NOT_FOUND, "QUIZ_NOT_FOUND");
         }
     }
@@ -82,7 +82,7 @@ public class QuizConfigurationAccessService {
         if (targetClass.getStatus() != Class.ClassStatus.ACTIVE
                 || chapter.getStatus() != Chapter.VisibilityStatus.PUBLISHED
                 || lesson.getStatus() != Chapter.VisibilityStatus.PUBLISHED
-                || !"PUBLISHED".equals(activity.getStatus())) {
+                || activity.getStatus() != Chapter.VisibilityStatus.PUBLISHED) {
             throw new ResponseStatusException(HttpStatus.CONFLICT, "QUIZ_NOT_AVAILABLE");
         }
         return member;
@@ -95,11 +95,11 @@ public class QuizConfigurationAccessService {
     }
 
     private ContentPath resolveContentPath(Activity activity) {
-        if (activity == null || activity.getLesson() == null) {
+        if (activity == null || activity.getLessonId() == null) {
             throw new ResponseStatusException(HttpStatus.NOT_FOUND, "QUIZ_NOT_FOUND");
         }
 
-        Lesson lesson = lessonRepository.findById(activity.getLesson().getLessonId())
+        Lesson lesson = lessonRepository.findById(activity.getLessonId())
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "QUIZ_NOT_FOUND"));
         Chapter chapter = chapterRepository.findById(lesson.getChapterId())
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "QUIZ_NOT_FOUND"));
