@@ -1,0 +1,126 @@
+LMS-7 review against existing branches
+=======================================
+
+Scope
+-----
+This review compares docs/lms-7-spec.txt with docs/api-conventions.txt and
+the current LMS-2/3/4/5 code. The spec says existing branch behavior is
+authoritative where it conflicts with the forward-looking LMS-7 design. The
+decisions recorded inline in this review are treated as the author's answers,
+but should be copied into the normative spec before implementation.
+
+Conventions already covered
+---------------------------
+docs/api-conventions.txt already establishes /api/v1, JSON snake_case,
+one-based pagination, a consistent page envelope, supported HTTP status codes,
+and the stable JSON error shape. Those general conventions do not need to be
+repeated in LMS-7. LMS-7 still needs endpoint-specific page defaults, filters,
+success bodies, and error-code conditions.
+
+Existing behavior and agreed replacement
+----------------------------------------
+
+1. GET /api/v1/me/classes already exists. It is Student-only and returns a
+   bare list of {class_id, status}; it includes current PENDING and ACTIVE
+   memberships. It does not include class details, tutor, archived history,
+   pagination, or progress. The author has confirmed LMS-7 intentionally
+   replaces this contract, existing callers must migrate, and the new response
+   includes archived classes and former memberships. Record that replacement
+   and caller migration directly in the spec. Define whether `status` filters
+   ClassMember status or Class lifecycle status; they are different enums
+   (membership: PENDING/ACTIVE/REJECTED/INACTIVE; class: ACTIVE/ARCHIVED).
+
+2. Existing content visibility is PUBLISHED/HIDDEN at Chapter, Lesson, Material,
+   and Activity level. Existing Student outline/item access excludes hidden
+   chapters and lessons. For progress eligibility, count a lesson only when its
+   chapter and lesson are PUBLISHED and access rules permit it. State how
+   hidden activities are treated when returning assessment statuses and
+   calculating resume targets.
+
+3. Existing list endpoints use one-based pages, enforce size up to 100, and
+   return the common PageResponse envelope. The API convention establishes the
+   envelope; LMS-7 should specify endpoint defaults and allowlisted sort fields
+   for the new assessment-history and tutor member lists. `/me/classes` is
+   intentionally being changed from its existing unpaged response.
+
+4. Existing authorization uses role checks plus service-level resource,
+   membership, and owner validation. Hidden student content is generally
+   treated as not found. Align the new progress APIs with this pattern and
+   specify endpoint-specific conditions for 403, 404, and 409. The global API
+   convention already defines the JSON error envelope, but does not determine
+   whether a hidden lesson is 404 or 409 in these particular operations.
+
+5. LMS-7 persistence and endpoints are not implemented in this checkout. There
+   are no CompletionMark or LastVisit entities/tables, no progress endpoints,
+   no assignment/submission persistence or API, and no SkillTopic/mastery
+   persistence. QuizAttempt exists, including IN_PROGRESS and submitted/
+   grading states. Question DTOs accept skill_topic_ids, but service comments
+   note persistence is pending. Define the LMS-7 boundary for assignments and
+   mastery, or identify the prerequisite work that supplies those records.
+
+Author decisions captured in the review
+---------------------------------------
+
+- `/me/classes` is replaced by the richer response; callers migrate. Include
+  archived classes and former memberships.
+- Archived classes and inactive/former members may read progress and resume
+  information. Students may not mark lessons complete, and Tutors may not
+  modify progress. This intentionally extends beyond BR-5.4's current phrase
+  “require Active membership”; revise BR-5.4 and endpoint role labels to match.
+- Response schemas other than lesson progress may be defined during
+  implementation. The lesson-progress schema should be defined in the spec.
+- Progress and chapter percentages round to the nearest whole number; zero
+  eligible lessons yields 100%. This differs from class completion, which is
+  false when no eligible lesson exists. Explain that distinction in the spec.
+- Resume never selects a completed lesson. An in-progress quiz attempt must be
+  editable and its quiz/activity/content accessible. If there are several,
+  choose the most recent attempt.
+- Deleting content deletes associated marks; hiding content retains them.
+  Removing a member retains marks, and rejoining restores them.
+- Repeating a completion PUT refreshes `marked_at`; recording the same lesson
+  again refreshes LastVisit.visited_at.
+- Lesson/class association is validated in application code only; no database
+  constraint is planned.
+
+Remaining items to settle in the normative spec
+-----------------------------------------------
+
+- Assignment continuation: specify which submission states mean “needs to
+  continue,” how an assignment interacts with the quiz-first resume priority,
+  and what target/reason values are returned.
+- Error mapping: specify endpoint-specific conditions for MEMBERSHIP_REQUIRED,
+  FORBIDDEN, CLASS_OR_MEMBER_NOT_FOUND, LESSON_NOT_FOUND, and
+  LESSON_NOT_ACCESSIBLE. State the not-found versus inaccessible boundary and
+  whether class archival/inactive membership causes 403 or permits read-only
+  access. Use the error envelope from api-conventions.txt.
+- `/me/classes`: define the exact `status` filter dimension, default and
+  accepted values, pagination defaults, sort options, and response treatment
+  of PENDING requests alongside archived/former memberships.
+- Resume: define the response shape for lesson and assignment targets, no
+  eligible lessons, all lessons complete, and attempts that become unavailable
+  between selection and use. The quiz attempt tie-breaker is now specified as
+  most recent, but define the timestamp used (started_at or updated activity
+  time; QuizAttempt currently has started_at and submitted_at, but no general
+  updated_at).
+- LastVisit lifecycle: the author's answer says marks are deleted with content;
+  clarify whether that includes LastVisit, and whether hiding the visited lesson
+  retains the row while excluding it from resume selection.
+- Progress: define chapter/lesson nested fields at least enough for clients to
+  render the promised outline and per-lesson completion/assessment statuses.
+  If other schemas are intentionally implementation-defined, identify which
+  endpoints may evolve without a contract change. The API convention requires
+  each endpoint's success response to be documented.
+- Tutor progress: specify which former-member detail endpoint behavior applies
+  given that the class list excludes former members but individual history may
+  still be readable; define what “Tutor may not modify progress” means because
+  the listed tutor endpoints are GET-only.
+- Data retention and rejoin: define whether historical assessment records and
+  completion marks attach to the same ClassMember row on rejoin. Current
+  membership model has a unique (class_id, student_id) row and transitions
+  status, so “rejoining restores” is consistent if the row is reused; confirm
+  that this is the intended lifecycle.
+
+The general API conventions resolve formatting and shared protocol rules.
+The remaining work is endpoint-specific contract detail and making the agreed
+answers normative in lms-7-spec.txt. Do not change prior-branch behavior merely
+to follow an implication in the forward-looking LMS-7 design.
