@@ -10,6 +10,7 @@ import vn.edu.hcmut.co3103.lms.entity.ClassMember;
 import vn.edu.hcmut.co3103.lms.repository.classmanagement.ClassMemberRepository;
 import vn.edu.hcmut.co3103.lms.repository.classmanagement.ClassRepository;
 
+import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
 
@@ -365,6 +366,50 @@ class ClassMembershipServiceTest {
         assertEquals("INVALID_MEMBERSHIP_STATE", error.getReason());
         verify(classMemberRepository, never()).save(any(ClassMember.class));
     }
+    @Test
+    void onlyOwningTutorCanSearchTheRoster() {
+        Class otherTutorsClass = new Class(UUID.randomUUID(), "CS202", "Other class", null, null, 10,
+                Class.EnrollmentPolicy.OPEN);
+        when(classRepository.findById(classId)).thenReturn(Optional.of(otherTutorsClass));
+
+        ResponseStatusException error = assertThrows(ResponseStatusException.class,
+                () -> service.listMembers(classId, tutorId, "ada", null,
+                        org.springframework.data.domain.PageRequest.of(0, 20)));
+
+        assertEquals(HttpStatus.FORBIDDEN, error.getStatusCode());
+        verify(classMemberRepository, never()).searchRoster(any(), any(), any(), any());
+    }
+
+    @Test
+    void rosterSearchNormalizesQueryAndKeepsStatusFilterPageAndSort() {
+        when(classRepository.findById(classId)).thenReturn(Optional.of(
+                new Class(tutorId, "CS101", "Programming", null, null, 10, Class.EnrollmentPolicy.OPEN)));
+        var pageable = org.springframework.data.domain.PageRequest.of(1, 20,
+                org.springframework.data.domain.Sort.by(org.springframework.data.domain.Sort.Direction.ASC,
+                        "joined_at"));
+        when(classMemberRepository.searchRoster(classId, "ACTIVE", "ada lovelace", pageable))
+                .thenReturn(new org.springframework.data.domain.PageImpl<>(List.of(), pageable, 0L));
+
+        service.listMembers(classId, tutorId, "  ada lovelace  ",
+                ClassMember.MembershipStatus.ACTIVE, pageable);
+
+        verify(classMemberRepository).searchRoster(classId, "ACTIVE", "ada lovelace", pageable);
+    }
+
+    @Test
+    void rosterRejectsOverlongSearchWithoutQueryingTheDatabase() {
+        when(classRepository.findById(classId)).thenReturn(Optional.of(
+                new Class(tutorId, "CS101", "Programming", null, null, 10, Class.EnrollmentPolicy.OPEN)));
+
+        ResponseStatusException error = assertThrows(ResponseStatusException.class,
+                () -> service.listMembers(classId, tutorId, "x".repeat(101), null,
+                        org.springframework.data.domain.PageRequest.of(0, 20)));
+
+        assertEquals(HttpStatus.BAD_REQUEST, error.getStatusCode());
+        assertEquals("INVALID_QUERY_PARAMETER", error.getReason());
+        verify(classMemberRepository, never()).searchRoster(any(), any(), any(), any());
+    }
+
     private ClassMember membership(ClassMember.MembershipStatus status) {
         ClassMember result = new ClassMember(classId, studentId, status,
                 java.time.Instant.now(), status == ClassMember.MembershipStatus.ACTIVE

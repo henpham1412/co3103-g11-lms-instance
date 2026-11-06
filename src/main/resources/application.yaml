@@ -37,3 +37,7 @@ spring:
 
 lms:
   allowed-origins: ${LMS_ALLOWED_ORIGINS:http://localhost:3000,http://localhost:5173}
+  storage:
+    class-thumbnails:
+      directory: ${LMS_CLASS_THUMBNAIL_DIRECTORY:./var/class-thumbnails}
+      public-base-url: ${LMS_PUBLIC_BASE_URL:http://localhost:8081}
