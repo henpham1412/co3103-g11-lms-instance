@@ -3,6 +3,7 @@ package vn.edu.hcmut.co3103.lms.controller.learningcontent;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import vn.edu.hcmut.co3103.lms.support.MaterialFiles;
 import org.junit.jupiter.api.io.TempDir;
 import org.springframework.http.MediaType;
 import org.springframework.mock.web.MockMultipartFile;
@@ -79,7 +80,7 @@ class ChapterControllerMaterialApiTest {
                 ("{\"title\":\"Lesson notes\",\"material_type\":\"DOCUMENT\","
                         + "\"sequence_order\":2,\"status\":\"PUBLISHED\"}").getBytes());
         MockMultipartFile file = new MockMultipartFile("file", "notes.pdf", MediaType.APPLICATION_PDF_VALUE,
-                "%PDF-1.7 sample".getBytes());
+                MaterialFiles.read("valid.pdf"));
 
         mockMvc.perform(multipart("/api/v1/lessons/{lessonId}/materials", LESSON_ID)
                         .file(metadata)

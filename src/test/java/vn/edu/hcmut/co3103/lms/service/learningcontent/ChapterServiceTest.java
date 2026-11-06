@@ -2,6 +2,7 @@ package vn.edu.hcmut.co3103.lms.service.learningcontent;
 
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import vn.edu.hcmut.co3103.lms.support.MaterialFiles;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.http.HttpStatus;
 import org.springframework.test.util.ReflectionTestUtils;
@@ -61,6 +62,10 @@ class ChapterServiceTest {
         ReflectionTestUtils.setField(target, "classId", classId);
         when(classRepository.findById(classId)).thenReturn(Optional.of(target));
         when(classRepository.findByIdForUpdate(classId)).thenReturn(Optional.of(target));
+        when(chapterRepository.findClassIdByChapterId(any())).thenReturn(Optional.of(classId));
+        when(lessonRepository.findClassIdByLessonId(any())).thenReturn(Optional.of(classId));
+        when(materialRepository.findClassIdByMaterialId(any())).thenReturn(Optional.of(classId));
+        when(activityRepository.findClassIdByActivityId(any())).thenReturn(Optional.of(classId));
     }
 
     @Test
@@ -200,7 +205,7 @@ class ChapterServiceTest {
 
         Material uploaded = service.createUploadedMaterial(lessonId, tutorId,
                 new MaterialRequest("PDF", Material.MaterialType.DOCUMENT, null, null, 0, null),
-                new MockMultipartFile("file", "note.pdf", "application/pdf", "%PDF-1.7".getBytes()));
+                new MockMultipartFile("file", "note.pdf", "application/pdf", MaterialFiles.read("valid.pdf")));
 
         assertEquals(Material.MaterialType.DOCUMENT, uploaded.getMaterialType());
         assertEquals("/api/v1/materials/files/2d8f5627-6550-47db-aae0-3b262cc8e34c.pdf", uploaded.getFileUrl());
@@ -217,7 +222,7 @@ class ChapterServiceTest {
         ResponseStatusException exception = assertThrows(ResponseStatusException.class, () ->
                 service.createUploadedMaterial(lessonId, UUID.randomUUID(),
                         new MaterialRequest("PDF", Material.MaterialType.DOCUMENT, null, null, 0, null),
-                        new MockMultipartFile("file", "note.pdf", "application/pdf", "%PDF-1.7".getBytes())));
+                        new MockMultipartFile("file", "note.pdf", "application/pdf", MaterialFiles.read("valid.pdf"))));
 
         assertEquals(HttpStatus.FORBIDDEN, exception.getStatusCode());
         verify(materialStorage, never()).store(any(), any());

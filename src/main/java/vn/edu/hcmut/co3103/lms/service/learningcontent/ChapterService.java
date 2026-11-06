@@ -125,8 +125,7 @@ public class ChapterService {
 
     @Transactional
     public Chapter updateChapter(UUID chapterId, UUID tutorId, Map<String, Object> patch) {
-        Chapter chapter = requireChapter(chapterId);
-        requireWritableClass(chapter.getClassId(), tutorId);
+        Chapter chapter = requireWritableChapter(chapterId, tutorId);
         validatePatch(patch, Set.of("title", "description", "sequence_order", "status"));
         if (patch.containsKey("title")) { validateContentTitle(text(patch, "title")); chapter.setTitle(text(patch, "title").trim()); }
         if (patch.containsKey("description")) chapter.setDescription(nullableText(patch, "description"));
@@ -153,8 +152,7 @@ public class ChapterService {
 
     @Transactional
     public void deleteChapter(UUID chapterId, UUID tutorId) {
-        Chapter chapter = requireChapter(chapterId);
-        requireWritableClass(chapter.getClassId(), tutorId);
+        Chapter chapter = requireWritableChapter(chapterId, tutorId);
         try {
             chapterRepository.delete(chapter);
             chapterRepository.flush();
@@ -197,9 +195,7 @@ public class ChapterService {
 
     @Transactional
     public Lesson updateLesson(UUID lessonId, UUID tutorId, Map<String, Object> patch) {
-        Lesson lesson = requireLesson(lessonId);
-        Chapter chapter = requireChapter(lesson.getChapterId());
-        requireWritableClass(chapter.getClassId(), tutorId);
+        Lesson lesson = requireWritableLesson(lessonId, tutorId);
         validatePatch(patch, Set.of("title", "description", "estimated_duration", "sequence_order", "status"));
         if (patch.containsKey("title")) { validateContentTitle(text(patch, "title")); lesson.setTitle(text(patch, "title").trim()); }
         if (patch.containsKey("description")) lesson.setDescription(nullableText(patch, "description"));
@@ -228,9 +224,7 @@ public class ChapterService {
 
     @Transactional
     public void deleteLesson(UUID lessonId, UUID tutorId) {
-        Lesson lesson = requireLesson(lessonId);
-        Chapter chapter = requireChapter(lesson.getChapterId());
-        requireWritableClass(chapter.getClassId(), tutorId);
+        Lesson lesson = requireWritableLesson(lessonId, tutorId);
         try {
             lessonRepository.delete(lesson);
             lessonRepository.flush();
@@ -265,13 +259,13 @@ public class ChapterService {
         if (request.file_url() != null || request.content() != null) throw badRequest();
 
         LocalMaterialStorageService.StoredFile stored = materialStorage.store(file, request.material_type());
-        String fileUrl = LOCAL_FILE_URL_PREFIX + stored.key();
-        Material material = new Material(lessonId, request.title().trim(), request.material_type(), fileUrl,
-                null,
-                resolveOrder(request.sequence_order(), () -> materialRepository.nextSequenceOrderForLesson(lessonId)),
-                request.status());
         deleteFileAfterRollback(stored.key());
         try {
+            String fileUrl = LOCAL_FILE_URL_PREFIX + stored.key();
+            Material material = new Material(lessonId, request.title().trim(), request.material_type(), fileUrl,
+                    null,
+                    resolveOrder(request.sequence_order(), () -> materialRepository.nextSequenceOrderForLesson(lessonId)),
+                    request.status());
             return materialRepository.saveAndFlush(material);
         } catch (RuntimeException exception) {
             materialStorage.delete(stored.key());
@@ -325,10 +319,7 @@ public class ChapterService {
 
     @Transactional
     public Material updateMaterial(UUID materialId, UUID tutorId, Map<String, Object> patch) {
-        Material material = requireMaterial(materialId);
-        Lesson lesson = requireLesson(material.getLessonId());
-        Chapter chapter = requireChapter(lesson.getChapterId());
-        requireWritableClass(chapter.getClassId(), tutorId);
+        Material material = requireWritableMaterial(materialId, tutorId);
         validatePatch(patch, Set.of("title", "content", "file_url", "sequence_order", "status"));
         if (patch.containsKey("title")) { validateTitle(text(patch, "title")); material.setTitle(text(patch, "title").trim()); }
         if (patch.containsKey("content")) material.setContent(nullableText(patch, "content"));
@@ -350,10 +341,7 @@ public class ChapterService {
 
     @Transactional
     public void deleteMaterial(UUID materialId, UUID tutorId) {
-        Material material = requireMaterial(materialId);
-        Lesson lesson = requireLesson(material.getLessonId());
-        Chapter chapter = requireChapter(lesson.getChapterId());
-        requireWritableClass(chapter.getClassId(), tutorId);
+        Material material = requireWritableMaterial(materialId, tutorId);
         String fileUrl = material.getFileUrl();
         String fileKey = localFileKey(fileUrl);
         try {
@@ -410,10 +398,7 @@ public class ChapterService {
 
     @Transactional
     public Activity updateActivity(UUID activityId, UUID tutorId, Map<String, Object> patch) {
-        Activity activity = requireActivity(activityId);
-        Lesson lesson = requireLesson(activity.getLessonId());
-        Chapter chapter = requireChapter(lesson.getChapterId());
-        requireWritableClass(chapter.getClassId(), tutorId);
+        Activity activity = requireWritableActivity(activityId, tutorId);
         // activity_type is deliberately not patchable: switching it would leave the Quiz or
         // Assignment configuration owned by the Assessment module bound to the wrong activity.
         validatePatch(patch, Set.of("title", "description", "sequence_order", "status"));
@@ -426,10 +411,7 @@ public class ChapterService {
 
     @Transactional
     public void deleteActivity(UUID activityId, UUID tutorId) {
-        Activity activity = requireActivity(activityId);
-        Lesson lesson = requireLesson(activity.getLessonId());
-        Chapter chapter = requireChapter(lesson.getChapterId());
-        requireWritableClass(chapter.getClassId(), tutorId);
+        Activity activity = requireWritableActivity(activityId, tutorId);
         try {
             activityRepository.delete(activity);
             activityRepository.flush();
@@ -490,6 +472,36 @@ public class ChapterService {
         if (!target.getTutorId().equals(tutorId)) throw forbidden();
         ensureClassEditable(target);
         return target;
+    }
+
+    // Scope projections return IDs only. Loading a managed child before waiting for the Class
+    // lock would allow a later partial update to flush stale values for omitted fields.
+    private Chapter requireWritableChapter(UUID chapterId, UUID tutorId) {
+        UUID classId = chapterRepository.findClassIdByChapterId(chapterId)
+                .orElseThrow(() -> notFound("CHAPTER_NOT_FOUND"));
+        requireWritableClass(classId, tutorId);
+        return requireChapter(chapterId);
+    }
+
+    private Lesson requireWritableLesson(UUID lessonId, UUID tutorId) {
+        UUID classId = lessonRepository.findClassIdByLessonId(lessonId)
+                .orElseThrow(() -> notFound("LESSON_NOT_FOUND"));
+        requireWritableClass(classId, tutorId);
+        return requireLesson(lessonId);
+    }
+
+    private Material requireWritableMaterial(UUID materialId, UUID tutorId) {
+        UUID classId = materialRepository.findClassIdByMaterialId(materialId)
+                .orElseThrow(() -> notFound("MATERIAL_NOT_FOUND"));
+        requireWritableClass(classId, tutorId);
+        return requireMaterial(materialId);
+    }
+
+    private Activity requireWritableActivity(UUID activityId, UUID tutorId) {
+        UUID classId = activityRepository.findClassIdByActivityId(activityId)
+                .orElseThrow(() -> notFound("ACTIVITY_NOT_FOUND"));
+        requireWritableClass(classId, tutorId);
+        return requireActivity(activityId);
     }
 
     private static boolean isVisibleToStudent(Chapter chapter, Lesson lesson) {

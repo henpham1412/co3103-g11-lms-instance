@@ -7,6 +7,7 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.Arguments;
 import org.junit.jupiter.params.provider.MethodSource;
+import org.junit.jupiter.params.provider.CsvSource;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.test.context.TestConfiguration;
@@ -39,6 +40,7 @@ import vn.edu.hcmut.co3103.lms.repository.learningcontent.ChapterRepository;
 import vn.edu.hcmut.co3103.lms.repository.learningcontent.LessonRepository;
 import vn.edu.hcmut.co3103.lms.repository.learningcontent.MaterialRepository;
 import vn.edu.hcmut.co3103.lms.security.jwt.JwtTestSupport;
+import vn.edu.hcmut.co3103.lms.support.MaterialFiles;
 
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
@@ -73,7 +75,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 class LearningContentHttpTest {
 
     private static final String BOUNDARY = "lms-content-http-boundary";
-    private static final byte[] PDF_BYTES = "%PDF-1.7 learning content probe".getBytes(StandardCharsets.UTF_8);
+    private static final byte[] PDF_BYTES = MaterialFiles.read("valid.pdf");
     private static final Path STORAGE_DIRECTORY = createStorageDirectory();
     private static final JwtTestSupport TOKENS = startTokens();
 
@@ -422,6 +424,205 @@ class LearningContentHttpTest {
             assertThat(response.body())
                     .doesNotContain("org.springframework", "Hibernate", "SELECT", "at ", "\\src\\main\\");
         }
+    }
+
+    @ParameterizedTest
+    @MethodSource("contentTypes")
+    void concurrentTitlePatchPreservesAQueuedVisibilityChange(String type) throws Exception {
+        UUID chapterId = createChapter("{\"title\":\"Original\"}");
+        UUID lessonId = createLesson(chapterId);
+        String path;
+        String table;
+        UUID id;
+        switch (type) {
+            case "chapter" -> { path = "/api/v1/chapters/"; table = "chapter"; id = chapterId; }
+            case "lesson" -> { path = "/api/v1/lessons/"; table = "lesson"; id = lessonId; }
+            case "material" -> {
+                HttpResponse<String> response = post("/api/v1/lessons/" + lessonId + "/materials", tutorToken,
+                        "{\"title\":\"Original\",\"material_type\":\"TEXT\",\"content\":\"Keep\"}");
+                assertThat(response.statusCode()).isEqualTo(201);
+                path = "/api/v1/materials/"; table = "material";
+                id = UUID.fromString(json(response).get("material_id").asString());
+            }
+            case "activity" -> {
+                HttpResponse<String> response = post("/api/v1/lessons/" + lessonId + "/activities", tutorToken,
+                        "{\"title\":\"Original\",\"activity_type\":\"QUIZ\"}");
+                assertThat(response.statusCode()).isEqualTo(201);
+                path = "/api/v1/activities/"; table = "activity";
+                id = UUID.fromString(json(response).get("activity_id").asString());
+            }
+            default -> throw new AssertionError(type);
+        }
+        String endpoint = path + id;
+        ExecutorService executor = Executors.newFixedThreadPool(2);
+        try {
+            List<Future<HttpResponse<String>>> pending = new TransactionTemplate(transactions).execute(status -> {
+                classRepository.findByIdForUpdate(classId).orElseThrow();
+                Future<HttpResponse<String>> hide = executor.submit(() ->
+                        patch(endpoint, tutorToken, "{\"status\":\"HIDDEN\"}"));
+                awaitParkedOnTheClassLock(hide);
+                Future<HttpResponse<String>> rename = executor.submit(() ->
+                        patch(endpoint, tutorToken, "{\"title\":\"Renamed\"}"));
+                awaitTwoQueuedContentWrites(hide, rename);
+                return List.of(hide, rename);
+            });
+            // Both requests are known to be queued before the gate transaction releases Class.
+            for (Future<HttpResponse<String>> future : pending) {
+                HttpResponse<String> response = future.get(30, TimeUnit.SECONDS);
+                assertThat(response.statusCode()).isEqualTo(200);
+                assertThat(json(response).get("status").asString()).isEqualTo("HIDDEN");
+            }
+            Map<String, Object> stored = jdbcTemplate.queryForMap(
+                    "SELECT title, status FROM " + table + " WHERE " + table + "_id = ?", id);
+            assertThat(stored).containsEntry("title", "Renamed").containsEntry("status", "HIDDEN");
+            assertThat(get(endpoint, studentToken).statusCode()).isEqualTo(404);
+        } finally {
+            executor.shutdownNow();
+        }
+    }
+
+    private static Stream<String> contentTypes() {
+        return Stream.of("chapter", "lesson", "material", "activity");
+    }
+
+    private void awaitTwoQueuedContentWrites(Future<?> first, Future<?> second) {
+        long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(10);
+        while (System.nanoTime() < deadline) {
+            assertThat(first.isDone() || second.isDone()).isFalse();
+            // The first writer waits on the gate's transaction ID; the second can wait on
+            // the Class tuple held by the first. Counting only transaction locks misses it.
+            Integer count = jdbcTemplate.queryForObject("""
+                    SELECT count(DISTINCT waiting.pid) FROM pg_locks waiting
+                    JOIN pg_stat_activity a ON a.pid = waiting.pid
+                    WHERE a.datname = current_database() AND NOT waiting.granted
+                      AND (waiting.locktype = 'transactionid'
+                           OR (waiting.locktype = 'tuple' AND waiting.relation = 'class'::regclass))
+                    """, Integer.class);
+            if (count != null && count >= 2) return;
+            try { Thread.sleep(25); }
+            catch (InterruptedException interrupted) {
+                Thread.currentThread().interrupt();
+                throw new AssertionError(interrupted);
+            }
+        }
+        throw new AssertionError("both PATCH requests did not queue on the Class lock");
+    }
+
+    @ParameterizedTest
+    @MethodSource("unknownActivityProperties")
+    void unknownActivityPropertiesRejectNullAndNonNullWithoutChangingRowsOrClassAudit(String extra)
+            throws Exception {
+        UUID lessonId = createLesson(createChapter("{\"title\":\"Basics\"}"));
+        Map<String, Object> before = jdbcTemplate.queryForMap("SELECT * FROM class WHERE class_id = ?", classId);
+        HttpResponse<String> response = post("/api/v1/lessons/" + lessonId + "/activities", tutorToken,
+                "{\"title\":\"Rejected\",\"activity_type\":\"QUIZ\"," + extra + "}");
+        assertThat(response.statusCode()).isEqualTo(400);
+        assertThat(json(response).get("code").asString()).isEqualTo("VALIDATION_ERROR");
+        assertThat(activities(lessonId)).isEmpty();
+        assertThat(jdbcTemplate.queryForMap("SELECT * FROM class WHERE class_id = ?", classId)).isEqualTo(before);
+    }
+
+    private static Stream<String> unknownActivityProperties() {
+        return Stream.of("\"unsupported\":null", "\"unsupported\":true", "\"unsupported\":{}",
+                "\"updated_at\":null", "\"activity_id\":null", "\"lesson_id\":null",
+                "\"extraFields\":null", "\"extraFields\":{}", "\"extra_fields\":null",
+                "\"carriesAssessmentConfiguration\":null");
+    }
+
+    @Test
+    void failedUploadedAppendAtMaximumIntegerLeavesNoRowOrFile() throws Exception {
+        UUID lessonId = createLesson(createChapter("{\"title\":\"Basics\"}"));
+        HttpResponse<String> maximum = post("/api/v1/lessons/" + lessonId + "/materials", tutorToken,
+                "{\"title\":\"Maximum\",\"material_type\":\"TEXT\",\"content\":\"Keep\","
+                        + "\"sequence_order\":2147483647}");
+        assertThat(maximum.statusCode()).isEqualTo(201);
+        List<Map<String, Object>> before = jdbcTemplate.queryForList(
+                "SELECT * FROM material WHERE lesson_id = ?", lessonId);
+        List<Path> beforeFiles;
+        try (Stream<Path> files = Files.list(STORAGE_DIRECTORY)) { beforeFiles = files.sorted().toList(); }
+
+        HttpResponse<String> response = uploadMaterial(lessonId, tutorToken,
+                "{\"title\":\"Rejected append\",\"material_type\":\"DOCUMENT\"}", "valid.pdf", PDF_BYTES);
+
+        assertThat(response.statusCode()).isEqualTo(409);
+        assertThat(jdbcTemplate.queryForList("SELECT * FROM material WHERE lesson_id = ?", lessonId))
+                .isEqualTo(before);
+        try (Stream<Path> files = Files.list(STORAGE_DIRECTORY)) {
+            assertThat(files.sorted().toList()).isEqualTo(beforeFiles);
+        }
+    }
+
+    @ParameterizedTest
+    @MethodSource("uploadFailureTiming")
+    void failedFlushOrDeferredCommitCleansOnlyTheNewUpload(boolean deferred) throws Exception {
+        UUID lessonId = createLesson(createChapter("{\"title\":\"Basics\"}"));
+        HttpResponse<String> existing = uploadMaterial(lessonId, tutorToken,
+                "{\"title\":\"Keep\",\"material_type\":\"DOCUMENT\"}", "keep.pdf", PDF_BYTES);
+        assertThat(existing.statusCode()).isEqualTo(201);
+        String key = json(existing).get("file_url").asString().replace("/api/v1/materials/files/", "");
+        String identifier = "reject_upload_" + UUID.randomUUID().toString().replace("-", "");
+        String title = "Rejected-" + identifier;
+        jdbcTemplate.execute("CREATE FUNCTION " + identifier + "() RETURNS trigger LANGUAGE plpgsql AS $$ "
+                + "BEGIN IF NEW.title = '" + title + "' THEN RAISE EXCEPTION 'fixture rejection' "
+                + "USING ERRCODE = '23514'; END IF; RETURN NEW; END $$");
+        try {
+            jdbcTemplate.execute((deferred ? "CREATE CONSTRAINT TRIGGER " : "CREATE TRIGGER ")
+                    + identifier + (deferred ? " AFTER INSERT ON material DEFERRABLE INITIALLY DEFERRED "
+                    : " BEFORE INSERT ON material ")
+                    + "FOR EACH ROW EXECUTE FUNCTION " + identifier + "()");
+            HttpResponse<String> rejected = uploadMaterial(lessonId, tutorToken,
+                    "{\"title\":\"" + title + "\",\"material_type\":\"DOCUMENT\"}", "new.pdf", PDF_BYTES);
+            assertThat(rejected.statusCode()).isEqualTo(409);
+            assertThat(materials(lessonId)).hasSize(1);
+            assertThat(STORAGE_DIRECTORY.resolve(key)).hasBinaryContent(PDF_BYTES);
+            try (Stream<Path> files = Files.list(STORAGE_DIRECTORY)) {
+                assertThat(files.toList()).containsExactly(STORAGE_DIRECTORY.resolve(key));
+            }
+        } finally {
+            jdbcTemplate.execute("DROP TRIGGER IF EXISTS " + identifier + " ON material");
+            jdbcTemplate.execute("DROP FUNCTION " + identifier + "()");
+        }
+    }
+
+    private static Stream<Boolean> uploadFailureTiming() { return Stream.of(false, true); }
+
+    @ParameterizedTest
+    @CsvSource({"valid-encrypted.pdf,DOCUMENT", "valid.pdf,DOCUMENT", "valid.docx,DOCUMENT", "valid.pptx,DOCUMENT", "valid.mp4,VIDEO",
+            "valid-h264.mp4,VIDEO", "valid.webm,VIDEO", "valid-vp9.webm,VIDEO"})
+    void realSupportedUploadsPersistAndDownloadIdenticalBytes(String fixture, String type) throws Exception {
+        UUID lessonId = createLesson(createChapter("{\"title\":\"Basics\"}"));
+        byte[] bytes = MaterialFiles.read(fixture);
+        HttpResponse<String> uploaded = uploadMaterial(lessonId, tutorToken,
+                "{\"title\":\"Valid fixture\",\"material_type\":\"" + type + "\"}", "misleading.exe", bytes);
+        assertThat(uploaded.statusCode()).isEqualTo(201);
+        assertThat(materials(lessonId)).hasSize(1);
+        HttpResponse<byte[]> downloaded = getRaw(json(uploaded).get("file_url").asString(), studentToken);
+        assertThat(downloaded.statusCode()).isEqualTo(200);
+        assertThat(downloaded.body()).containsExactly(bytes);
+    }
+
+    @ParameterizedTest
+    @MethodSource("invalidUploadedFiles")
+    void malformedUploadsRejectWithoutChangingRowsFilesOrClassAudit(MaterialFiles.InvalidFile fixture)
+            throws Exception {
+        UUID lessonId = createLesson(createChapter("{\"title\":\"Basics\"}"));
+        Map<String, Object> before = jdbcTemplate.queryForMap("SELECT * FROM class WHERE class_id = ?", classId);
+        List<Path> beforeFiles;
+        try (Stream<Path> files = Files.list(STORAGE_DIRECTORY)) { beforeFiles = files.sorted().toList(); }
+        HttpResponse<String> response = uploadMaterial(lessonId, tutorToken,
+                "{\"title\":\"Rejected media\",\"material_type\":\"" + fixture.type() + "\"}",
+                "claimed.pdf", fixture.bytes());
+        assertThat(response.statusCode()).isEqualTo(415);
+        assertThat(json(response).get("code").asString()).isEqualTo("UNSUPPORTED_MEDIA_TYPE");
+        assertThat(materials(lessonId)).isEmpty();
+        assertThat(jdbcTemplate.queryForMap("SELECT * FROM class WHERE class_id = ?", classId)).isEqualTo(before);
+        try (Stream<Path> files = Files.list(STORAGE_DIRECTORY)) {
+            assertThat(files.sorted().toList()).isEqualTo(beforeFiles);
+        }
+    }
+
+    private static Stream<MaterialFiles.InvalidFile> invalidUploadedFiles() {
+        return MaterialFiles.invalidFiles().stream();
     }
 
     private List<Chapter> chapters() {

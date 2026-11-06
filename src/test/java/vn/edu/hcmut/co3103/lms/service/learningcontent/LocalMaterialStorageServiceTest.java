@@ -1,6 +1,10 @@
 package vn.edu.hcmut.co3103.lms.service.learningcontent;
 
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.MethodSource;
+import org.junit.jupiter.params.provider.CsvSource;
+import vn.edu.hcmut.co3103.lms.support.MaterialFiles;
 import org.junit.jupiter.api.io.TempDir;
 import org.springframework.http.HttpStatus;
 import org.springframework.mock.web.MockMultipartFile;
@@ -29,7 +33,7 @@ class LocalMaterialStorageServiceTest {
     void storesPdfBasedOnFileContentAndIgnoresTheSubmittedExtension() throws IOException {
         LocalMaterialStorageService storage = new LocalMaterialStorageService(temporaryDirectory);
         MockMultipartFile upload = new MockMultipartFile("file", "payload.exe", "application/octet-stream",
-                "%PDF-1.7 test".getBytes());
+                MaterialFiles.read("valid.pdf"));
 
         LocalMaterialStorageService.StoredFile stored = storage.store(upload, Material.MaterialType.DOCUMENT);
 
@@ -74,37 +78,46 @@ class LocalMaterialStorageServiceTest {
         assertThrows(ResponseStatusException.class, () -> storage.resolve("00000000-0000-0000-0000-000000000000.exe"));
     }
 
-    @Test
-    void acceptsIsoBrandsThatActuallyCarryVideoAndStoresThemAsMp4() throws IOException {
+    @ParameterizedTest
+    @CsvSource({"valid-encrypted.pdf,DOCUMENT,application/pdf", "valid.pdf,DOCUMENT,application/pdf", "valid.docx,DOCUMENT,application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+            "valid.pptx,DOCUMENT,application/vnd.openxmlformats-officedocument.presentationml.presentation",
+            "valid.mp4,VIDEO,video/mp4", "valid-h264.mp4,VIDEO,video/mp4",
+            "valid.webm,VIDEO,video/webm", "valid-vp9.webm,VIDEO,video/webm"})
+    void storesRealSupportedFormatsWithoutTrustingSubmittedNameOrMime(String fixture,
+            Material.MaterialType type, String mime) throws IOException {
         LocalMaterialStorageService storage = new LocalMaterialStorageService(temporaryDirectory);
-        byte[] ftyp = mp4Header("isom", "isom", "mp42", "avc1");
+        byte[] bytes = MaterialFiles.read(fixture);
+        var stored = storage.store(new MockMultipartFile("file", "misleading.exe", "application/octet-stream", bytes), type);
+        assertEquals(mime, stored.mimeType());
+        assertEquals(bytes.length, stored.size());
+        org.junit.jupiter.api.Assertions.assertArrayEquals(bytes, Files.readAllBytes(storage.resolve(stored.key())));
+    }
 
-        LocalMaterialStorageService.StoredFile stored = storage.store(
-                videoUpload("clip.mp4", ftyp), Material.MaterialType.VIDEO);
+    @ParameterizedTest
+    @MethodSource("invalidFiles")
+    void rejectsMalformedOrUnsupportedContentWithoutLeavingAFile(MaterialFiles.InvalidFile fixture) throws IOException {
+        LocalMaterialStorageService storage = new LocalMaterialStorageService(temporaryDirectory);
+        var exception = assertThrows(ResponseStatusException.class, () -> storage.store(
+                new MockMultipartFile("file", "claimed.pdf", "application/pdf", fixture.bytes()), fixture.type()));
+        assertEquals(HttpStatus.UNSUPPORTED_MEDIA_TYPE, exception.getStatusCode());
+        assertEquals("UNSUPPORTED_MEDIA_TYPE", exception.getReason());
+        try (var files = Files.list(temporaryDirectory)) { assertEquals(0, files.count()); }
+    }
 
-        assertTrue(stored.key().endsWith(".mp4"));
-        assertEquals("video/mp4", stored.mimeType());
+    static java.util.stream.Stream<MaterialFiles.InvalidFile> invalidFiles() {
+        return MaterialFiles.invalidFiles().stream();
     }
 
     @Test
-    void rejectsContainersThatShareTheMp4MagicButAreNotVideo() throws IOException {
-        LocalMaterialStorageService storage = new LocalMaterialStorageService(temporaryDirectory);
-
-        assertUnsupportedVideo(mp4Header("qt  ", "qt  "));
-        assertUnsupportedVideo(mp4Header("M4A ", "M4A ", "mp42"));
-        assertUnsupportedVideo(mp4Header("3gp5", "3gp5"));
-    }
-
-    @Test
-    void distinguishesWebmFromMatroskaByItsDocType() throws IOException {
-        LocalMaterialStorageService storage = new LocalMaterialStorageService(temporaryDirectory);
-
-        LocalMaterialStorageService.StoredFile stored = storage.store(
-                videoUpload("clip.webm", ebmlHeader("webm")), Material.MaterialType.VIDEO);
-        assertTrue(stored.key().endsWith(".webm"));
-        assertEquals("video/webm", stored.mimeType());
-
-        assertUnsupportedVideo(ebmlHeader("matroska"));
+    void missingVideoProbeFailsClosedAndRemovesPartialUpload() throws IOException {
+        LocalMaterialStorageService storage = new LocalMaterialStorageService(temporaryDirectory,
+                new MaterialContentValidator(temporaryDirectory.resolve("missing-ffprobe").toString()));
+        var error = assertThrows(ResponseStatusException.class, () -> storage.store(
+                new MockMultipartFile("file", "valid.mp4", "video/mp4", MaterialFiles.read("valid.mp4")),
+                Material.MaterialType.VIDEO));
+        assertEquals(HttpStatus.INTERNAL_SERVER_ERROR, error.getStatusCode());
+        assertEquals("FILE_STORAGE_FAILED", error.getReason());
+        try (var files = Files.list(temporaryDirectory)) { assertEquals(0, files.count()); }
     }
 
     @Test
@@ -113,44 +126,6 @@ class LocalMaterialStorageServiceTest {
 
         assertThrows(ResponseStatusException.class,
                 () -> storage.resolve("------------------------------------------------.pdf"));
-    }
-
-    private void assertUnsupportedVideo(byte[] body) {
-        LocalMaterialStorageService storage = new LocalMaterialStorageService(temporaryDirectory);
-        ResponseStatusException exception = assertThrows(ResponseStatusException.class,
-                () -> storage.store(videoUpload("clip.bin", body), Material.MaterialType.VIDEO));
-        assertEquals(HttpStatus.UNSUPPORTED_MEDIA_TYPE, exception.getStatusCode());
-    }
-
-    private MockMultipartFile videoUpload(String name, byte[] body) {
-        return new MockMultipartFile("file", name, "video/mp4", body);
-    }
-
-    private static byte[] mp4Header(String majorBrand, String... compatibleBrands) {
-        int size = 8 + 4 + 4 + compatibleBrands.length * 4;
-        byte[] header = new byte[size];
-        header[0] = (byte) (size >>> 24);
-        header[1] = (byte) (size >>> 16);
-        header[2] = (byte) (size >>> 8);
-        header[3] = (byte) size;
-        System.arraycopy("ftyp".getBytes(), 0, header, 4, 4);
-        System.arraycopy(majorBrand.getBytes(), 0, header, 8, 4);
-        System.arraycopy(new byte[4], 0, header, 12, 4);
-        int offset = 16;
-        for (String brand : compatibleBrands) {
-            System.arraycopy(brand.getBytes(), 0, header, offset, 4);
-            offset += 4;
-        }
-        return header;
-    }
-
-    private static byte[] ebmlHeader(String docType) {
-        byte[] body = new byte[16 + docType.length()];
-        body[0] = 0x1a; body[1] = 0x45; body[2] = (byte) 0xdf; body[3] = (byte) 0xa3;
-        body[4] = (byte) 0x8f;
-        System.arraycopy(new byte[]{0x42, (byte) 0x82, (byte) (0x80 + docType.length())}, 0, body, 8, 3);
-        System.arraycopy(docType.getBytes(), 0, body, 11, docType.length());
-        return body;
     }
 
     @Test

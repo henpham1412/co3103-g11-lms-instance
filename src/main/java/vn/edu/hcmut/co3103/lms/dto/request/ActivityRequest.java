@@ -11,6 +11,7 @@ import vn.edu.hcmut.co3103.lms.entity.Activity;
 import vn.edu.hcmut.co3103.lms.entity.Chapter;
 
 import java.util.LinkedHashMap;
+import java.util.Collections;
 import java.util.Map;
 
 /**
@@ -50,7 +51,7 @@ public class ActivityRequest {
     public Activity.ActivityType activity_type() { return activityType; }
     public Integer sequence_order() { return sequenceOrder; }
     public Chapter.VisibilityStatus status() { return status; }
-    public Map<String, Object> extraFields() { return Map.copyOf(extraFields); }
+    public Map<String, Object> extraFields() { return Collections.unmodifiableMap(extraFields); }
 
     public boolean carriesAssessmentConfiguration() {
         return extraFields.containsKey("quiz") || extraFields.containsKey("assignment");

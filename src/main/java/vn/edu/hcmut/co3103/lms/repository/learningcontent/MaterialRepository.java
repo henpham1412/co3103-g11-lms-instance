@@ -16,6 +16,10 @@ public interface MaterialRepository extends JpaRepository<Material, UUID> {
     Optional<Material> findByFileUrl(String fileUrl);
     boolean existsByFileUrlAndMaterialIdNot(String fileUrl, UUID materialId);
 
+    @Query("select c.classId from Material m, Lesson l, Chapter c where m.materialId = :materialId "
+            + "and m.lessonId = l.lessonId and l.chapterId = c.chapterId")
+    Optional<UUID> findClassIdByMaterialId(@Param("materialId") UUID materialId);
+
     @Query("select coalesce(max(m.sequenceOrder) + 1, 0) from Material m where m.lessonId = :lessonId")
     int nextSequenceOrderForLesson(@Param("lessonId") UUID lessonId);
 }

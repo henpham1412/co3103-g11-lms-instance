@@ -14,6 +14,9 @@ public interface ChapterRepository extends JpaRepository<Chapter, UUID> {
     Optional<Chapter> findByChapterIdAndClassId(UUID chapterId, UUID classId);
     boolean existsByClassIdAndChapterId(UUID classId, UUID chapterId);
 
+    @Query("select c.classId from Chapter c where c.chapterId = :chapterId")
+    Optional<UUID> findClassIdByChapterId(@Param("chapterId") UUID chapterId);
+
     @Query("select coalesce(max(c.sequenceOrder) + 1, 0) from Chapter c where c.classId = :classId")
     int nextSequenceOrderForClass(@Param("classId") UUID classId);
 }

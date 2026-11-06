@@ -15,6 +15,10 @@ public interface ActivityRepository extends JpaRepository<Activity, UUID> {
     List<Activity> findByLessonIdAndStatusOrderBySequenceOrderAsc(UUID lessonId, Chapter.VisibilityStatus status);
     Optional<Activity> findByActivityIdAndLessonId(UUID activityId, UUID lessonId);
 
+    @Query("select c.classId from Activity a, Lesson l, Chapter c where a.activityId = :activityId "
+            + "and a.lessonId = l.lessonId and l.chapterId = c.chapterId")
+    Optional<UUID> findClassIdByActivityId(@Param("activityId") UUID activityId);
+
     @Query("select coalesce(max(a.sequenceOrder) + 1, 0) from Activity a where a.lessonId = :lessonId")
     int nextSequenceOrderForLesson(@Param("lessonId") UUID lessonId);
 }
