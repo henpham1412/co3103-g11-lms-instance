@@ -1,0 +1,89 @@
+Purpose: Define the API contracts required to implement the MVP. This document specifies endpoints, access requirements, request/response shapes, and important error cases. Database queries and internal service implementation are out of scope.
+1. API Convention
+1.1 Base URLs
+All endpoints use the /api/v1 path prefix. The system has two separate API hosts:
+Central Identity base URL: serves centralized registration, authentication, password recovery, and global profile APIs.
+LMS base URL: serves class, content, assessment, progress, interaction, notification, and local administration APIs for one LMS instance.
+Examples below show paths relative to the appropriate base URL. Central Identity and each LMS instance use separate databases.
+1.2 HTTP Methods
+GET — Retrieve a resource or list.
+POST — Create a resource or execute an action.
+PUT — Create or replace a resource representation where the endpoint defines replacement semantics.
+PATCH — Partially update a resource.
+DELETE — Remove a resource or perform a defined reversible state change. For class membership, DELETE changes the membership status; it does not physically delete the membership record.
+1.3 Endpoint Naming
+Use lowercase plural resource names and resource IDs in paths. Use query parameters for pagination, filtering, and sorting.
+Examples:
+GET /classes
+GET /classes/{classId}
+POST /classes
+PATCH /classes/{classId}
+GET /learning-progress
+IDs in path parameters are UUIDs unless stated otherwise.
+1.4 Authentication
+Protected LMS APIs require a valid Bearer access token:
+Authorization: Bearer <access_token>
+Registration, login, and password recovery endpoints on Central Identity are public. Central Identity checks the global account status during authentication and access-token issuance. Only accounts with global status ACTIVE may authenticate successfully and receive a new access token.
+The MVP uses stateless, signed JWT access tokens containing an expiration claim (exp). Each LMS validates the JWT signature and expiration locally and then performs local access-status, role, membership, and resource-level permission checks. The LMS does not re-check the global account status against Central Identity on every protected request.
+A token proves the authenticated global identity; it does not by itself grant access to an LMS instance, establish a local LMS role, or grant membership in a class. Previously issued tokens may remain valid until expiration after logout, password reset, or a global account status change.
+1.5 Authorization
+Supported local LMS roles are:
+STUDENT
+TUTOR
+ADMINISTRATOR
+Role names in the prose use Student, Tutor, and Administrator. Each endpoint also applies resource-level checks. For example, a Tutor may manage only classes they own; a Student may access learning resources only with an ACTIVE membership; and an Administrator manages local access and administration in the current LMS instance.
+1.6 Request and Response Format
+Use JSON (application/json) for standard request and response bodies. File uploads use multipart/form-data where specified. Use snake_case for JSON fields, consistent with the database design.
+Example request:
+{
+  "title": "Java OOP",
+  "description": "Object-oriented programming basics"
+}
+Dates and times use ISO 8601 timestamps with a timezone, preferably UTC in API responses, such as 2026-10-14T08:30:00Z.
+1.7 HTTP Status Codes
+Use only the status codes relevant to the endpoint:
+200 OK — Request succeeded.
+201 Created — Resource created.
+204 No Content — Request succeeded with no response body.
+400 Bad Request — Invalid request fields or parameters.
+401 Unauthorized — Missing, invalid, or expired access token; invalid credentials where applicable.
+403 Forbidden — Authenticated user lacks the required role, membership, or permission.
+404 Not Found — Resource does not exist or is not available to the caller.
+409 Conflict — Operation conflicts with current state, capacity, unique constraints, assessment restrictions, or retained dependent records.
+413 Payload Too Large — Upload exceeds the maximum allowed file size.
+415 Unsupported Media Type — Unsupported file/media type.
+423 Locked — Login temporarily locked according to the authentication policy.
+500 Internal Server Error — Unexpected server-side failure.
+429 Too Many Requests — The client has exceeded the applicable request rate limit.
+503 Service Unavailable — The service is temporarily unable to accept or process the request.
+1.8 Error Response
+Return errors using one consistent JSON shape:
+{
+  "code": "RESOURCE_NOT_FOUND",
+  "message": "Class not found",
+  "details": []
+}
+code is a stable machine-readable error code. message is a concise explanation suitable for the client. details is optional and may identify validation fields. Do not return stack traces, password hashes, reset-token hashes, secrets, or internal database details.
+For rate-limited or temporarily unavailable endpoints,
+the server may include a Retry-After HTTP response header
+indicating when the client may retry.
+The Retry-After header does not replace the standard
+JSON error response. The response must retain the stable
+machine-readable error code and message.
+1.9 Pagination, Filtering, and Sorting
+List endpoints may accept:
+page — 1-based page number; default 1.
+size — Page size; defaults may be endpoint-specific, with a maximum enforced by the server.
+sort — Supported sort field and direction, for example created_at,desc.
+Resource-specific filters, such as status, class_id, type, or q.
+Example: GET /classes?page=1&size=12&sort=created_at,desc.
+Paginated responses use a consistent envelope:
+{
+  "items": [],
+  "page": 1,
+  "size": 12,
+  "total_items": 0,
+  "total_pages": 0
+}
+1.10 API Documentation Requirements
+Each endpoint should document method, path, purpose, authentication/role, request inputs, success response, and important error cases. The examples in this document illustrate the agreed contract; optional fields may be omitted where not relevant.
