@@ -45,7 +45,6 @@ class QuizQuestionServiceOptionUpdateTest {
     private final UUID survivingOptionId = UUID.randomUUID();
 
     private QuizQuestionService service;
-    private Question question;
     private QuestionOption keptOption;
     private QuestionOption removedOption;
     private QuestionOption survivingOption;
@@ -56,12 +55,12 @@ class QuizQuestionServiceOptionUpdateTest {
         service = new QuizQuestionService(quizRepository, questionRepository, optionRepository,
                 attemptRepository, mock(QuizConfigurationAccessService.class), mock(QuizGradingService.class));
 
-        Activity activity = new Activity();
+        Activity activity = mock(Activity.class);
         Quiz quiz = new Quiz();
         quiz.setId(quizId);
         quiz.setActivity(activity);
 
-        question = new Question();
+        Question question = new Question();
         question.setId(questionId);
         question.setQuiz(quiz);
         question.setQuestionType("MCQ_SINGLE");

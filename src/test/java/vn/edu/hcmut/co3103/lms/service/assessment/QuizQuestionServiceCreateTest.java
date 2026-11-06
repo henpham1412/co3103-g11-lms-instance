@@ -33,7 +33,7 @@ class QuizQuestionServiceCreateTest {
         UUID userId = UUID.randomUUID();
         Quiz quiz = new Quiz();
         quiz.setId(UUID.randomUUID());
-        quiz.setActivity(new Activity());
+        Activity activity = mock(Activity.class);
         when(quizRepository.findLockedByActivity_Id(activityId)).thenReturn(java.util.Optional.of(quiz));
         when(attemptRepository.existsByQuiz_Id(quiz.getId())).thenReturn(false);
         when(questionRepository.existsByQuiz_IdAndOrderIndex(quiz.getId(), 0)).thenReturn(false);
