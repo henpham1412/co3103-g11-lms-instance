@@ -39,7 +39,9 @@ public class QuizQuestionService {
         if (attemptRepository.existsByQuiz_Id(quiz.getId())) {
             throw new ResponseStatusException(HttpStatus.CONFLICT, "QUESTION_EDIT_LOCKED");
         }
-        validateQuestion(request);
+        BigDecimal pointsDeducted = request == null || request.pointsDeducted() == null
+                ? BigDecimal.ZERO : request.pointsDeducted();
+        validateQuestion(request, pointsDeducted);
         if (questionRepository.existsByQuiz_IdAndOrderIndex(quiz.getId(), request.orderIndex())) {
             throw invalidQuestion();
         }
@@ -49,7 +51,7 @@ public class QuizQuestionService {
         question.setQuestionType(request.questionType());
         question.setContent(request.content().trim());
         question.setPointsAwarded(request.pointsAwarded());
-        question.setPointsDeducted(request.pointsDeducted());
+        question.setPointsDeducted(pointsDeducted);
         question.setOrderIndex(request.orderIndex());
         Question savedQuestion = questionRepository.save(question);
 
@@ -212,10 +214,10 @@ public class QuizQuestionService {
         return new ResponseStatusException(HttpStatus.CONFLICT, "QUESTION_EDIT_LOCKED");
     }
 
-    private void validateQuestion(QuestionCreateRequest request) {
+    private void validateQuestion(QuestionCreateRequest request, BigDecimal pointsDeducted) {
         if (request == null || request.options() == null) throw invalidQuestion();
         validateQuestion(request.questionType(), request.content(), request.pointsAwarded(),
-                request.pointsDeducted(), request.orderIndex(), request.options().stream()
+                pointsDeducted, request.orderIndex(), request.options().stream()
                         .map(option -> option == null ? null : new QuestionUpdateRequest.Option(null,
                                 option.content(), option.isCorrect(), option.orderIndex())).toList(), null, null);
         if (request.skillTopicIds() != null && !request.skillTopicIds().isEmpty()) {
