@@ -15,6 +15,24 @@ public final class ThumbnailImages {
     public static byte[] jpeg() { return read("jpg"); }
     public static byte[] webp() { return read("webp"); }
 
+    public record DimensionImage(String fileName, String mimeType, boolean accepted) {
+        public byte[] bytes() { return readResource("/images/dimensions/" + fileName); }
+    }
+
+    public static List<DimensionImage> dimensionImages() {
+        var images = new java.util.ArrayList<DimensionImage>();
+        for (String dimensions : List.of("3840x2160", "4096x2048", "4096x2049", "4097x1000", "1000x4097")) {
+            boolean accepted = dimensions.equals("3840x2160") || dimensions.equals("4096x2048");
+            for (String extension : List.of("png", "jpg", "webp")) {
+                images.add(new DimensionImage(dimensions + "." + extension,
+                        "image/" + (extension.equals("jpg") ? "jpeg" : extension), accepted));
+            }
+        }
+        // Stream-compressed fixture: valid 100 MP PNG, only about 285 KiB on disk.
+        images.add(new DimensionImage("10000x10000.png", "image/png", false));
+        return List.copyOf(images);
+    }
+
     public record InvalidImage(String mimeType, byte[] bytes) { }
 
     public static List<InvalidImage> invalidImages() {
@@ -56,7 +74,11 @@ public final class ThumbnailImages {
     }
 
     private static byte[] read(String extension) {
-        try (var stream = ThumbnailImages.class.getResourceAsStream("/images/thumbnail-valid." + extension)) {
+        return readResource("/images/thumbnail-valid." + extension);
+    }
+
+    private static byte[] readResource(String path) {
+        try (var stream = ThumbnailImages.class.getResourceAsStream(path)) {
             if (stream == null) throw new IllegalStateException("Missing image fixture");
             return stream.readAllBytes();
         } catch (IOException exception) {

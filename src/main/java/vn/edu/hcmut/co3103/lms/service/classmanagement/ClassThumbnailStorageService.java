@@ -25,6 +25,8 @@ import javax.imageio.stream.MemoryCacheImageInputStream;
 @Service
 public class ClassThumbnailStorageService {
     public static final long MAX_BYTES = 5L * 1024 * 1024;
+    private static final int MAX_DIMENSION = 4096;
+    private static final long MAX_PIXELS = 8_388_608L;
 
     private final Path root;
     private final String publicBaseUrl;
@@ -156,6 +158,13 @@ public class ClassThumbnailStorageService {
             try {
                 reader.addIIOReadWarningListener((source, warning) -> { throw invalidFile(); });
                 reader.setInput(input);
+                int width = reader.getWidth(0);
+                int height = reader.getHeight(0);
+                long totalPixels = (long) width * height;
+                if (width <= 0 || height <= 0 || width > MAX_DIMENSION || height > MAX_DIMENSION
+                        || totalPixels > MAX_PIXELS) {
+                    throw invalidFile();
+                }
                 if (reader.read(0) == null) throw invalidFile();
             } finally {
                 reader.dispose();

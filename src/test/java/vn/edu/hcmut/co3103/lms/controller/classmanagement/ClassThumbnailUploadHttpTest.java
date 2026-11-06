@@ -117,6 +117,55 @@ class ClassThumbnailUploadHttpTest {
         return ThumbnailImages.invalidImages().stream();
     }
 
+    static Stream<ThumbnailImages.DimensionImage> allowedDimensions() {
+        return ThumbnailImages.dimensionImages().stream().filter(ThumbnailImages.DimensionImage::accepted);
+    }
+
+    static Stream<ThumbnailImages.DimensionImage> excessiveDimensions() {
+        return ThumbnailImages.dimensionImages().stream().filter(image -> !image.accepted());
+    }
+
+    @ParameterizedTest
+    @MethodSource("allowedDimensions")
+    void acceptsFourKAndExactPixelBoundaryImages(ThumbnailImages.DimensionImage image) throws Exception {
+        LmsUserAccess tutor = saveUser(LmsRole.TUTOR);
+        UUID classId = saveClass(tutor.getUserId());
+        byte[] bytes = image.bytes();
+        HttpResponse<String> response = upload(classId, bearer(tutor), image.fileName(), bytes, image.mimeType());
+        assertThat(response.statusCode()).isEqualTo(200);
+        String url = objectMapper.readTree(response.body()).get("thumbnail_url").asString();
+        assertThat(jdbc.queryForObject("SELECT thumbnail_url FROM class WHERE class_id = ?", String.class, classId))
+                .isEqualTo(url);
+        String fileName = url.substring(url.lastIndexOf('/') + 1);
+        HttpResponse<byte[]> served = get(PUBLIC_PATH + fileName);
+        assertThat(served.statusCode()).isEqualTo(200);
+        assertThat(served.body()).containsExactly(bytes);
+    }
+
+    @ParameterizedTest
+    @MethodSource("excessiveDimensions")
+    void rejectsDimensionAndPixelExcessWithoutChangingDatabaseOrFiles(ThumbnailImages.DimensionImage image)
+            throws Exception {
+        LmsUserAccess tutor = saveUser(LmsRole.TUTOR);
+        UUID classId = saveClass(tutor.getUserId());
+        String token = bearer(tutor);
+        assertThat(upload(classId, token, "original.png", PNG).statusCode()).isEqualTo(200);
+        var before = jdbc.queryForMap("SELECT * FROM class WHERE class_id = ?", classId);
+        List<Path> filesBefore;
+        try (var files = Files.list(STORAGE_DIRECTORY)) { filesBefore = files.sorted().toList(); }
+
+        var rejected = upload(classId, token, image.fileName(), image.bytes(), image.mimeType());
+
+        assertThat(rejected.statusCode()).isEqualTo(400);
+        assertThat(objectMapper.readTree(rejected.body()).get("code").asString()).isEqualTo("INVALID_FILE");
+        assertThat(jdbc.queryForMap("SELECT * FROM class WHERE class_id = ?", classId)).isEqualTo(before);
+        try (var files = Files.list(STORAGE_DIRECTORY)) {
+            assertThat(files.sorted().toList()).isEqualTo(filesBefore);
+        }
+        assertThat(filesBefore).hasSize(1);
+        assertThat(filesBefore.getFirst()).hasBinaryContent(PNG);
+    }
+
     @ParameterizedTest
     @MethodSource("invalidImages")
     void malformedImagesDoNotReplacePersistedThumbnailOrChangeTimestamp(ThumbnailImages.InvalidImage image)
