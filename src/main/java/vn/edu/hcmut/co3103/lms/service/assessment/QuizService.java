@@ -23,7 +23,7 @@ public class QuizService {
 
     @Transactional(readOnly = true)
     public QuizConfigurationResponse getQuizConfiguration(UUID activityId, UUID userId) {
-        Quiz quiz = quizRepository.findByActivity_Id(activityId)
+        Quiz quiz = quizRepository.findByActivity_ActivityId(activityId)
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "QUIZ_NOT_FOUND"));
         accessService.requireCanView(quiz.getActivity(), userId);
         return new QuizConfigurationResponse(quiz.getId(), quiz.getTimeLimitMinutes(),
@@ -37,7 +37,7 @@ public class QuizService {
             UUID userId,
             QuizSettingsUpdateRequest request
     ) {
-        Quiz quiz = quizRepository.findLockedByActivity_Id(activityId)
+        Quiz quiz = quizRepository.findLockedByActivity_ActivityId(activityId)
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "QUIZ_NOT_FOUND"));
         accessService.requireOwningTutor(quiz.getActivity(), userId);
         validateUpdate(request, quiz);

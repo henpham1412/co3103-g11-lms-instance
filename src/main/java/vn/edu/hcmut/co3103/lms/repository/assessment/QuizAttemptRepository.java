@@ -18,6 +18,7 @@ public interface QuizAttemptRepository extends JpaRepository<QuizAttempt, UUID> 
     boolean existsByQuiz_Id(UUID quizId);
     List<QuizAttempt> findByQuiz_IdAndStatus(UUID quizId, String status);
     List<QuizAttempt> findByQuiz_IdAndClassMember_ClassMemberIdOrderByAttemptNumber(UUID quizId, UUID classMemberId);
+    List<QuizAttempt> findByClassMember_ClassMemberId(UUID classMemberId);
     Page<QuizAttempt> findByQuiz_Id(UUID quizId, Pageable pageable);
 
     @Query("select attempt.quiz.id from QuizAttempt attempt where attempt.id = :attemptId")

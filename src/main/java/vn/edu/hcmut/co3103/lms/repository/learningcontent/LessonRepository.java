@@ -15,6 +15,14 @@ public interface LessonRepository extends JpaRepository<Lesson, UUID> {
     Optional<Lesson> findByLessonIdAndChapterId(UUID lessonId, UUID chapterId);
     boolean existsByChapterIdAndLessonId(UUID chapterId, UUID lessonId);
 
+    @Query("select l from Lesson l, Chapter c where l.chapterId = c.chapterId "
+            + "and c.classId = :classId and c.status = :published and l.status = :published "
+            + "order by c.sequenceOrder, l.sequenceOrder")
+    List<Lesson> findEligibleLessons(
+            @Param("classId") UUID classId,
+            @Param("published") Chapter.VisibilityStatus published
+    );
+
     @Query("select coalesce(max(l.sequenceOrder) + 1, 0) from Lesson l where l.chapterId = :chapterId")
     int nextSequenceOrderForChapter(@Param("chapterId") UUID chapterId);
 }

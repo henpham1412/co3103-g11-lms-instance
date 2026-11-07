@@ -7,17 +7,17 @@ import org.springframework.test.util.ReflectionTestUtils;
 import org.springframework.web.server.ResponseStatusException;
 import vn.edu.hcmut.co3103.lms.entity.Class;
 import vn.edu.hcmut.co3103.lms.entity.ClassMember;
+import vn.edu.hcmut.co3103.lms.repository.LmsUserAccessRepository;
 import vn.edu.hcmut.co3103.lms.repository.classmanagement.ClassMemberRepository;
 import vn.edu.hcmut.co3103.lms.repository.classmanagement.ClassRepository;
+import vn.edu.hcmut.co3103.lms.repository.learningcontent.CompletionMarkRepository;
+import vn.edu.hcmut.co3103.lms.repository.learningcontent.LessonRepository;
 
 import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
 
-import static org.junit.jupiter.api.Assertions.assertEquals;
-import static org.junit.jupiter.api.Assertions.assertFalse;
-import static org.junit.jupiter.api.Assertions.assertThrows;
-import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
@@ -30,7 +30,10 @@ class ClassMembershipServiceTest {
     private final ClassMemberRepository classMemberRepository = mock(ClassMemberRepository.class);
     private final ClassMembershipService service = new ClassMembershipService(
             classRepository,
-            classMemberRepository
+            classMemberRepository,
+            mock(LmsUserAccessRepository.class),
+            mock(LessonRepository.class),
+            mock(CompletionMarkRepository.class)
     );
 
     private final UUID classId = UUID.randomUUID();
@@ -144,7 +147,7 @@ class ClassMembershipServiceTest {
         ClassMember result = service.approveJoinRequest(classId, pending.getClassMemberId(), tutorId);
 
         assertEquals(ClassMember.MembershipStatus.ACTIVE, result.getStatus());
-        assertTrue(result.getJoinedAt() != null);
+        assertNotNull(result.getJoinedAt());
         verify(classMemberRepository).save(pending);
     }
 

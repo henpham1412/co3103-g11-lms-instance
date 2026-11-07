@@ -7,6 +7,7 @@ import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 import vn.edu.hcmut.co3103.lms.entity.ClassMember;
 import vn.edu.hcmut.co3103.lms.entity.ClassMember.MembershipStatus;
+import vn.edu.hcmut.co3103.lms.entity.Class;
 
 import java.util.List;
 import java.util.Optional;
@@ -69,6 +70,31 @@ public interface ClassMemberRepository
     List<ClassMember> findByStudentIdAndStatusInOrderByRequestedAtDesc(
             UUID studentId,
             java.util.Collection<MembershipStatus> statuses
+    );
+
+    @Query(value = """
+            SELECT cm.*
+            FROM class_member cm
+            JOIN class c ON c.class_id = cm.class_id
+            WHERE cm.student_id = :studentId
+              AND cm.status IN ('ACTIVE', 'PENDING', 'INACTIVE')
+              AND (:classStatus IS NULL OR c.status = :classStatus)
+            ORDER BY c.created_at DESC, cm.requested_at DESC NULLS LAST, cm.class_member_id
+            """,
+            countQuery = """
+                    SELECT COUNT(*)
+                    FROM class_member cm
+                    JOIN class c ON c.class_id = cm.class_id
+                    WHERE cm.student_id = :studentId
+                      AND cm.status IN ('ACTIVE', 'PENDING', 'INACTIVE')
+                      AND (:classStatus IS NULL OR c.status = :classStatus)
+                    """,
+            nativeQuery = true
+    )
+    Page<ClassMember> findStudentClassHistory(
+            @Param("studentId") UUID studentId,
+            @Param("classStatus") String classStatus,
+            Pageable pageable
     );
 
     long countByClassIdAndStatus(

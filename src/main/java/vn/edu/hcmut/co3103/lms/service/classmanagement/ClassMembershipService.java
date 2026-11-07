@@ -9,6 +9,14 @@ import org.springframework.web.server.ResponseStatusException;
 import vn.edu.hcmut.co3103.lms.entity.Class;
 import vn.edu.hcmut.co3103.lms.entity.ClassMember;
 import vn.edu.hcmut.co3103.lms.entity.ClassMember.MembershipStatus;
+import vn.edu.hcmut.co3103.lms.domain.LmsUserAccess;
+import vn.edu.hcmut.co3103.lms.dto.response.StudentClassPageResponse;
+import vn.edu.hcmut.co3103.lms.entity.Chapter;
+import vn.edu.hcmut.co3103.lms.entity.CompletionMark;
+import vn.edu.hcmut.co3103.lms.entity.Lesson;
+import vn.edu.hcmut.co3103.lms.repository.LmsUserAccessRepository;
+import vn.edu.hcmut.co3103.lms.repository.learningcontent.CompletionMarkRepository;
+import vn.edu.hcmut.co3103.lms.repository.learningcontent.LessonRepository;
 import vn.edu.hcmut.co3103.lms.repository.classmanagement.ClassMemberRepository;
 import vn.edu.hcmut.co3103.lms.repository.classmanagement.ClassRepository;
 
@@ -23,13 +31,22 @@ public class ClassMembershipService {
 
     private final ClassRepository classRepository;
     private final ClassMemberRepository classMemberRepository;
+    private final LmsUserAccessRepository userAccessRepository;
+    private final LessonRepository lessonRepository;
+    private final CompletionMarkRepository completionMarkRepository;
 
     public ClassMembershipService(
             ClassRepository classRepository,
-            ClassMemberRepository classMemberRepository
+            ClassMemberRepository classMemberRepository,
+            LmsUserAccessRepository userAccessRepository,
+            LessonRepository lessonRepository,
+            CompletionMarkRepository completionMarkRepository
     ) {
         this.classRepository = classRepository;
         this.classMemberRepository = classMemberRepository;
+        this.userAccessRepository = userAccessRepository;
+        this.lessonRepository = lessonRepository;
+        this.completionMarkRepository = completionMarkRepository;
     }
 
     /**
@@ -160,11 +177,62 @@ public class ClassMembershipService {
     }
 
     @Transactional(readOnly = true)
-    public List<ClassMember> listCurrentStudentMemberships(UUID studentId) {
-        return classMemberRepository.findByStudentIdAndStatusInOrderByRequestedAtDesc(
+    public org.springframework.data.domain.Page<StudentClassPageResponse.Item> listStudentClasses(
+            UUID studentId,
+            Class.ClassStatus classStatus,
+            Pageable pageable
+    ) {
+        Page<ClassMember> memberships = classMemberRepository.findStudentClassHistory(
                 studentId,
-                java.util.List.of(MembershipStatus.ACTIVE, MembershipStatus.PENDING)
+                classStatus == null ? null : classStatus.name(),
+                pageable
         );
+        return memberships.map(this::toStudentClassItem);
+    }
+
+    private StudentClassPageResponse.Item toStudentClassItem(ClassMember membership) {
+        Class targetClass = classRepository.findById(membership.getClassId()).orElseThrow();
+        LmsUserAccess tutor = userAccessRepository.findById(targetClass.getTutorId()).orElse(null);
+        StudentClassPageResponse.Tutor tutorResponse = new StudentClassPageResponse.Tutor(
+                targetClass.getTutorId(),
+                tutor == null ? null : tutor.getFullName(),
+                tutor == null ? null : tutor.getEmail()
+        );
+        StudentClassPageResponse.Progress progress = membership.getStatus() == MembershipStatus.PENDING
+                ? null
+                : calculateProgress(membership);
+        return new StudentClassPageResponse.Item(
+                targetClass.getClassId(),
+                targetClass.getClassCode(),
+                targetClass.getTitle(),
+                targetClass.getDescription(),
+                targetClass.getPrerequisitesDescription(),
+                targetClass.getThumbnailUrl(),
+                targetClass.getEnrollmentPolicy().name(),
+                targetClass.getStatus().name(),
+                membership.getStatus().name(),
+                tutorResponse,
+                progress
+        );
+    }
+
+    private StudentClassPageResponse.Progress calculateProgress(ClassMember membership) {
+        List<Lesson> eligibleLessons = lessonRepository.findEligibleLessons(
+                membership.getClassId(), Chapter.VisibilityStatus.PUBLISHED
+        );
+        java.util.Set<UUID> eligibleIds = eligibleLessons.stream()
+                .map(Lesson::getLessonId)
+                .collect(java.util.stream.Collectors.toSet());
+        long completed = completionMarkRepository.findByClassMemberId(membership.getClassMemberId())
+                .stream()
+                .map(CompletionMark::getLessonId)
+                .filter(eligibleIds::contains)
+                .distinct()
+                .count();
+        int eligible = eligibleLessons.size();
+        int percentage = eligible == 0 ? 100 : (int) Math.round(completed * 100.0 / eligible);
+        String status = eligible > 0 && completed == eligible ? "COMPLETED" : "IN_PROGRESS";
+        return new StudentClassPageResponse.Progress((int) completed, eligible, percentage, status);
     }
 
     @Transactional

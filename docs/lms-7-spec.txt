@@ -43,26 +43,52 @@ View an individual member's progress and mastery summary
 Owning Tutor
 
 4.4.2 View My Classes
-GET /me/classes?status=ACTIVE&page=1&size=20 returns active memberships and the Student's pending join requests.
-Active class entries include class information, Tutor, ACTIVE or ARCHIVED state as applicable, lesson-based progress, and derived status IN_PROGRESS or COMPLETED.
-Archived classes may appear as archived/read-only history according to the caller's membership. Pending requests do not count as active classes.
+GET /me/classes?status=ACTIVE&page=1&size=20 returns a paginated list of the Student's memberships and pending join requests. `status` filters the Class lifecycle status (`ACTIVE` or `ARCHIVED`), not the membership status; when omitted, both class statuses may appear. The default page is 1 and the default size is 20 (maximum 100). Results are ordered by class creation time descending, then most recent membership request time descending.
+Each item includes class information, Tutor, `class_status`, and `membership_status`. ACTIVE and INACTIVE memberships include lesson-based progress and derived progress status IN_PROGRESS or COMPLETED; PENDING join requests have no progress. Rejected join requests are omitted. Archived classes and former members (INACTIVE memberships) appear as read-only history. The response uses the standard paginated envelope. The endpoint replaces the earlier unpaged `{class_id, status}` response; existing callers must migrate.
 4.4.3 View Class Progress
-GET /classes/{classId}/progress returns the visible, accessible chapter/lesson outline, each lesson's completion mark, assessment statuses derived from QuizAttempt/Submission records, counts of completed and eligible lessons, progress percentage, derived class status, and the resume target.
+GET /classes/{classId}/progress returns the visible, accessible chapter/lesson outline, each lesson's completion mark, available QuizAttempt statuses, counts of completed and eligible lessons, progress percentages, derived class status, and the first incomplete lesson as its resume target. Chapters remain display groupings. Assignment status is omitted until Submission records exist.
 Example Response
 {
   "class_id": "9e496d33-8b5e-45aa-88cf-40fc6a7a0931",
   "completed_lessons": 3,
   "eligible_lessons": 8,
-  "progress_percentage": 37.5,
+  "progress_percentage": 38,
   "status": "IN_PROGRESS",
-  "chapters": [],
+  "chapters": [
+    {
+      "chapter_id": "17eab12f-6f84-4f28-a0e0-696ac7aaf439",
+      "title": "Introduction",
+      "completed_lessons": 1,
+      "eligible_lessons": 2,
+      "progress_percentage": 50,
+      "lessons": [
+        {
+          "lesson_id": "65a11d55-a23c-4a65-8ccb-76b7b7c12345",
+          "title": "Getting Started",
+          "sequence_order": 0,
+          "completed": true,
+          "marked_at": "2026-10-14T08:30:00Z",
+          "assessment_statuses": []
+        },
+        {
+          "lesson_id": "9c8d43b1-2d10-4d9a-a333-61b37ba445cd",
+          "title": "First Incomplete Lesson",
+          "sequence_order": 1,
+          "completed": false,
+          "marked_at": null,
+          "assessment_statuses": []
+        }
+      ]
+    }
+  ],
   "resume_target": {
     "target_type": "LESSON",
-    "target_id": "65a11d55-a23c-4a65-8ccb-76b7b7c12345"
+    "target_id": "9c8d43b1-2d10-4d9a-a333-61b37ba445cd",
+    "reason": "FIRST_INCOMPLETE_LESSON"
   }
 }
-The progress denominator includes visible, accessible Lessons eligible for progress calculation. Hidden or unavailable Lessons are excluded while inaccessible.
-A class is COMPLETED only when at least one eligible Lesson exists and every eligible Lesson has been marked complete.
+The progress denominator includes visible, accessible Lessons eligible for progress calculation. Hidden Chapters and Lessons are excluded. Percentages are rounded to the nearest whole number; zero eligible Lessons yields 100% progress. A class is COMPLETED only when at least one eligible Lesson exists and every eligible Lesson has been marked complete. Otherwise its status is IN_PROGRESS.
+The resume target is the first incomplete eligible Lesson in content-tree order. If no incomplete eligible Lesson remains, including when there are no eligible Lessons, the target is the class outline with reason NO_UNFINISHED_TARGET. Quiz statuses are returned for visible Quiz activities from QuizAttempt records; assignment statuses are omitted until Submission records are implemented. Archived classes and INACTIVE former memberships may read progress as history; PENDING and REJECTED memberships may not.
 4.4.4 Mark or Unmark a Lesson Complete
 PUT /classes/{classId}/lessons/{lessonId}/completion creates the completion mark. Request body is empty. Return 200 OK or 204 No Content after recalculating displayed progress.
 DELETE /classes/{classId}/lessons/{lessonId}/completion removes the mark and recalculates progress.
