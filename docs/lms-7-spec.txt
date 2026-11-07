@@ -90,13 +90,13 @@ Example Response
 The progress denominator includes visible, accessible Lessons eligible for progress calculation. Hidden Chapters and Lessons are excluded. Percentages are rounded to the nearest whole number; zero eligible Lessons yields 100% progress. A class is COMPLETED only when at least one eligible Lesson exists and every eligible Lesson has been marked complete. Otherwise its status is IN_PROGRESS.
 The resume target is the first incomplete eligible Lesson in content-tree order. If no incomplete eligible Lesson remains, including when there are no eligible Lessons, the target is the class outline with reason NO_UNFINISHED_TARGET. Quiz statuses are returned for visible Quiz activities from QuizAttempt records; assignment statuses are omitted until Submission records are implemented. Archived classes and INACTIVE former memberships may read progress as history; PENDING and REJECTED memberships may not.
 4.4.4 Mark or Unmark a Lesson Complete
-PUT /classes/{classId}/lessons/{lessonId}/completion creates the completion mark. Request body is empty. Return 200 OK or 204 No Content after recalculating displayed progress.
-DELETE /classes/{classId}/lessons/{lessonId}/completion removes the mark and recalculates progress.
-Only an active Student member may use these endpoints for visible Lessons in an active class. This API does not mark a Quiz, Assignment, Material, or Activity as complete.
+PUT /classes/{classId}/lessons/{lessonId}/completion creates or refreshes the completion mark. Request body is empty. Return 200 OK with `{ "lesson_id": "...", "completed": true, "marked_at": "..." }`.
+DELETE /classes/{classId}/lessons/{lessonId}/completion removes the mark and returns 200 OK with `{ "lesson_id": "...", "completed": false, "marked_at": null }`. Deleting a missing mark is idempotent.
+Only an active Student member may use these endpoints for Lessons whose Chapter and Lesson are both PUBLISHED in an ACTIVE class. This API does not mark a Quiz, Assignment, Material, or Activity as complete. Repeating PUT refreshes `marked_at`.
 Important Error Cases
 403 MEMBERSHIP_REQUIRED
-404 LESSON_NOT_FOUND
-409 LESSON_NOT_ACCESSIBLE
+404 CLASS_NOT_FOUND, LESSON_NOT_FOUND (including a Lesson outside the requested class)
+409 CLASS_ARCHIVED, LESSON_NOT_ACCESSIBLE (the Lesson or its Chapter is hidden)
 4.4.5 Record Last Visit and Resume Learning
 PUT /classes/{classId}/last-visit records the latest visited Lesson.
 Request Body

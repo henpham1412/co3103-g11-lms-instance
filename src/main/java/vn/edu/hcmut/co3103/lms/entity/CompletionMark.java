@@ -49,4 +49,5 @@ public class CompletionMark {
     public UUID getClassMemberId() { return classMemberId; }
     public UUID getLessonId() { return lessonId; }
     public Instant getMarkedAt() { return markedAt; }
+    public void setMarkedAt(Instant markedAt) { this.markedAt = markedAt; }
 }
