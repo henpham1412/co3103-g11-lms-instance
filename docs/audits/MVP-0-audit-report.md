@@ -1,7 +1,7 @@
 # MVP-0 — Read-only implementation audit
 
-**Project:** CO3103 Group 11 — Self-Hosted Learning Platform with Centralized Authentication  
-**Audit date:** 29 October 2026  
+**Project:** CO3103 Group 11 — Self-Hosted Learning Platform with Centralized Authentication<br>
+**Audit date:** 29 October 2026<br>
 **Issue:** [LMS Instance #6 — MVP-0](https://github.com/henpham1412/co3103-g11-lms-instance/issues/6)
 
 **Scope:** All three repositories, the seven attached project documents, existing issues, merged pull requests, and available GitHub Actions results.
