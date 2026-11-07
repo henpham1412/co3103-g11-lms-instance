@@ -9,11 +9,11 @@ import java.util.Optional;
 import java.util.UUID;
 
 public interface QuizRepository extends JpaRepository<Quiz, UUID> {
-    Optional<Quiz> findByActivity_Id(UUID activityId);
+    Optional<Quiz> findByActivity_ActivityId(UUID activityId);
 
     @Lock(LockModeType.PESSIMISTIC_WRITE)
     Optional<Quiz> findLockedById(UUID quizId);
 
     @Lock(LockModeType.PESSIMISTIC_WRITE)
-    Optional<Quiz> findLockedByActivity_Id(UUID activityId);
+    Optional<Quiz> findLockedByActivity_ActivityId(UUID activityId);
 }
