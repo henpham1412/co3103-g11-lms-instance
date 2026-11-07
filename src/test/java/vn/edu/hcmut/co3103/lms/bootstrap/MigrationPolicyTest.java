@@ -28,10 +28,11 @@ class MigrationPolicyTest {
             "V2__align_lms_user_access_column_lengths.sql", -231189632,
             "V3__create_lms_setup_state.sql", 1480030657,
             "V4__create_classes_and_memberships.sql", -1197899662,
-            "V5__create_learning_content_tables.sql", 1741533483);
+            "V5__create_learning_content_tables.sql", 1741533483,
+            "V6__create_assessments.sql", -1763291091);
 
     @Test
-    void keepsTheMigrationSetDownToTheFiveApprovedFiles() throws IOException {
+    void keepsTheMigrationSetDownToTheSixApprovedFiles() throws IOException {
         assertThat(migrations()).extracting(MigrationFile::fileName)
                 .containsExactlyInAnyOrderElementsOf(APPROVED_CHECKSUMS.keySet());
     }
@@ -40,7 +41,7 @@ class MigrationPolicyTest {
     void keepsTheChecksumOfEveryAlreadyAppliedMigration() throws IOException {
         for (MigrationFile migration : migrations()) {
             assertThat(migration.checksum())
-                    .as("Flyway checksum of %s - add a new V6__ migration instead of editing this one",
+                    .as("Flyway checksum of %s - add a new forward migration instead of editing this one",
                             migration.fileName())
                     .isEqualTo(APPROVED_CHECKSUMS.get(migration.fileName()));
         }
