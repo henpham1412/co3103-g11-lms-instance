@@ -98,18 +98,19 @@ Important Error Cases
 404 CLASS_NOT_FOUND, LESSON_NOT_FOUND (including a Lesson outside the requested class)
 409 CLASS_ARCHIVED, LESSON_NOT_ACCESSIBLE (the Lesson or its Chapter is hidden)
 4.4.5 Record Last Visit and Resume Learning
-PUT /classes/{classId}/last-visit records the latest visited Lesson.
+PUT /classes/{classId}/last-visit records the latest visited Lesson for an active Student member in an active class. The Chapter and Lesson must be PUBLISHED.
 Request Body
 {
   "lesson_id": "65a11d55-a23c-4a65-8ccb-76b7b7c12345"
 }
-The system upserts the single LastVisit row for the class membership.
+The system upserts the single LastVisit row for the class membership and refreshes `visited_at` on each visit. Return 200 OK with `{ "lesson_id": "...", "visited_at": "..." }`. Deleting a Lesson deletes its LastVisit row. Hiding a Lesson retains the row, but resume selection ignores it while the Lesson is hidden.
 GET /classes/{classId}/resume-target returns the selected target according to this priority:
 An available Quiz attempt in progress.
 The most recently visited Lesson, if it remains visible and accessible.
 The first incomplete visible Lesson in content-tree order.
 If no incomplete eligible Lesson remains, return the class outline or no unfinished target.
 If the Student needs to continue an Assignment, the response points to its containing Lesson. Resuming does not create a completion mark.
+Important Error Cases for PUT /last-visit: 403 MEMBERSHIP_REQUIRED; 404 CLASS_NOT_FOUND or LESSON_NOT_FOUND (including a Lesson outside the requested class); 409 CLASS_ARCHIVED or LESSON_NOT_ACCESSIBLE.
 Example Response — Quiz Attempt in Progress
 {
   "target_type": "QUIZ_ATTEMPT",

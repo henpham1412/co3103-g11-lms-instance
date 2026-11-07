@@ -79,6 +79,8 @@ Author decisions captured in the review
   Removing a member retains marks, and rejoining restores them.
 - Repeating a completion PUT refreshes `marked_at`; recording the same lesson
   again refreshes LastVisit.visited_at.
+- Deleting a Lesson deletes its LastVisit row; hiding a Lesson retains the row,
+  but resume selection ignores it while the Lesson is hidden.
 - Lesson/class association is validated in application code only; no database
   constraint is planned.
 
@@ -102,9 +104,6 @@ Remaining items to settle in the normative spec
   most recent, but define the timestamp used (started_at or updated activity
   time; QuizAttempt currently has started_at and submitted_at, but no general
   updated_at).
-- LastVisit lifecycle: the author's answer says marks are deleted with content;
-  clarify whether that includes LastVisit, and whether hiding the visited lesson
-  retains the row while excluding it from resume selection.
 - Progress: define chapter/lesson nested fields at least enough for clients to
   render the promised outline and per-lesson completion/assessment statuses.
   If other schemas are intentionally implementation-defined, identify which
