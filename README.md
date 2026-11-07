@@ -198,9 +198,18 @@ export DB_PASSWORD
 
 Flyway runs `src/main/resources/db/migration` on application startup: V1 creates
 local access, V2 aligns columns, V3 initializes administrator setup, V4 creates
-audit logs, V5 indexes the default user order `(created_at DESC, user_id ASC)`,
-and V6 adds independent profile/login token issuance watermarks.
-An empty database receives V1–V6; an existing V5 database receives only V6.
+classes and memberships, V5 adds the default admin-listing index, V6 adds independent
+profile/login token issuance watermarks, and V7 creates audit logs.
+An empty database receives V1 through V7. A database with the official main V4 classes
+history upgrades through V5 through V7 without changing existing migrations or data.
+
+Before upgrading an existing database, inspect its Flyway history. A database that
+already applied the PR's former `V4__create_audit_logs.sql` has an incompatible V4
+history: renaming that script to V7 is not an in-place upgrade. Retained databases
+require a separately reviewed data/history transition and rehearsal; disposable
+databases may be recreated only with the owner's authorization. Do not repair,
+clean, baseline, disable validation, or edit history to conceal a mismatch.
+
 The nullable watermarks store exact epoch seconds (`NUMERIC(21,9)`) to preserve
 decoded JWT nanoseconds. Existing rows initialize them on the first trusted token
 after upgrade; historical issuance cannot be inferred from local wall-clock timestamps.
@@ -243,6 +252,15 @@ Valid CORS preflight requests are handled before Bearer authentication and may b
 3600 seconds. Ordinary OPTIONS requests also return 200 without authentication or database
 access. Disallowed CORS requests receive the standard JSON 403 envelope. Other API requests
 require a valid access token and active LMS-local access.
+
+Class thumbnail uploads are stored under `lms.storage.class-thumbnails.directory`
+(environment variable `LMS_CLASS_THUMBNAIL_DIRECTORY`), which defaults to
+`./var/class-thumbnails` and is git-ignored. Stored files are served from
+`/class-thumbnails/**` without authentication, and their public URLs are built from
+`lms.storage.class-thumbnails.public-base-url` (`LMS_PUBLIC_BASE_URL`, default
+`http://localhost:8081`). Set `LMS_PUBLIC_BASE_URL` to the base address browsers can
+reach when the instance runs behind a gateway or on another host; the default value is
+development-only.
 
 ### 5.6 Bootstrap the Initial Administrator
 
@@ -356,6 +374,12 @@ Follow DOC-01 through DOC-06 and the current API contracts in DOC-05 when implem
 - Keep entities, attributes, relationships, and constraints aligned with DOC-04.
 - Preserve the boundary between centralized authentication and LMS-local authorization.
 - Update relevant documentation when an agreed requirement, database design, or API contract changes.
+- Never edit a Flyway migration that has already been applied to a database you or a
+  teammate keeps; add the next `V<n>__*.sql` instead. `MigrationPolicyTest` pins the
+  checksums of the accepted migrations and `.gitattributes` keeps `*.sql` byte-identical
+  across checkouts. Recovering a local database that applied a superseded migration is an
+  explicit decision - recreate it or run a reviewed Flyway repair - never an automated
+  build step.
 - Run the available build and test checks before submitting a Pull Request.
 
 ## 10. Project Documentation

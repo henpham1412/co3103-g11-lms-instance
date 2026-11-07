@@ -180,8 +180,12 @@ class BootstrapMigrationH2Test {
     }
 
     private void migrateV3() {
-        Flyway.configure().dataSource(url, "sa", "").baselineOnMigrate(true).baselineVersion("2")
-                .locations("classpath:db/migration").load().migrate();
+        // This fixture intentionally tests V3 only; later PostgreSQL migrations have separate coverage.
+        var flyway = Flyway.configure().dataSource(url, "sa", "").baselineOnMigrate(true).baselineVersion("2")
+                .locations("classpath:db/migration").target("3").load();
+        flyway.migrate();
+        flyway.validate();
+        assertThat(flyway.info().current().getVersion().getVersion()).isEqualTo("3");
     }
 
     private void insertUser(UUID id) throws SQLException {

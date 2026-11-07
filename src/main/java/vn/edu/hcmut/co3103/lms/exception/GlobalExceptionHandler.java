@@ -1,5 +1,7 @@
 package vn.edu.hcmut.co3103.lms.exception;
 
+import org.springframework.core.Ordered;
+import org.springframework.core.annotation.Order;
 import org.springframework.data.core.PropertyReferenceException;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.HttpHeaders;
@@ -14,12 +16,15 @@ import org.springframework.web.bind.MethodArgumentNotValidException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
 import org.springframework.web.method.annotation.MethodArgumentTypeMismatchException;
+import org.springframework.web.multipart.MaxUploadSizeExceededException;
+import org.springframework.web.multipart.support.MissingServletRequestPartException;
 
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 
 @RestControllerAdvice
+@Order(Ordered.LOWEST_PRECEDENCE)
 public class GlobalExceptionHandler {
 
     @ExceptionHandler(HttpRequestMethodNotSupportedException.class)
@@ -106,5 +111,22 @@ public class GlobalExceptionHandler {
                         "code", "BAD_REQUEST",
                         "message", "Validation failed",
                         "details", details));
+    }
+
+    // Multipart parsing can fail before MVC has selected a controller.
+    @ExceptionHandler(MissingServletRequestPartException.class)
+    public ResponseEntity<Map<String, Object>> handleMissingUploadPart() {
+        return ResponseEntity.status(HttpStatus.BAD_REQUEST)
+                .contentType(MediaType.APPLICATION_JSON)
+                .body(Map.of("code", "INVALID_FILE", "message", "The required upload file is missing.",
+                        "details", List.of()));
+    }
+
+    @ExceptionHandler(MaxUploadSizeExceededException.class)
+    public ResponseEntity<Map<String, Object>> handleUploadTooLarge() {
+        return ResponseEntity.status(HttpStatus.CONTENT_TOO_LARGE)
+                .contentType(MediaType.APPLICATION_JSON)
+                .body(Map.of("code", "FILE_TOO_LARGE", "message", "The uploaded file exceeds the maximum allowed size.",
+                        "details", List.of()));
     }
 }

@@ -17,6 +17,8 @@ import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Import;
 import org.springframework.context.annotation.Primary;
 import org.springframework.http.HttpHeaders;
+import org.springframework.http.MediaType;
+import org.springframework.mock.web.MockMultipartFile;
 import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.security.core.Authentication;
 import org.springframework.security.core.GrantedAuthority;
@@ -47,6 +49,7 @@ import java.util.stream.Stream;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.hamcrest.Matchers.startsWith;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.multipart;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.options;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.content;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.header;
@@ -257,6 +260,20 @@ class SecurityConfigIntegrationTest {
                             .header("Authorization", "Bearer " + token(user.getUserId().toString())))
                     .andExpect(role == endpoint.getKey() ? status().isOk() : forbiddenJson());
         }
+    }
+
+    @Test
+    void protectsThumbnailUploadWithTheAuthenticatedTutorRole() throws Exception {
+        UUID classId = UUID.randomUUID();
+        MockMultipartFile image = new MockMultipartFile("file", "cover.png", MediaType.IMAGE_PNG_VALUE,
+                new byte[]{(byte) 0x89, 'P', 'N', 'G', 13, 10, 26, 10});
+        LmsUserAccess student = saveUser(LmsRole.STUDENT, AccessStatus.ACTIVE);
+
+        mockMvc.perform(multipart("/api/v1/classes/{id}/thumbnail", classId).file(image)
+                        .header(HttpHeaders.AUTHORIZATION, "Bearer " + token(student.getUserId().toString())))
+                .andExpect(forbiddenJson());
+        mockMvc.perform(multipart("/api/v1/classes/{id}/thumbnail", classId).file(image))
+                .andExpect(unauthorizedJson());
     }
 
     @Test

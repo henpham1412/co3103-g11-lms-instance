@@ -32,7 +32,7 @@ class GlobalExceptionHandlerTest {
     @BeforeEach
     void setUp() {
         mockMvc = MockMvcBuilders.standaloneSetup(new TestController())
-                .setControllerAdvice(new GlobalExceptionHandler())
+                .setControllerAdvice(new ClassManagementExceptionHandler(), new GlobalExceptionHandler())
                 .build();
     }
 
