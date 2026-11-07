@@ -58,4 +58,3 @@ public class QuizController {
         return quizQuestionService.addQuestion(activityId, UUID.fromString(jwt.getSubject()), request);
     }
 }
-

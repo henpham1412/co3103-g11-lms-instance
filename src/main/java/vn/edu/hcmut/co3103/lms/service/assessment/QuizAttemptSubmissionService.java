@@ -19,6 +19,7 @@ import java.util.UUID;
 @Service
 @RequiredArgsConstructor
 public class QuizAttemptSubmissionService {
+    private final AssessmentLocks locks;
     private final QuizAttemptRepository attemptRepository;
     private final QuizRepository quizRepository;
     private final QuizConfigurationAccessService accessService;
@@ -79,7 +80,9 @@ public class QuizAttemptSubmissionService {
 
     private Optional<QuizAttempt> findLockedAttemptAndQuiz(UUID attemptId) {
         Optional<UUID> quizId = attemptRepository.findQuizIdByAttemptId(attemptId);
-        if (quizId.isEmpty() || quizRepository.findLockedById(quizId.get()).isEmpty()) {
+        if (quizId.isEmpty()) return Optional.empty();
+        locks.lockQuiz(quizId.get());
+        if (quizRepository.findLockedById(quizId.get()).isEmpty()) {
             return Optional.empty();
         }
         return attemptRepository.findLockedById(attemptId);

@@ -27,7 +27,7 @@ class QuizAttemptSubmissionServiceRecoveryTest {
         QuizAttemptRepository attemptRepository = mock(QuizAttemptRepository.class);
         QuizRepository quizRepository = mock(QuizRepository.class);
         QuizGradingService gradingService = mock(QuizGradingService.class);
-        QuizAttemptSubmissionService service = new QuizAttemptSubmissionService(
+        QuizAttemptSubmissionService service = new QuizAttemptSubmissionService(mock(AssessmentLocks.class),
                 attemptRepository, quizRepository, mock(QuizConfigurationAccessService.class), gradingService);
         UUID attemptId = UUID.randomUUID();
         UUID quizId = UUID.randomUUID();

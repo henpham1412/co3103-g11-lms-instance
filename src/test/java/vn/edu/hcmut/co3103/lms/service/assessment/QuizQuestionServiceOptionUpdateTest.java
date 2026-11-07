@@ -52,7 +52,7 @@ class QuizQuestionServiceOptionUpdateTest {
 
     @BeforeEach
     void setUp() {
-        service = new QuizQuestionService(quizRepository, questionRepository, optionRepository,
+        service = new QuizQuestionService(mock(AssessmentLocks.class), quizRepository, questionRepository, optionRepository,
                 attemptRepository, mock(QuizConfigurationAccessService.class), mock(QuizGradingService.class));
 
         Activity activity = mock(Activity.class);
@@ -73,6 +73,7 @@ class QuizQuestionServiceOptionUpdateTest {
         removedOption = option(removedOptionId, question, "Remove", false, 1);
         survivingOption = option(survivingOptionId, question, "Survive", false, 2);
 
+        when(questionRepository.findQuizIdByQuestionId(questionId)).thenReturn(Optional.of(quizId));
         when(questionRepository.findById(questionId)).thenReturn(Optional.of(question));
         when(quizRepository.findLockedById(quizId)).thenReturn(Optional.of(quiz));
         when(questionRepository.existsByQuiz_IdAndOrderIndexAndIdNot(quizId, 0, questionId)).thenReturn(false);

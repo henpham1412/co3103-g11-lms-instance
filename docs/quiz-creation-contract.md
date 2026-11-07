@@ -1,0 +1,17 @@
+# Quiz creation application contract
+
+Assessment owns `QuizCreationService`, `QuizCreation` and the returned `CreatedQuiz(quizId, activityId)`. The command contains full settings and initial `QuestionCreateRequest` records with their options; it is not a PATCH DTO. No JPA entities or repositories cross this application boundary.
+
+`createForActivity(activityId, actorId, command)` requires an existing Spring transaction (`MANDATORY`). LMS-4 creates/flushed the real canonical Activity in that same transaction, then calls this bean through its Spring proxy. The Activity must be QUIZ, the actor its owning active Tutor, and no Quiz may already exist. The command defaults attemptsAllowed to 1 and gradingMethod to HIGHEST; time limit and future deadline are required. Initial questions and options are mandatory and use the existing owner validation (including representable NUMERIC(10,2) points). Quiz audit fields are initialized explicitly.
+
+The lock order is canonical Class, Quiz, then Question/Attempt/answer rows. Scope queries return IDs without preloading mutable children. Caller orchestration must obey this order too. A parent flush is not a commit. Creation failures propagate and mark the transaction for rollback; callers must never turn them into a successful Activity-only response. Validation uses 400 VALIDATION_ERROR for settings/payload shape and the existing 400 INVALID_QUESTION for invalid nested questions; type/configuration mismatches use 409 ASSESSMENT_CONFIGURATION_MISMATCH. The outer HTTP create mapping must retain DOC-05's error envelope when integrating the service.
+
+`requirePublishable(activityId, actorId)` participates in the existing transaction and validates the actual Quiz and full question/option graph under the same lock order. It never changes Activity visibility. LMS-4 must call this before publishing; that wiring is deliberately not included in this LMS-5-owned change. Current LMS-4 HTTP publication/orchestration therefore remains an integration dependency.
+
+The public command is a Java application command, not a directly exposed HTTP route. LMS-4 must map the approved snake_case request into its typed fields using strict integer parsing, preserve all initial questions/options, and derive actor identity from authentication. Existing assessment HTTP integer fields have local strict deserializers; global Jackson behavior is unchanged.
+
+No Assignment implementation or table is provided. LMS-6 issue #11 owns that capability; an ASSIGNMENT Activity is rejected by this Quiz factory. Cross-owner opposite-configuration checks must be coordinated with the real LMS-6 implementation, never faked. Nonempty skill-topic associations remain dependent on the real approved LMS-8 workflow.
+
+User mutation eligibility is checked after the Class lock, synchronizing archive/membership changes with start/save/clear/submit. Existing historical read and background grading/expiry policy is retained; H01 remains a coordinator clarification rather than a silent history-policy rewrite.
+
+Migrations and the approved V1–V5 checksum manifest are unchanged. The combined build's two migration-policy failures remain until the coordinator formally accepts the assessment migration and authorizes the matching manifest update. N03 remains deferred. F04 remains partial until real LMS-4 orchestration and LMS-6 configuration are integrated and independently verified.

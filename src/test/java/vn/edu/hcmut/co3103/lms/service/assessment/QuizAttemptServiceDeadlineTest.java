@@ -49,9 +49,9 @@ class QuizAttemptServiceDeadlineTest {
 
     @BeforeEach
     void setUp() {
-        submissionService = new QuizAttemptSubmissionService(
+        submissionService = new QuizAttemptSubmissionService(mock(AssessmentLocks.class),
                 attemptRepository, quizRepository, accessService, gradingService);
-        service = new QuizAttemptService(
+        service = new QuizAttemptService(mock(AssessmentLocks.class),
                 quizRepository,
                 attemptRepository,
                 mock(QuestionRepository.class),

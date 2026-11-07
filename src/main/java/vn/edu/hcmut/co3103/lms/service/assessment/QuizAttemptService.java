@@ -41,6 +41,7 @@ import java.util.UUID;
 @Service
 @RequiredArgsConstructor
 public class QuizAttemptService {
+    private final AssessmentLocks locks;
     private final QuizRepository quizRepository;
     private final QuizAttemptRepository attemptRepository;
     private final QuestionRepository questionRepository;
@@ -74,6 +75,7 @@ public class QuizAttemptService {
 
     @Transactional
     public StartResult startOrResume(UUID quizId, UUID studentId) {
+        locks.lockQuiz(quizId);
         Quiz quiz = quizRepository.findLockedById(quizId)
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "QUIZ_NOT_FOUND"));
         Activity activity = quiz.getActivity();
@@ -285,7 +287,9 @@ public class QuizAttemptService {
 
     private Optional<QuizAttempt> findLockedAttemptAndQuiz(UUID attemptId) {
         Optional<UUID> quizId = attemptRepository.findQuizIdByAttemptId(attemptId);
-        if (quizId.isEmpty() || quizRepository.findLockedById(quizId.get()).isEmpty()) {
+        if (quizId.isEmpty()) return Optional.empty();
+        locks.lockQuiz(quizId.get());
+        if (quizRepository.findLockedById(quizId.get()).isEmpty()) {
             return Optional.empty();
         }
         return attemptRepository.findLockedById(attemptId);
@@ -318,4 +322,3 @@ public class QuizAttemptService {
         submissionService.gradeIfPending(attemptId);
     }
 }
-

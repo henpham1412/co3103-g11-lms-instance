@@ -18,6 +18,7 @@ import java.util.Set;
 @Service
 @RequiredArgsConstructor
 public class QuizService {
+    private final AssessmentLocks locks;
     private final QuizRepository quizRepository;
     private final QuizConfigurationAccessService accessService;
 
@@ -37,6 +38,7 @@ public class QuizService {
             UUID userId,
             QuizSettingsUpdateRequest request
     ) {
+        locks.lockActivity(activityId);
         Quiz quiz = quizRepository.findLockedByActivity_ActivityId(activityId)
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "QUIZ_NOT_FOUND"));
         accessService.requireOwningTutor(quiz.getActivity(), userId);

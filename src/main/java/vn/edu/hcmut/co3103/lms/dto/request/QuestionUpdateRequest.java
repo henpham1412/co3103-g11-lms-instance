@@ -2,6 +2,7 @@ package vn.edu.hcmut.co3103.lms.dto.request;
 
 import com.fasterxml.jackson.annotation.JsonAnySetter;
 import com.fasterxml.jackson.annotation.JsonProperty;
+import tools.jackson.databind.annotation.JsonDeserialize;
 import org.springframework.http.HttpStatus;
 import org.springframework.web.server.ResponseStatusException;
 
@@ -26,7 +27,7 @@ public class QuestionUpdateRequest {
     public void setContent(String v) { contentProvided = true; content = v; }
     @JsonProperty("points_awarded") public void setPointsAwarded(BigDecimal v) { pointsAwardedProvided = true; pointsAwarded = v; }
     @JsonProperty("points_deducted") public void setPointsDeducted(BigDecimal v) { pointsDeductedProvided = true; pointsDeducted = v; }
-    @JsonProperty("order_index") public void setOrderIndex(Integer v) { orderIndexProvided = true; orderIndex = v; }
+    @JsonDeserialize(using = AssessmentIntegerDeserializer.class) @JsonProperty("order_index") public void setOrderIndex(Integer v) { orderIndexProvided = true; orderIndex = v; }
     public void setOptions(List<Option> v) { optionsProvided = true; options = v; }
     @JsonProperty("skill_topic_ids") public void setSkillTopicIds(List<UUID> v) { skillTopicIdsProvided = true; skillTopicIds = v; }
 
@@ -54,6 +55,6 @@ public class QuestionUpdateRequest {
             @JsonProperty("option_id") UUID optionId,
             String content,
             @JsonProperty("is_correct") Boolean isCorrect,
-            @JsonProperty("order_index") Integer orderIndex
+            @JsonDeserialize(using = AssessmentIntegerDeserializer.class) @JsonProperty("order_index") Integer orderIndex
     ) {}
 }

@@ -52,7 +52,7 @@ class QuizAttemptResultFinalGradeTest {
         when(attemptRepository.findById(attemptId)).thenReturn(Optional.of(attempt));
         when(gradingService.calculateFinalGrade(attempt)).thenReturn(new BigDecimal("60.00"));
 
-        QuizAttemptService service = new QuizAttemptService(
+        QuizAttemptService service = new QuizAttemptService(mock(AssessmentLocks.class),
                 mock(QuizRepository.class),
                 attemptRepository,
                 mock(QuestionRepository.class),
@@ -91,7 +91,7 @@ class QuizAttemptResultFinalGradeTest {
         attempt.setSubmittedAt(OffsetDateTime.parse("2026-10-31T10:00:00Z"));
 
         when(attemptRepository.findById(attemptId)).thenReturn(Optional.of(attempt));
-        QuizAttemptService service = new QuizAttemptService(
+        QuizAttemptService service = new QuizAttemptService(mock(AssessmentLocks.class),
                 mock(QuizRepository.class), attemptRepository,
                 mock(QuestionRepository.class), mock(QuestionOptionRepository.class), accessService,
                 gradingService, mock(QuizAttemptSubmissionService.class),
