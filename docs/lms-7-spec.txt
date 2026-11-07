@@ -127,9 +127,9 @@ Example Response — No Unfinished Target
 GET /me/assessment-history?page=1&size=20&class_id={classId}&type=QUIZ returns the caller's paginated QuizAttempt history, including attempt status, score, and feedback where applicable. Defaults are page 1 and size 20; size is capped at 100. Results sort by started_at descending, then attempt_id descending. `type=ASSIGNMENT` returns an empty page until Submission records are implemented.
 Student history is filtered to the caller. A Student must not read another Student's private assessment history. Each item includes attempt_id, class_id, activity_id, activity_title, attempt_number, type, status, started_at, submitted_at, score, and feedback (null for quiz attempts in the current implementation).
 4.4.7 Tutor Progress Views
-GET /tutor/classes/{classId}/progress returns progress summaries for ACTIVE members of a class owned by the caller.
-GET /tutor/classes/{classId}/members/{classMemberId}/progress returns the member's lesson completion marks, progress summary, assessment outcome summaries, and current mastery per SkillTopic where Adaptive Learning data exists.
-Former members' records remain stored but are not included in the active-member list.
+GET /tutor/classes/{classId}/progress returns progress summaries for ACTIVE members of a class owned by the caller, including class_member_id, student_id, name, completed/eligible lesson counts, rounded percentage, and derived status.
+GET /tutor/classes/{classId}/members/{classMemberId}/progress returns that member's lesson completion marks, progress summary, and quiz attempt outcomes. ACTIVE and INACTIVE members may be read; PENDING and REJECTED members return 404 CLASS_OR_MEMBER_NOT_FOUND. Skill mastery is an empty list until SkillTopic mastery data exists.
+Former members' records remain stored but are not included in the active-member list. Both endpoints require the owning Tutor; non-owners receive 403 FORBIDDEN and missing classes receive 404 CLASS_OR_MEMBER_NOT_FOUND.
 Important Error Cases
 403 FORBIDDEN
 404 CLASS_OR_MEMBER_NOT_FOUND

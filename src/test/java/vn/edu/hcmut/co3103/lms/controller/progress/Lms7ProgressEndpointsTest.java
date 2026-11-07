@@ -11,7 +11,10 @@ import vn.edu.hcmut.co3103.lms.dto.response.CompletionMarkResponse;
 import vn.edu.hcmut.co3103.lms.dto.response.LastVisitResponse;
 import vn.edu.hcmut.co3103.lms.dto.response.PageResponse;
 import vn.edu.hcmut.co3103.lms.dto.response.AssessmentHistoryItem;
+import vn.edu.hcmut.co3103.lms.dto.response.TutorClassProgressResponse;
+import vn.edu.hcmut.co3103.lms.dto.response.TutorMemberProgressResponse;
 import vn.edu.hcmut.co3103.lms.service.progress.AssessmentHistoryService;
+import vn.edu.hcmut.co3103.lms.service.progress.TutorProgressService;
 import vn.edu.hcmut.co3103.lms.service.progress.LastVisitService;
 import vn.edu.hcmut.co3103.lms.service.progress.LessonCompletionService;
 import vn.edu.hcmut.co3103.lms.service.progress.StudentProgressService;
@@ -114,5 +117,29 @@ class Lms7ProgressEndpointsTest {
 
         assertEquals(response, controller.getHistory(jwt, classId, "QUIZ", 1, 20));
         verify(service).getHistory(studentId, classId, "QUIZ", 1, 20);
+    }
+
+    @Test
+    void tutorClassProgressReturnsActiveMemberSummaries() {
+        TutorProgressService service = mock(TutorProgressService.class);
+        TutorProgressController controller = new TutorProgressController(service);
+        var response = new TutorClassProgressResponse(classId, List.of());
+        when(service.getClassProgress(classId, studentId)).thenReturn(response);
+
+        assertEquals(response, controller.getClassProgress(jwt, classId));
+        verify(service).getClassProgress(classId, studentId);
+    }
+
+    @Test
+    void tutorMemberProgressReturnsIndividualHistory() {
+        TutorProgressService service = mock(TutorProgressService.class);
+        TutorProgressController controller = new TutorProgressController(service);
+        UUID memberId = UUID.randomUUID();
+        var response = new TutorMemberProgressResponse(classId, memberId, studentId, "INACTIVE",
+                1, 1, 100, "COMPLETED", List.of(), List.of(), List.of());
+        when(service.getMemberProgress(classId, memberId, studentId)).thenReturn(response);
+
+        assertEquals(response, controller.getMemberProgress(jwt, classId, memberId));
+        verify(service).getMemberProgress(classId, memberId, studentId);
     }
 }
