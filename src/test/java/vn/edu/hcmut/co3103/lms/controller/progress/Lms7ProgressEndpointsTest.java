@@ -9,6 +9,9 @@ import vn.edu.hcmut.co3103.lms.dto.request.LastVisitRequest;
 import vn.edu.hcmut.co3103.lms.dto.response.ClassProgressResponse;
 import vn.edu.hcmut.co3103.lms.dto.response.CompletionMarkResponse;
 import vn.edu.hcmut.co3103.lms.dto.response.LastVisitResponse;
+import vn.edu.hcmut.co3103.lms.dto.response.PageResponse;
+import vn.edu.hcmut.co3103.lms.dto.response.AssessmentHistoryItem;
+import vn.edu.hcmut.co3103.lms.service.progress.AssessmentHistoryService;
 import vn.edu.hcmut.co3103.lms.service.progress.LastVisitService;
 import vn.edu.hcmut.co3103.lms.service.progress.LessonCompletionService;
 import vn.edu.hcmut.co3103.lms.service.progress.StudentProgressService;
@@ -97,5 +100,19 @@ class Lms7ProgressEndpointsTest {
         assertEquals(HttpStatus.OK, result.getStatusCode());
         assertEquals(response, result.getBody());
         verify(service).recordVisit(classId, lessonId, studentId);
+    }
+
+    @Test
+    void assessmentHistoryReturnsPaginatedQuizAttemptsForCurrentStudent() {
+        AssessmentHistoryService service = mock(AssessmentHistoryService.class);
+        AssessmentHistoryController controller = new AssessmentHistoryController(service);
+        var item = new AssessmentHistoryItem(UUID.randomUUID(), classId, UUID.randomUUID(), "Quiz 1",
+                1, "QUIZ", "SUBMITTED", Instant.now().atOffset(java.time.ZoneOffset.UTC), null,
+                null, null);
+        var response = new PageResponse<>(List.of(item), 1, 20, 1, 1);
+        when(service.getHistory(studentId, classId, "QUIZ", 1, 20)).thenReturn(response);
+
+        assertEquals(response, controller.getHistory(jwt, classId, "QUIZ", 1, 20));
+        verify(service).getHistory(studentId, classId, "QUIZ", 1, 20);
     }
 }

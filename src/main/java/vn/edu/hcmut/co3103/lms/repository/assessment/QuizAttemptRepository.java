@@ -8,6 +8,9 @@ import org.springframework.data.jpa.repository.Lock;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 import vn.edu.hcmut.co3103.lms.entity.QuizAttempt;
+import org.springframework.data.repository.query.Param;
+import vn.edu.hcmut.co3103.lms.entity.Lesson;
+import vn.edu.hcmut.co3103.lms.entity.Chapter;
 
 import java.util.List;
 import java.util.Optional;
@@ -20,6 +23,30 @@ public interface QuizAttemptRepository extends JpaRepository<QuizAttempt, UUID> 
     List<QuizAttempt> findByQuiz_IdAndClassMember_ClassMemberIdOrderByAttemptNumber(UUID quizId, UUID classMemberId);
     List<QuizAttempt> findByClassMember_ClassMemberId(UUID classMemberId);
     Page<QuizAttempt> findByQuiz_Id(UUID quizId, Pageable pageable);
+
+    @Query(value = """
+            select attempt from QuizAttempt attempt
+            join attempt.classMember member
+            join attempt.quiz quiz
+            join quiz.activity activity, Lesson lesson, Chapter chapter
+            where member.studentId = :studentId
+              and lesson.lessonId = activity.lessonId
+              and chapter.chapterId = lesson.chapterId
+              and (:classId is null or chapter.classId = :classId)
+            """,
+            countQuery = """
+                    select count(attempt) from QuizAttempt attempt
+                    join attempt.classMember member
+                    join attempt.quiz quiz
+                    join quiz.activity activity, Lesson lesson, Chapter chapter
+                    where member.studentId = :studentId
+                      and lesson.lessonId = activity.lessonId
+                      and chapter.chapterId = lesson.chapterId
+                      and (:classId is null or chapter.classId = :classId)
+                    """)
+    Page<QuizAttempt> findStudentHistory(@Param("studentId") UUID studentId,
+                                        @Param("classId") UUID classId,
+                                        Pageable pageable);
 
     @Query("select attempt.quiz.id from QuizAttempt attempt where attempt.id = :attemptId")
     Optional<UUID> findQuizIdByAttemptId(@Param("attemptId") UUID attemptId);
