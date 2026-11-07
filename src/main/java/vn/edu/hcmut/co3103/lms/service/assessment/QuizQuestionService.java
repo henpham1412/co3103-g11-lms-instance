@@ -33,7 +33,7 @@ public class QuizQuestionService {
 
     @Transactional
     public QuestionResponse addQuestion(UUID activityId, UUID userId, QuestionCreateRequest request) {
-        Quiz quiz = quizRepository.findLockedByActivity_Id(activityId)
+        Quiz quiz = quizRepository.findLockedByActivity_ActivityId(activityId)
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "QUIZ_NOT_FOUND"));
         accessService.requireOwningTutor(quiz.getActivity(), userId);
         if (attemptRepository.existsByQuiz_Id(quiz.getId())) {
