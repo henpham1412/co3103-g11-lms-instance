@@ -41,7 +41,7 @@ class AdminBootstrapCliIntegrationTest {
                             AccessStatus.SUSPENDED, null, null, null)));
         }
 
-        try (var context = application(schema).run()) {
+        try (var context = application(schema).properties("spring.flyway.target=3", "spring.jpa.hibernate.ddl-auto=none").run()) {
             var flyway = context.getBean(Flyway.class);
             assertThat(flyway.info().current().getVersion().getVersion()).isEqualTo("3");
             assertThat(flyway.info().applied()).filteredOn(info -> info.getVersion() != null)
@@ -125,7 +125,7 @@ class AdminBootstrapCliIntegrationTest {
 
         Instant beforeMigration = Instant.now().minusSeconds(1);
         Instant completedAt;
-        try (var context = application(schema).run()) {
+        try (var context = application(schema).properties("spring.flyway.target=3", "spring.jpa.hibernate.ddl-auto=none").run()) {
             assertThat(context.getBean(Flyway.class).info().current().getVersion().getVersion()).isEqualTo("3");
             assertThat(context.getBeansOfType(AdminBootstrapRunner.class)).isEmpty();
             var state = context.getBean(LmsSetupStateRepository.class).findById(LmsSetupState.GLOBAL_ID).orElseThrow();

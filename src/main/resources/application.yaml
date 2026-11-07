@@ -37,3 +37,10 @@ spring:
 
 lms:
   allowed-origins: ${LMS_ALLOWED_ORIGINS:http://localhost:3000,http://localhost:5173}
+  storage:
+    ffprobe-executable: ${LMS_FFPROBE_EXECUTABLE:ffprobe}
+    local:
+      directory: ${LMS_STORAGE_LOCAL_DIRECTORY:./var/lms-files}
+    class-thumbnails:
+      directory: ${LMS_CLASS_THUMBNAIL_DIRECTORY:./var/class-thumbnails}
+      public-base-url: ${LMS_PUBLIC_BASE_URL:http://localhost:8081}

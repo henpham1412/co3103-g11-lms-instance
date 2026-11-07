@@ -75,6 +75,9 @@ Install the following software:
 - **JDK 25** — Required to compile and run the application.
 - **Git** — Required to clone and update the repository.
 - **PostgreSQL** — Required for local database-backed development.
+- **ffprobe** (provided by FFmpeg) — Required for server-side MP4/WebM upload validation.
+  Ensure `ffprobe -version` works in the backend environment. Set `LMS_FFPROBE_EXECUTABLE`
+  to its executable path if it is not on `PATH`.
 
 A separate global Maven installation is not required. The repository includes Maven Wrapper scripts that download and use the configured Maven version.
 
@@ -174,6 +177,15 @@ Valid CORS preflight requests are handled before Bearer authentication and may b
 access. Disallowed CORS requests receive the standard JSON 403 envelope. Other API requests
 require a valid access token and active LMS-local access.
 
+Class thumbnail uploads are stored under `lms.storage.class-thumbnails.directory`
+(environment variable `LMS_CLASS_THUMBNAIL_DIRECTORY`), which defaults to
+`./var/class-thumbnails` and is git-ignored. Stored files are served from
+`/class-thumbnails/**` without authentication, and their public URLs are built from
+`lms.storage.class-thumbnails.public-base-url` (`LMS_PUBLIC_BASE_URL`, default
+`http://localhost:8081`). Set `LMS_PUBLIC_BASE_URL` to the base address browsers can
+reach when the instance runs behind a gateway or on another host; the default value is
+development-only.
+
 ### 5.6 Bootstrap the Initial Administrator
 
 Use the [administrator bootstrap CLI](docs/administrator-bootstrap.md) once for a new LMS database.
@@ -183,6 +195,23 @@ SUSPENDED access, closes setup under DOC-04 section 2.1.5. The closure records t
 administrator's UUID; subsequent attempts cannot rewrite it or reopen setup.
 V1 permits duplicate display emails, V2 widens columns without adding uniqueness,
 and V3 creates/seeds setup state. Local identity remains keyed by UUID.
+
+### 5.7 Local Learning-Material Storage
+
+The learning-content API stores uploaded files outside the repository. By default, files are written to `var/lms-files` under the process working directory; set `LMS_STORAGE_LOCAL_DIRECTORY` to choose another directory. The default is relative, so a service started from a different working directory resolves it against that directory — give deployments an absolute path. Keep this directory persistent and include it in deployment backups.
+
+For `DOCUMENT` and uploaded `VIDEO` materials, send multipart form data to `POST /api/v1/lessons/{lessonId}/materials` with a JSON `metadata` part and a `file` part. Documents are limited to 50 MiB (PDF, DOCX, PPTX); uploaded videos are limited to 200 MiB (MP4, WebM). The server checks file contents and serves stored files through the authenticated URL returned as `file_url`. Students must have active class membership and the material must be published; tutors must own the class.
+
+This local-storage implementation does not persist extra checksum/MIME/size metadata columns. The current database schema stores the generated file URL only. External `URL` and HTTPS video links are still submitted as JSON.
+
+Uploaded PDF/Office documents are parsed with PDFBox/Apache POI. Video uploads are
+demuxed with ffprobe and must contain actual video packets in an MP4 or WebM
+container; audio-only MP4, malformed containers and header-only files are rejected
+with `415 UNSUPPORTED_MEDIA_TYPE`. The application does not impose a codec
+allowlist. Video probing has a 30-second timeout and bounded diagnostic output;
+a missing ffprobe installation is a server storage error, not an accepted upload.
+Password-protected PDFs remain encrypted uploads; the server recognizes their
+container but does not decrypt their page contents.
 
 ## 6. Maven Wrapper Configuration
 
@@ -247,6 +276,12 @@ Follow DOC-01 through DOC-06 and the current API contracts in DOC-05 when implem
 - Keep entities, attributes, relationships, and constraints aligned with DOC-04.
 - Preserve the boundary between centralized authentication and LMS-local authorization.
 - Update relevant documentation when an agreed requirement, database design, or API contract changes.
+- Never edit a Flyway migration that has already been applied to a database you or a
+  teammate keeps; add the next `V<n>__*.sql` instead. `MigrationPolicyTest` pins the
+  checksums of the accepted migrations and `.gitattributes` keeps `*.sql` byte-identical
+  across checkouts. Recovering a local database that applied a superseded migration is an
+  explicit decision - recreate it or run a reviewed Flyway repair - never an automated
+  build step.
 - Run the available build and test checks before submitting a Pull Request.
 
 ## 10. Project Documentation

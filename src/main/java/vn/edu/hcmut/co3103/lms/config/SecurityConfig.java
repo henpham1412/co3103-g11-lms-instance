@@ -8,7 +8,6 @@ import org.springframework.context.annotation.Configuration;
 import org.springframework.security.config.annotation.method.configuration.EnableMethodSecurity;
 import org.springframework.security.config.annotation.web.builders.HttpSecurity;
 import org.springframework.security.config.annotation.web.configuration.EnableWebSecurity;
-import org.springframework.security.config.annotation.web.configurers.AbstractHttpConfigurer;
 import org.springframework.security.config.http.SessionCreationPolicy;
 import org.springframework.security.oauth2.jose.jws.SignatureAlgorithm;
 import org.springframework.security.oauth2.jwt.JwtDecoder;
@@ -26,6 +25,7 @@ import vn.edu.hcmut.co3103.lms.security.JsonCorsFilter;
 import vn.edu.hcmut.co3103.lms.security.jwt.ClaimValidatingJwtDecoder;
 import vn.edu.hcmut.co3103.lms.security.jwt.JwtSubjectValidator;
 import vn.edu.hcmut.co3103.lms.security.jwt.LocalAccessJwtAuthenticationConverter;
+import org.springframework.security.config.annotation.web.configurers.AbstractHttpConfigurer;
 
 import java.net.URI;
 import java.time.Clock;
@@ -58,7 +58,7 @@ public class SecurityConfig {
 
     @Bean
     CorsConfigurationSource corsConfigurationSource(
-            @Value("${lms.allowed-origins:http://localhost:3000,http://localhost:5173}") String allowedOrigins) {
+                @Value("${lms.allowed-origins:http://localhost:3000,http://localhost:5173}") String allowedOrigins) {
         CorsConfiguration configuration = new CorsConfiguration();
         configuration.setAllowedOrigins(Arrays.stream(allowedOrigins.split(",", -1))
                 .map(String::trim).map(SecurityConfig::validateOrigin).distinct().toList());
@@ -106,6 +106,8 @@ public class SecurityConfig {
                         // Let internal dispatches render safe JSON errors without a false 401.
                         // Direct requests to /error still require an active local role below.
                         .dispatcherTypeMatchers(DispatcherType.ERROR).permitAll()
+                        // Thumbnails are public class-catalog assets; uploads remain tutor-protected.
+                        .requestMatchers("/class-thumbnails/**").permitAll()
                         // A valid JWT establishes identity; an active local role grants LMS access.
                         .anyRequest().hasAnyRole("STUDENT", "TUTOR", "ADMINISTRATOR")
                 )

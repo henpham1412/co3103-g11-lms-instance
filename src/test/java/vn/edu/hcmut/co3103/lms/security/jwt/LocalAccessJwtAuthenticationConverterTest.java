@@ -82,7 +82,7 @@ class LocalAccessJwtAuthenticationConverterTest {
 
         assertThat(converter.convert(jwt(USER_ID.toString())).getAuthorities()).isEmpty();
     }
-
+    
     @Test
     void failsClosedForMissingLocalStatusOrRole() {
         when(repository.findById(USER_ID)).thenReturn(

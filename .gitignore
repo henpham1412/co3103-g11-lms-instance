@@ -47,3 +47,6 @@ Thumbs.db
 
 ### Local history ###
 .history/
+
+### Runtime-generated files ###
+/var/
