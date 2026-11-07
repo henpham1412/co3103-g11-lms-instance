@@ -29,13 +29,16 @@ class MigrationPolicyTest {
             "V2__align_lms_user_access_column_lengths.sql", -231189632,
             "V3__create_lms_setup_state.sql", 1480030657,
             "V4__create_classes_and_memberships.sql", -1197899662,
-            "V5__index_lms_user_access_default_sort.sql", 354517154,
-            "V6__add_identity_sync_watermarks.sql", 1240703539,
-            "V7__create_audit_logs.sql", 67085040);
+            "V5__create_learning_content_tables.sql", 1741533483,
+            "V6__index_lms_user_access_default_sort.sql", 354517154,
+            "V7__add_identity_sync_watermarks.sql", 1240703539,
+            "V8__create_audit_logs.sql", 67085040);
 
     @Test
-    void keepsExactlyTheSevenApprovedMigrations() throws IOException {
-        assertThat(migrations()).extracting(MigrationFile::fileName)
+    void keepsExactlyTheEightApprovedMigrations() throws IOException {
+        List<MigrationFile> migrations = migrations();
+        assertThat(migrations).hasSize(8);
+        assertThat(migrations).extracting(MigrationFile::fileName)
                 .containsExactlyInAnyOrderElementsOf(APPROVED_CHECKSUMS.keySet());
     }
 

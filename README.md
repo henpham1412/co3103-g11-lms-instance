@@ -76,6 +76,9 @@ Install the following software:
 - **JDK 25** — Required to compile and run the application.
 - **Git** — Required to clone and update the repository.
 - **PostgreSQL 18.6** — Required for local database-backed development; include its `bin` directory on `PATH`.
+- **ffprobe** (provided by FFmpeg) — Required for server-side MP4/WebM upload validation.
+  Ensure `ffprobe -version` works in the backend environment. Set `LMS_FFPROBE_EXECUTABLE`
+  to its executable path if it is not on `PATH`.
 
 A separate global Maven installation is not required. The repository includes Maven Wrapper scripts that download and use the configured Maven version.
 
@@ -132,7 +135,7 @@ On the first execution, Maven Wrapper may download the configured Maven distribu
 ```
 
 This command compiles and packages the application without executing tests. Run the
-full test suite using the disposable database instructions in §5.7 before committing changes.
+full test suite using the disposable database instructions in §5.8 before committing changes.
 
 ### 5.4 Configure PostgreSQL
 
@@ -198,14 +201,15 @@ export DB_PASSWORD
 
 Flyway runs `src/main/resources/db/migration` on application startup: V1 creates
 local access, V2 aligns columns, V3 initializes administrator setup, V4 creates
-classes and memberships, V5 adds the default admin-listing index, V6 adds independent
-profile/login token issuance watermarks, and V7 creates audit logs.
-An empty database receives V1 through V7. A database with the official main V4 classes
-history upgrades through V5 through V7 without changing existing migrations or data.
+classes and memberships, V5 creates learning-content tables, V6 adds the default
+admin-listing index, V7 adds independent profile/login token issuance watermarks,
+and V8 creates audit logs. An empty database receives V1 through V8. A database
+with the official main V5 learning-content history upgrades through V6 through V8
+without changing existing migrations or data.
 
 Before upgrading an existing database, inspect its Flyway history. A database that
 already applied the PR's former `V4__create_audit_logs.sql` has an incompatible V4
-history: renaming that script to V7 is not an in-place upgrade. Retained databases
+history: renaming that script to V8 is not an in-place upgrade. Retained databases
 require a separately reviewed data/history transition and rehearsal; disposable
 databases may be recreated only with the owner's authorization. Do not repair,
 clean, baseline, disable validation, or edit history to conceal a mismatch.
@@ -272,7 +276,24 @@ administrator's UUID; subsequent attempts cannot rewrite it or reopen setup.
 V1 permits duplicate display emails, V2 widens columns without adding uniqueness,
 and V3 creates/seeds setup state. Local identity remains keyed by UUID.
 
-### 5.7 Run the Full Test Suite
+### 5.7 Local Learning-Material Storage
+
+The learning-content API stores uploaded files outside the repository. By default, files are written to `var/lms-files` under the process working directory; set `LMS_STORAGE_LOCAL_DIRECTORY` to choose another directory. The default is relative, so a service started from a different working directory resolves it against that directory — give deployments an absolute path. Keep this directory persistent and include it in deployment backups.
+
+For `DOCUMENT` and uploaded `VIDEO` materials, send multipart form data to `POST /api/v1/lessons/{lessonId}/materials` with a JSON `metadata` part and a `file` part. Documents are limited to 50 MiB (PDF, DOCX, PPTX); uploaded videos are limited to 200 MiB (MP4, WebM). The server checks file contents and serves stored files through the authenticated URL returned as `file_url`. Students must have active class membership and the material must be published; tutors must own the class.
+
+This local-storage implementation does not persist extra checksum/MIME/size metadata columns. The current database schema stores the generated file URL only. External `URL` and HTTPS video links are still submitted as JSON.
+
+Uploaded PDF/Office documents are parsed with PDFBox/Apache POI. Video uploads are
+demuxed with ffprobe and must contain actual video packets in an MP4 or WebM
+container; audio-only MP4, malformed containers and header-only files are rejected
+with `415 UNSUPPORTED_MEDIA_TYPE`. The application does not impose a codec
+allowlist. Video probing has a 30-second timeout and bounded diagnostic output;
+a missing ffprobe installation is a server storage error, not an accepted upload.
+Password-protected PDFs remain encrypted uploads; the server recognizes their
+container but does not decrypt their page contents.
+
+### 5.8 Run the Full Test Suite
 
 Use JDK 25 and a **disposable PostgreSQL 18.6 database**, separate from development
 or production data. Tests create schemas, run Flyway migrations, insert/delete

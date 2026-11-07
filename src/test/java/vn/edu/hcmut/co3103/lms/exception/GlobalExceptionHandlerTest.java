@@ -3,10 +3,14 @@ package vn.edu.hcmut.co3103.lms.exception;
 import jakarta.validation.Valid;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.CsvSource;
 import org.junit.jupiter.params.provider.ValueSource;
 import org.springframework.boot.test.context.TestComponent;
+import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.data.core.PropertyReferenceException;
 import org.springframework.data.core.TypeInformation;
+import org.springframework.http.HttpMethod;
+import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
 import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.setup.MockMvcBuilders;
@@ -14,6 +18,8 @@ import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PatchMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RestController;
+import org.springframework.web.server.ResponseStatusException;
+import org.springframework.web.servlet.resource.NoResourceFoundException;
 import vn.edu.hcmut.co3103.lms.dto.admin.UpdateUserRoleRequest;
 import vn.edu.hcmut.co3103.lms.dto.admin.UpdateUserStatusRequest;
 
@@ -123,9 +129,47 @@ class GlobalExceptionHandlerTest {
                 .andExpect(content().string(accessStatus));
     }
 
+    @ParameterizedTest
+    @CsvSource({
+            "class-code, 409, CLASS_CODE_ALREADY_EXISTS, The class code is already in use.",
+            "data-conflict, 409, RESOURCE_CONFLICT, The request conflicts with existing data.",
+            "upload-too-large, 413, FILE_TOO_LARGE, The uploaded file exceeds the maximum allowed size.",
+            "missing-resource, 404, NOT_FOUND, Not Found"
+    })
+    void preservesMergedErrorEnvelope(String path, int status, String code, String message) throws Exception {
+        mockMvc.perform(get("/test/errors/" + path).header("Accept", "text/html"))
+                .andExpect(status().is(status))
+                .andExpect(content().contentTypeCompatibleWith(MediaType.APPLICATION_JSON))
+                .andExpect(jsonPath("$.length()").value(3))
+                .andExpect(jsonPath("$.code").value(code))
+                .andExpect(jsonPath("$.message").value(message))
+                .andExpect(jsonPath("$.details").isArray())
+                .andExpect(jsonPath("$.details").isEmpty());
+    }
+
     @TestComponent
     @RestController
     static class TestController {
+
+        @GetMapping("/test/errors/class-code")
+        public void classCodeConflict() {
+            throw new ClassCodeAlreadyExistsException();
+        }
+
+        @GetMapping("/test/errors/data-conflict")
+        public void dataConflict() {
+            throw new DataIntegrityViolationException("Internal database detail");
+        }
+
+        @GetMapping("/test/errors/upload-too-large")
+        public void uploadTooLarge() {
+            throw new ResponseStatusException(HttpStatus.CONTENT_TOO_LARGE, "FILE_TOO_LARGE");
+        }
+
+        @GetMapping("/test/errors/missing-resource")
+        public void missingResource() throws NoResourceFoundException {
+            throw new NoResourceFoundException(HttpMethod.GET, "private/resource", "Internal resource detail");
+        }
 
         @GetMapping("/test/admin/illegal-argument")
         public void illegalArgument() {

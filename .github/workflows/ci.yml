@@ -59,6 +59,14 @@ jobs:
       - name: Show Java version
         run: java --version
 
+      - name: Ensure ffprobe is available for video validation
+        run: |
+          if ! command -v ffprobe >/dev/null; then
+            sudo apt-get update
+            sudo apt-get install -y ffmpeg
+          fi
+          ffprobe -version
+
       - name: Make Maven Wrapper executable
         run: chmod +x mvnw
 

@@ -9,6 +9,10 @@ server:
     include-path: always
 
 spring:
+  servlet:
+    multipart:
+      max-file-size: 200MB
+      max-request-size: 201MB
   application:
     name: co3103-g11-lms-instance
   datasource:
@@ -25,11 +29,6 @@ spring:
         SET log_min_duration_statement = -1;
         SET log_min_duration_sample = -1;
         SET log_transaction_sample_rate = 0;
-
-  servlet:
-    multipart:
-      max-file-size: 5MB
-      max-request-size: 6MB
 
   jpa:
     hibernate:
@@ -49,6 +48,9 @@ spring:
 lms:
   allowed-origins: ${LMS_ALLOWED_ORIGINS:http://localhost:3000,http://localhost:5173}
   storage:
+    ffprobe-executable: ${LMS_FFPROBE_EXECUTABLE:ffprobe}
+    local:
+      directory: ${LMS_STORAGE_LOCAL_DIRECTORY:./var/lms-files}
     class-thumbnails:
       directory: ${LMS_CLASS_THUMBNAIL_DIRECTORY:./var/class-thumbnails}
       public-base-url: ${LMS_PUBLIC_BASE_URL:http://localhost:8081}

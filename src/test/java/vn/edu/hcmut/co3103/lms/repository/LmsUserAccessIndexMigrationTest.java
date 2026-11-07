@@ -42,14 +42,14 @@ class LmsUserAccessIndexMigrationTest {
             String listing = projection + table + " ORDER BY created_at DESC, user_id ASC LIMIT 20";
             if (upgrade) {
                 String plan = String.join("\n", jdbc.queryForList("EXPLAIN (ANALYZE, BUFFERS) " + listing, String.class));
-                System.out.println("Default listing before V5:\n" + plan);
+                System.out.println("Default listing before V6:\n" + plan);
                 assertThat(plan).contains("Seq Scan", "Sort");
             }
 
             var flyway = migration.target("latest").load();
             flyway.migrate();
             flyway.validate();
-            assertThat(flyway.info().current().getVersion().getVersion()).isEqualTo("7");
+            assertThat(flyway.info().current().getVersion().getVersion()).isEqualTo("8");
             assertThat(jdbc.queryForObject("SELECT indexdef FROM pg_indexes WHERE schemaname = ? AND indexname = ?",
                     String.class, schema, "idx_lms_user_access_created_at_user_id"))
                     .contains("USING btree (created_at DESC, user_id)");
@@ -59,7 +59,7 @@ class LmsUserAccessIndexMigrationTest {
             assertThat(jdbc.queryForList(listing + " OFFSET 20")).isEqualTo(before.subList(20, 40));
 
             String plan = String.join("\n", jdbc.queryForList("EXPLAIN (ANALYZE, BUFFERS) " + listing, String.class));
-            System.out.println("Default listing after V5 (upgrade=" + upgrade + "):\n" + plan);
+            System.out.println("Default listing after V6 (upgrade=" + upgrade + "):\n" + plan);
             assertThat(plan).contains("Index Scan using idx_lms_user_access_created_at_user_id")
                     .doesNotContain("Sort", "Seq Scan");
         } finally {

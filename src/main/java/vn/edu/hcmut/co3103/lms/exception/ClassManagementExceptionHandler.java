@@ -16,11 +16,13 @@ import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
 import org.springframework.web.server.ResponseStatusException;
 import vn.edu.hcmut.co3103.lms.controller.classmanagement.ClassController;
+import vn.edu.hcmut.co3103.lms.controller.learningcontent.ChapterController;
 
 import java.util.List;
 import java.util.Map;
 
-@RestControllerAdvice(assignableTypes = ClassController.class)
+// Class and learning-content endpoints share the same validation error contract.
+@RestControllerAdvice(assignableTypes = {ClassController.class, ChapterController.class})
 @Order(Ordered.HIGHEST_PRECEDENCE)
 public class ClassManagementExceptionHandler {
 
@@ -46,6 +48,7 @@ public class ClassManagementExceptionHandler {
             case NOT_FOUND -> "The requested resource was not found.";
             case FORBIDDEN -> "Access to this resource is denied.";
             case CONFLICT -> "The request conflicts with the current resource state.";
+            case CONTENT_TOO_LARGE -> "The uploaded file exceeds the maximum allowed size.";
             default -> status.is5xxServerError()
                     ? "An unexpected server error occurred."
                     : "The request could not be completed.";

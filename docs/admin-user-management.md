@@ -116,7 +116,7 @@ The service transaction:
 3. Writes one `LMS_USER_ACCESS_UPDATED` event for an actual change, in the same
    transaction, and commits both records together.
 
-Flyway **V7** creates `audit_logs`: `audit_log_id`, `actor_id`, `action`,
+Flyway **V8** creates `audit_logs`: `audit_log_id`, `actor_id`, `action`,
 `entity_type`, `entity_id`, `details`, `created_at`. The actor is the authenticated
 immutable UUID; the target is a `LmsUserAccess` UUID. JSON text in `details`
 contains before/after `lms_role` and `access_status`, without profile data. The

@@ -30,6 +30,16 @@
 		<java.version>25</java.version>
 	</properties>
 	<dependencies>
+        <dependency>
+            <groupId>org.apache.pdfbox</groupId>
+            <artifactId>pdfbox</artifactId>
+            <version>3.0.8</version>
+        </dependency>
+        <dependency>
+            <groupId>org.apache.poi</groupId>
+            <artifactId>poi-ooxml</artifactId>
+            <version>6.0.0</version>
+        </dependency>
         <!-- Pure-Java WebP decoder registered with ImageIO; JPEG/PNG use JDK readers. -->
         <dependency>
             <groupId>com.twelvemonkeys.imageio</groupId>
