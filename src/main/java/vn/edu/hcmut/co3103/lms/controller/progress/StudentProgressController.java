@@ -32,6 +32,15 @@ public class StudentProgressController {
         return progressService.getClassProgress(classId, userId(jwt));
     }
 
+    @GetMapping("/{classId}/resume-target")
+    @PreAuthorize("hasRole('STUDENT')")
+    public ClassProgressResponse.ResumeTarget getResumeTarget(
+            @AuthenticationPrincipal Jwt jwt,
+            @PathVariable UUID classId
+    ) {
+        return progressService.getResumeTarget(classId, userId(jwt));
+    }
+
     private UUID userId(Jwt jwt) {
         try {
             return UUID.fromString(jwt.getSubject());

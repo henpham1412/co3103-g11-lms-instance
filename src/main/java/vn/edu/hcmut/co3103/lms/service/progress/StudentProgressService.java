@@ -11,6 +11,8 @@ import vn.edu.hcmut.co3103.lms.entity.Class;
 import vn.edu.hcmut.co3103.lms.entity.ClassMember;
 import vn.edu.hcmut.co3103.lms.entity.CompletionMark;
 import vn.edu.hcmut.co3103.lms.entity.Lesson;
+import vn.edu.hcmut.co3103.lms.entity.LastVisit;
+import vn.edu.hcmut.co3103.lms.entity.Quiz;
 import vn.edu.hcmut.co3103.lms.entity.QuizAttempt;
 import vn.edu.hcmut.co3103.lms.repository.assessment.QuizAttemptRepository;
 import vn.edu.hcmut.co3103.lms.repository.classmanagement.ClassMemberRepository;
@@ -19,6 +21,7 @@ import vn.edu.hcmut.co3103.lms.repository.learningcontent.ActivityRepository;
 import vn.edu.hcmut.co3103.lms.repository.learningcontent.ChapterRepository;
 import vn.edu.hcmut.co3103.lms.repository.learningcontent.CompletionMarkRepository;
 import vn.edu.hcmut.co3103.lms.repository.learningcontent.LessonRepository;
+import vn.edu.hcmut.co3103.lms.repository.learningcontent.LastVisitRepository;
 
 import java.util.ArrayList;
 import java.util.HashMap;
@@ -26,6 +29,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
+import java.time.OffsetDateTime;
 import java.util.stream.Collectors;
 
 @Service
@@ -37,6 +41,7 @@ public class StudentProgressService {
     private final ActivityRepository activityRepository;
     private final CompletionMarkRepository completionMarkRepository;
     private final QuizAttemptRepository quizAttemptRepository;
+    private final LastVisitRepository lastVisitRepository;
 
     public StudentProgressService(
             ClassRepository classRepository,
@@ -45,7 +50,8 @@ public class StudentProgressService {
             LessonRepository lessonRepository,
             ActivityRepository activityRepository,
             CompletionMarkRepository completionMarkRepository,
-            QuizAttemptRepository quizAttemptRepository
+            QuizAttemptRepository quizAttemptRepository,
+            LastVisitRepository lastVisitRepository
     ) {
         this.classRepository = classRepository;
         this.classMemberRepository = classMemberRepository;
@@ -54,6 +60,7 @@ public class StudentProgressService {
         this.activityRepository = activityRepository;
         this.completionMarkRepository = completionMarkRepository;
         this.quizAttemptRepository = quizAttemptRepository;
+        this.lastVisitRepository = lastVisitRepository;
     }
 
     @Transactional(readOnly = true)
@@ -113,6 +120,70 @@ public class StudentProgressService {
                 targetClass.getClassId(), totalCompleted, totalEligible, percentage(totalCompleted, totalEligible),
                 status, chapterItems, resumeTarget
         );
+    }
+
+    @Transactional(readOnly = true)
+    public ClassProgressResponse.ResumeTarget getResumeTarget(UUID classId, UUID studentId) {
+        Class targetClass = classRepository.findById(classId)
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "CLASS_NOT_FOUND"));
+        ClassMember member = classMemberRepository.findByClassIdAndStudentId(classId, studentId)
+                .filter(candidate -> candidate.getStatus() == ClassMember.MembershipStatus.ACTIVE
+                        || candidate.getStatus() == ClassMember.MembershipStatus.INACTIVE)
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.FORBIDDEN, "MEMBERSHIP_REQUIRED"));
+
+        if (targetClass.getStatus() == Class.ClassStatus.ACTIVE
+                && member.getStatus() == ClassMember.MembershipStatus.ACTIVE) {
+            OffsetDateTime now = OffsetDateTime.now();
+            QuizAttempt inProgress = quizAttemptRepository.findByClassMember_ClassMemberId(member.getClassMemberId())
+                    .stream()
+                    .filter(attempt -> "IN_PROGRESS".equals(attempt.getStatus()))
+                    .filter(attempt -> isAvailableQuizAttempt(attempt, classId, now))
+                    .max(java.util.Comparator.comparing(QuizAttempt::getStartedAt)
+                            .thenComparing(QuizAttempt::getId))
+                    .orElse(null);
+            if (inProgress != null) {
+                return new ClassProgressResponse.ResumeTarget(
+                        "QUIZ_ATTEMPT", inProgress.getId(), "IN_PROGRESS_ATTEMPT");
+            }
+        }
+
+        LastVisit lastVisit = lastVisitRepository.findById(member.getClassMemberId()).orElse(null);
+        if (lastVisit != null && isVisibleLessonInClass(lastVisit.getLessonId(), classId)) {
+            return new ClassProgressResponse.ResumeTarget(
+                    "LESSON", lastVisit.getLessonId(), "MOST_RECENTLY_VISITED_LESSON");
+        }
+
+        Set<UUID> completedLessonIds = completionMarkRepository.findByClassMemberId(member.getClassMemberId())
+                .stream().map(CompletionMark::getLessonId).collect(Collectors.toSet());
+        UUID firstIncomplete = lessonRepository.findEligibleLessons(classId, Chapter.VisibilityStatus.PUBLISHED)
+                .stream().map(Lesson::getLessonId).filter(id -> !completedLessonIds.contains(id))
+                .findFirst().orElse(null);
+        if (firstIncomplete != null) {
+            return new ClassProgressResponse.ResumeTarget("LESSON", firstIncomplete, "FIRST_INCOMPLETE_LESSON");
+        }
+        return new ClassProgressResponse.ResumeTarget("CLASS_OUTLINE", classId, "NO_UNFINISHED_TARGET");
+    }
+
+    private boolean isAvailableQuizAttempt(QuizAttempt attempt, UUID classId, OffsetDateTime now) {
+        Quiz quiz = attempt.getQuiz();
+        Activity activity = quiz.getActivity();
+        if (activity.getActivityType() != Activity.ActivityType.QUIZ
+                || activity.getStatus() != Chapter.VisibilityStatus.PUBLISHED
+                || !isVisibleLessonInClass(activity.getLessonId(), classId)) {
+            return false;
+        }
+        OffsetDateTime endAt = attempt.getStartedAt().plusMinutes(quiz.getTimeLimitMinutes());
+        if (quiz.getDeadline().isBefore(endAt)) endAt = quiz.getDeadline();
+        return now.isBefore(endAt);
+    }
+
+    private boolean isVisibleLessonInClass(UUID lessonId, UUID classId) {
+        if (lessonId == null || classId == null) return false;
+        Lesson lesson = lessonRepository.findById(lessonId).orElse(null);
+        if (lesson == null || lesson.getStatus() != Chapter.VisibilityStatus.PUBLISHED) return false;
+        Chapter chapter = chapterRepository.findById(lesson.getChapterId()).orElse(null);
+        return chapter != null && chapter.getClassId().equals(classId)
+                && chapter.getStatus() == Chapter.VisibilityStatus.PUBLISHED;
     }
 
     private Map<UUID, List<QuizAttempt>> loadAttemptsByActivity(UUID classMemberId) {
