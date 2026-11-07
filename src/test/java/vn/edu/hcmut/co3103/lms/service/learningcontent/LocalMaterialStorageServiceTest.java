@@ -81,7 +81,7 @@ class LocalMaterialStorageServiceTest {
     @ParameterizedTest
     @CsvSource({"valid-encrypted.pdf,DOCUMENT,application/pdf", "valid.pdf,DOCUMENT,application/pdf", "valid.docx,DOCUMENT,application/vnd.openxmlformats-officedocument.wordprocessingml.document",
             "valid.pptx,DOCUMENT,application/vnd.openxmlformats-officedocument.presentationml.presentation",
-            "valid.mp4,VIDEO,video/mp4", "valid-faststart.mp4,VIDEO,video/mp4", "valid-fragmented.mp4,VIDEO,video/mp4", "valid-size-zero.mp4,VIDEO,video/mp4", "valid-extended-box.mp4,VIDEO,video/mp4", "valid-h264.mp4,VIDEO,video/mp4",
+            "valid.mp4,VIDEO,video/mp4", "valid-faststart.mp4,VIDEO,video/mp4", "valid-fragmented.mp4,VIDEO,video/mp4", "valid-audio-video.mp4,VIDEO,video/mp4", "valid-size-zero.mp4,VIDEO,video/mp4", "valid-extended-box.mp4,VIDEO,video/mp4", "valid-h264.mp4,VIDEO,video/mp4",
             "valid.webm,VIDEO,video/webm", "valid-vp9.webm,VIDEO,video/webm"})
     void storesRealSupportedFormatsWithoutTrustingSubmittedNameOrMime(String fixture,
             Material.MaterialType type, String mime) throws IOException {

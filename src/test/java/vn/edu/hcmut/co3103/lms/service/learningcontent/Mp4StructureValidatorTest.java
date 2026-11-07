@@ -50,6 +50,12 @@ class Mp4StructureValidatorTest {
                 Arguments.of("UUID zero-size header", concat(header("uuid", 0), new byte[16])),
                 Arguments.of("fragment containers", concat(box("moov", box("mvex", box("trex", new byte[8]))),
                         box("moof", box("traf", box("tfhd", new byte[8]))), box("mdat", new byte[]{1}))),
+                Arguments.of("unknown visual codec uses standard entry layout", media("vide", box("zzzz", concat(new byte[78], box("zzcf", new byte[]{1}))), true)),
+                Arguments.of("handler may follow sample table", media("vide", box("avc1", concat(new byte[78], box("avcC", new byte[]{1}))), false)),
+                Arguments.of("audio version zero", media("soun", audio(0, 28, box("esds", new byte[4])), true)),
+                Arguments.of("audio version one", media("soun", audio(1, 44, box("wave", box("esds", new byte[4]))), true)),
+                Arguments.of("audio version two", media("soun", audio(2, 64, box("chan", new byte[4])), true)),
+                Arguments.of("future audio layout remains opaque", media("soun", audio(3, 28, new byte[]{1}), true)),
                 Arguments.of("unknown extension is not recursively scanned", box("abcd", header("free", 100))));
     }
 
@@ -87,6 +93,15 @@ class Mp4StructureValidatorTest {
                 Arguments.of("unlisted extra sample entry", box("stsd", concat(fullCount(1), box("avc1", new byte[0]), box("zzzz", new byte[0])))),
                 Arguments.of("sample entry boundary exceeds stsd", box("stsd", concat(fullCount(1), header("avc1", 100)))),
                 Arguments.of("data reference entry overrun", box("dref", concat(fullCount(1), header("url ", 100)))),
+                Arguments.of("visual codec child overrun", media("vide", box("mp4v", concat(new byte[78], header("esds", 10_000))), true)),
+                Arguments.of("visual fixed fields truncated", media("vide", box("zzzz", new byte[77]), true)),
+                Arguments.of("visual codec child header undersized", media("vide", box("avc1", concat(new byte[78], header("avcC", 4))), true)),
+                Arguments.of("audio version zero fixed fields truncated", media("soun", audio(0, 27, new byte[0]), true)),
+                Arguments.of("audio version one fixed fields truncated", media("soun", audio(1, 43, new byte[0]), true)),
+                Arguments.of("audio version two fixed fields truncated", media("soun", audio(2, 63, new byte[0]), true)),
+                Arguments.of("audio codec child overrun", media("soun", audio(0, 28, header("esds", 100)), true)),
+                Arguments.of("missing media handler", box("mdia", box("minf", box("stbl", box("stsd", concat(fullCount(1), box("avc1", new byte[78]))))))),
+                Arguments.of("duplicate media handler", box("mdia", concat(handler("vide"), handler("soun")))),
                 Arguments.of("nested metadata data box overrun", box("ilst", box("\u00a9too", header("data", 100)))));
     }
 
@@ -102,6 +117,18 @@ class Mp4StructureValidatorTest {
     private static byte[] extended(String type, byte[] payload) { return concat(header(type, 1), longBytes(payload.length + 16L), payload); }
     private static byte[] fullCount(int count) { return ByteBuffer.allocate(8).putInt(0).putInt(count).array(); }
     private static byte[] longBytes(long value) { return ByteBuffer.allocate(8).putLong(value).array(); }
+    private static byte[] handler(String type) {
+        return box("hdlr", concat(new byte[8], type.getBytes(StandardCharsets.US_ASCII), new byte[13]));
+    }
+    private static byte[] media(String type, byte[] entry, boolean handlerFirst) {
+        byte[] minf = box("minf", box("stbl", box("stsd", concat(fullCount(1), entry))));
+        return box("mdia", handlerFirst ? concat(handler(type), minf) : concat(minf, handler(type)));
+    }
+    private static byte[] audio(int version, int prefix, byte[] children) {
+        byte[] fixed = new byte[prefix];
+        ByteBuffer.wrap(fixed).putShort(8, (short) version);
+        return box("mp4a", concat(fixed, children));
+    }
     private static byte[] header(String type, long size) {
         return ByteBuffer.allocate(8).putInt((int) size).put(type.getBytes(StandardCharsets.ISO_8859_1)).array();
     }

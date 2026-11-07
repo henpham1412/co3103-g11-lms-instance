@@ -587,7 +587,7 @@ class LearningContentHttpTest {
     private static Stream<Boolean> uploadFailureTiming() { return Stream.of(false, true); }
 
     @ParameterizedTest
-    @CsvSource({"valid-encrypted.pdf,DOCUMENT", "valid.pdf,DOCUMENT", "valid.docx,DOCUMENT", "valid.pptx,DOCUMENT", "valid.mp4,VIDEO", "valid-faststart.mp4,VIDEO", "valid-fragmented.mp4,VIDEO", "valid-size-zero.mp4,VIDEO", "valid-extended-box.mp4,VIDEO",
+    @CsvSource({"valid-encrypted.pdf,DOCUMENT", "valid.pdf,DOCUMENT", "valid.docx,DOCUMENT", "valid.pptx,DOCUMENT", "valid.mp4,VIDEO", "valid-faststart.mp4,VIDEO", "valid-fragmented.mp4,VIDEO", "valid-audio-video.mp4,VIDEO", "valid-size-zero.mp4,VIDEO", "valid-extended-box.mp4,VIDEO",
             "valid-h264.mp4,VIDEO", "valid.webm,VIDEO", "valid-vp9.webm,VIDEO"})
     void realSupportedUploadsPersistAndDownloadIdenticalBytes(String fixture, String type) throws Exception {
         UUID lessonId = createLesson(createChapter("{\"title\":\"Basics\"}"));

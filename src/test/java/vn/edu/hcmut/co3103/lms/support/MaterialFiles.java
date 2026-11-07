@@ -32,9 +32,15 @@ public final class MaterialFiles {
         // A free box declaring 100 bytes has only its eight-byte header available.
         tail[valid.length + 3] = 100;
         System.arraycopy("free".getBytes(StandardCharsets.US_ASCII), 0, tail, valid.length + 4, 4);
+        byte[] sampleOverrun = valid.clone();
+        // The fixture's esds child starts at 607 inside its mp4v sample entry.
+        if (!new String(valid, 611, 4, StandardCharsets.US_ASCII).equals("esds")) {
+            throw new IllegalStateException("Unexpected MP4 fixture layout");
+        }
+        java.nio.ByteBuffer.wrap(sampleOverrun).putInt(607, 10_000);
         return List.of(video("mp4-minus-one", Arrays.copyOf(valid, valid.length - 1)),
                 video("mp4-minus-eight", Arrays.copyOf(valid, valid.length - 8)),
-                video("mp4-incomplete-tail-box", tail));
+                video("mp4-incomplete-tail-box", tail), video("mp4-sample-entry-child-overrun", sampleOverrun));
     }
 
     public static List<InvalidFile> invalidFiles() {

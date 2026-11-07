@@ -11,7 +11,7 @@ import java.util.Set;
 final class Mp4StructureValidator {
     private static final Set<String> CONTAINERS = Set.of(
             "moov", "trak", "mdia", "minf", "stbl", "edts", "dinf", "mvex", "moof", "traf",
-            "mfra", "udta", "sinf", "schi", "tref", "iprp", "ipco", "meco", "hnti", "hinf");
+            "mfra", "udta", "sinf", "schi", "tref", "iprp", "ipco", "meco", "hnti", "hinf", "wave");
     private static final Set<String> OPAQUE_METADATA = Set.of("free", "skip", "uuid");
 
     private Mp4StructureValidator() { }
@@ -36,31 +36,74 @@ final class Mp4StructureValidator {
                 region.entries++;
                 if (region.expectedEntries >= 0 && region.entries > region.expectedEntries) throw incomplete();
                 if (region.layout == Layout.OPAQUE_ENTRIES) continue;
+                if (region.layout == Layout.SAMPLE_ENTRIES) {
+                    long prefix = sampleEntryPrefix(input, box, region.handler);
+                    if (prefix >= 0) regions.push(new Region(box.payload + prefix, box.end, Layout.BOXES, -1, region.handler));
+                    continue;
+                }
 
                 Region children = null;
                 if (region.layout == Layout.METADATA_ITEMS && !OPAQUE_METADATA.contains(box.type)) {
                     // An ilst item wraps data/mean/name boxes. Their payloads are opaque.
-                    children = new Region(box.payload, box.end, Layout.BOXES, -1);
+                    children = new Region(box.payload, box.end, Layout.BOXES, -1, region.handler);
+                } else if (box.type.equals("mdia")) {
+                    children = new Region(box.payload, box.end, Layout.BOXES, -1, mediaHandler(input, box, fileEnd));
                 } else if (CONTAINERS.contains(box.type)) {
-                    children = new Region(box.payload, box.end, Layout.BOXES, -1);
+                    children = new Region(box.payload, box.end, Layout.BOXES, -1, region.handler);
                 } else if (box.type.equals("ilst")) {
                     children = new Region(box.payload, box.end, Layout.METADATA_ITEMS, -1);
                 } else if (box.type.equals("meta")) {
                     children = metaChildren(input, box, fileEnd);
                 } else if (box.type.equals("stsd") || box.type.equals("dref")) {
-                    // FullBox version/flags + entry_count. Validate entry box boundaries,
-                    // without interpreting sample-entry payloads or imposing codec rules.
+                    // FullBox version/flags + entry_count. Media handler determines the
+                    // standard sample-entry layout; no coding-name allowlist is involved.
                     if (box.end - box.payload < 8) throw incomplete();
                     input.seek(box.payload + 4);
                     long count = Integer.toUnsignedLong(input.readInt());
                     long start = box.payload + 8;
                     if (count > (box.end - start) / 8) throw incomplete();
-                    children = new Region(start, box.end, Layout.OPAQUE_ENTRIES, count);
+                    children = new Region(start, box.end, box.type.equals("stsd")
+                            ? Layout.SAMPLE_ENTRIES : Layout.OPAQUE_ENTRIES, count, region.handler);
                 }
                 if (children != null) regions.push(children);
                 // mdat/free and unrecognized extension payloads are not box streams.
             }
         }
+    }
+
+    private static String mediaHandler(RandomAccessFile input, Box media, long fileEnd) throws IOException {
+        long position = media.payload;
+        String handler = null;
+        // Scan direct children first so hdlr/minf ordering does not affect validation.
+        while (position < media.end) {
+            Box child = readBox(input, position, media.end, fileEnd);
+            if (child.type.equals("hdlr")) {
+                if (handler != null || child.end - child.payload < 24) throw incomplete();
+                input.seek(child.payload + 8);
+                byte[] type = new byte[4]; input.readFully(type);
+                handler = new String(type, StandardCharsets.ISO_8859_1);
+            }
+            position = child.end;
+        }
+        if (handler == null) throw incomplete();
+        return handler;
+    }
+
+    private static long sampleEntryPrefix(RandomAccessFile input, Box box, String handler) throws IOException {
+        long prefix = -1;
+        if ("vide".equals(handler)) prefix = 78; // VisualSampleEntry, after the box header
+        else if ("soun".equals(handler)) {
+            if (box.end - box.payload < 28) throw incomplete();
+            input.seek(box.payload + 8);
+            prefix = switch (input.readUnsignedShort()) {
+                case 0 -> 28;
+                case 1 -> 44;
+                case 2 -> 64;
+                default -> -1; // Unrecognized extension layout remains opaque, not rejected.
+            };
+        }
+        if (prefix > box.end - box.payload) throw incomplete();
+        return prefix;
     }
 
     private static Box readBox(RandomAccessFile input, long start, long parentEnd, long fileEnd)
@@ -116,20 +159,26 @@ final class Mp4StructureValidator {
 
     private static IOException incomplete() { return new IOException("Incomplete MP4 box structure"); }
 
-    private enum Layout { BOXES, METADATA_ITEMS, OPAQUE_ENTRIES }
+    private enum Layout { BOXES, METADATA_ITEMS, OPAQUE_ENTRIES, SAMPLE_ENTRIES }
     private record Box(String type, long payload, long end) { }
     private static final class Region {
         private long position;
         private final long end;
         private final Layout layout;
         private final long expectedEntries;
+        private final String handler;
         private long entries;
 
         private Region(long position, long end, Layout layout, long expectedEntries) {
+            this(position, end, layout, expectedEntries, null);
+        }
+
+        private Region(long position, long end, Layout layout, long expectedEntries, String handler) {
             this.position = position;
             this.end = end;
             this.layout = layout;
             this.expectedEntries = expectedEntries;
+            this.handler = handler;
         }
     }
 }
