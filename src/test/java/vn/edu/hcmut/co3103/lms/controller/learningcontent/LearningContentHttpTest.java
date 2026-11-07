@@ -587,7 +587,7 @@ class LearningContentHttpTest {
     private static Stream<Boolean> uploadFailureTiming() { return Stream.of(false, true); }
 
     @ParameterizedTest
-    @CsvSource({"valid-encrypted.pdf,DOCUMENT", "valid.pdf,DOCUMENT", "valid.docx,DOCUMENT", "valid.pptx,DOCUMENT", "valid.mp4,VIDEO",
+    @CsvSource({"valid-encrypted.pdf,DOCUMENT", "valid.pdf,DOCUMENT", "valid.docx,DOCUMENT", "valid.pptx,DOCUMENT", "valid.mp4,VIDEO", "valid-faststart.mp4,VIDEO", "valid-fragmented.mp4,VIDEO", "valid-size-zero.mp4,VIDEO", "valid-extended-box.mp4,VIDEO",
             "valid-h264.mp4,VIDEO", "valid.webm,VIDEO", "valid-vp9.webm,VIDEO"})
     void realSupportedUploadsPersistAndDownloadIdenticalBytes(String fixture, String type) throws Exception {
         UUID lessonId = createLesson(createChapter("{\"title\":\"Basics\"}"));
@@ -623,6 +623,37 @@ class LearningContentHttpTest {
 
     private static Stream<MaterialFiles.InvalidFile> invalidUploadedFiles() {
         return MaterialFiles.invalidFiles().stream();
+    }
+
+    @ParameterizedTest
+    @MethodSource("incompleteMp4Files")
+    void incompleteMp4RejectsWithoutAnyNewRowOrFileAndPreservesExistingUpload(MaterialFiles.InvalidFile fixture)
+            throws Exception {
+        UUID lessonId = createLesson(createChapter("{\"title\":\"Completeness\"}"));
+        HttpResponse<String> kept = uploadMaterial(lessonId, tutorToken,
+                "{\"title\":\"Keep\",\"material_type\":\"DOCUMENT\"}", "keep.pdf", PDF_BYTES);
+        assertThat(kept.statusCode()).isEqualTo(201);
+        String key = json(kept).get("file_url").asString().replace("/api/v1/materials/files/", "");
+        List<Map<String, Object>> before = jdbcTemplate.queryForList(
+                "SELECT * FROM material WHERE lesson_id = ? ORDER BY material_id", lessonId);
+        Map<String, Object> classBefore = jdbcTemplate.queryForMap("SELECT * FROM class WHERE class_id = ?", classId);
+
+        HttpResponse<String> rejected = uploadMaterial(lessonId, tutorToken,
+                "{\"title\":\"Incomplete MP4\",\"material_type\":\"VIDEO\"}", "valid.mp4", fixture.bytes());
+
+        assertThat(rejected.statusCode()).isEqualTo(415);
+        assertThat(json(rejected).get("code").asString()).isEqualTo("UNSUPPORTED_MEDIA_TYPE");
+        assertThat(jdbcTemplate.queryForList(
+                "SELECT * FROM material WHERE lesson_id = ? ORDER BY material_id", lessonId)).isEqualTo(before);
+        assertThat(jdbcTemplate.queryForMap("SELECT * FROM class WHERE class_id = ?", classId)).isEqualTo(classBefore);
+        assertThat(STORAGE_DIRECTORY.resolve(key)).hasBinaryContent(PDF_BYTES);
+        try (Stream<Path> files = Files.list(STORAGE_DIRECTORY)) {
+            assertThat(files.toList()).containsExactly(STORAGE_DIRECTORY.resolve(key));
+        }
+    }
+
+    private static Stream<MaterialFiles.InvalidFile> incompleteMp4Files() {
+        return MaterialFiles.incompleteMp4Files().stream();
     }
 
     private List<Chapter> chapters() {

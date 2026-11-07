@@ -81,7 +81,7 @@ class LocalMaterialStorageServiceTest {
     @ParameterizedTest
     @CsvSource({"valid-encrypted.pdf,DOCUMENT,application/pdf", "valid.pdf,DOCUMENT,application/pdf", "valid.docx,DOCUMENT,application/vnd.openxmlformats-officedocument.wordprocessingml.document",
             "valid.pptx,DOCUMENT,application/vnd.openxmlformats-officedocument.presentationml.presentation",
-            "valid.mp4,VIDEO,video/mp4", "valid-h264.mp4,VIDEO,video/mp4",
+            "valid.mp4,VIDEO,video/mp4", "valid-faststart.mp4,VIDEO,video/mp4", "valid-fragmented.mp4,VIDEO,video/mp4", "valid-size-zero.mp4,VIDEO,video/mp4", "valid-extended-box.mp4,VIDEO,video/mp4", "valid-h264.mp4,VIDEO,video/mp4",
             "valid.webm,VIDEO,video/webm", "valid-vp9.webm,VIDEO,video/webm"})
     void storesRealSupportedFormatsWithoutTrustingSubmittedNameOrMime(String fixture,
             Material.MaterialType type, String mime) throws IOException {
@@ -106,6 +106,27 @@ class LocalMaterialStorageServiceTest {
 
     static java.util.stream.Stream<MaterialFiles.InvalidFile> invalidFiles() {
         return MaterialFiles.invalidFiles().stream();
+    }
+
+    @ParameterizedTest
+    @MethodSource("incompleteMp4Files")
+    void incompleteMp4DoesNotLeaveANewFileOrAlterAnExistingFile(MaterialFiles.InvalidFile fixture)
+            throws IOException {
+        Path existing = temporaryDirectory.resolve("unrelated.txt");
+        Files.writeString(existing, "Preserve existing bytes");
+        LocalMaterialStorageService storage = new LocalMaterialStorageService(temporaryDirectory);
+        var error = assertThrows(ResponseStatusException.class, () -> storage.store(
+                new MockMultipartFile("file", "valid.mp4", "video/mp4", fixture.bytes()), fixture.type()));
+        assertEquals(HttpStatus.UNSUPPORTED_MEDIA_TYPE, error.getStatusCode());
+        assertEquals("UNSUPPORTED_MEDIA_TYPE", error.getReason());
+        assertEquals("Preserve existing bytes", Files.readString(existing));
+        try (var files = Files.list(temporaryDirectory)) {
+            assertEquals(java.util.List.of(existing), files.toList());
+        }
+    }
+
+    static java.util.stream.Stream<MaterialFiles.InvalidFile> incompleteMp4Files() {
+        return MaterialFiles.incompleteMp4Files().stream();
     }
 
     @Test

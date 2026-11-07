@@ -139,6 +139,7 @@ public class MaterialContentValidator {
                 String brand = tags.path("major_brand").asString("").strip();
                 if (Arrays.asList(format.split(",")).contains("mp4") && !brand.isEmpty()
                         && !brand.equals("qt") && !brand.startsWith("3g") && !brand.startsWith("mj")) {
+                    Mp4StructureValidator.validate(file);
                     return "video/mp4";
                 }
                 if (Arrays.asList(format.split(",")).contains("webm") && hasWebmDocType(file)) {

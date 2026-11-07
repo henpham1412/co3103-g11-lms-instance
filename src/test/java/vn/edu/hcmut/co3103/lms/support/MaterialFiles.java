@@ -26,6 +26,17 @@ public final class MaterialFiles {
         @Override public String toString() { return name; }
     }
 
+    public static List<InvalidFile> incompleteMp4Files() {
+        byte[] valid = read("valid.mp4");
+        byte[] tail = Arrays.copyOf(valid, valid.length + 8);
+        // A free box declaring 100 bytes has only its eight-byte header available.
+        tail[valid.length + 3] = 100;
+        System.arraycopy("free".getBytes(StandardCharsets.US_ASCII), 0, tail, valid.length + 4, 4);
+        return List.of(video("mp4-minus-one", Arrays.copyOf(valid, valid.length - 1)),
+                video("mp4-minus-eight", Arrays.copyOf(valid, valid.length - 8)),
+                video("mp4-incomplete-tail-box", tail));
+    }
+
     public static List<InvalidFile> invalidFiles() {
         return List.of(
                 video("audio-only-mp4", read("audio-only.mp4")),
