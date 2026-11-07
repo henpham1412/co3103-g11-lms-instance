@@ -46,6 +46,17 @@ class Lms7ProgressEndpointsTest {
     }
 
     @Test
+    void resumeTargetReturnsServiceSelection() {
+        StudentProgressService service = mock(StudentProgressService.class);
+        StudentProgressController controller = new StudentProgressController(service);
+        var response = new ClassProgressResponse.ResumeTarget("QUIZ_ATTEMPT", lessonId, "IN_PROGRESS_ATTEMPT");
+        when(service.getResumeTarget(classId, studentId)).thenReturn(response);
+
+        assertEquals(response, controller.getResumeTarget(jwt, classId));
+        verify(service).getResumeTarget(classId, studentId);
+    }
+
+    @Test
     void putCompletionReturns200AndRefreshedMark() {
         LessonCompletionService service = mock(LessonCompletionService.class);
         LessonCompletionController controller = new LessonCompletionController(service);

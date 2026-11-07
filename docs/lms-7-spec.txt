@@ -105,11 +105,11 @@ Request Body
 }
 The system upserts the single LastVisit row for the class membership and refreshes `visited_at` on each visit. Return 200 OK with `{ "lesson_id": "...", "visited_at": "..." }`. Deleting a Lesson deletes its LastVisit row. Hiding a Lesson retains the row, but resume selection ignores it while the Lesson is hidden.
 GET /classes/{classId}/resume-target returns the selected target according to this priority:
-An available Quiz attempt in progress.
+The available in-progress QuizAttempt with the latest `started_at`, if its quiz, activity, containing Lesson and Chapter remain available.
 The most recently visited Lesson, if it remains visible and accessible.
 The first incomplete visible Lesson in content-tree order.
 If no incomplete eligible Lesson remains, return the class outline or no unfinished target.
-If the Student needs to continue an Assignment, the response points to its containing Lesson. Resuming does not create a completion mark.
+Assignment continuation is omitted until Submission records exist. Resuming does not create a completion mark. Archived classes and INACTIVE memberships may read LastVisit and lesson resume history, but do not receive an in-progress quiz target because they cannot continue an attempt.
 Important Error Cases for PUT /last-visit: 403 MEMBERSHIP_REQUIRED; 404 CLASS_NOT_FOUND or LESSON_NOT_FOUND (including a Lesson outside the requested class); 409 CLASS_ARCHIVED or LESSON_NOT_ACCESSIBLE.
 Example Response — Quiz Attempt in Progress
 {
