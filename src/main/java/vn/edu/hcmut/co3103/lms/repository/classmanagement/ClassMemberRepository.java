@@ -3,6 +3,8 @@ package vn.edu.hcmut.co3103.lms.repository.classmanagement;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
 import org.springframework.data.jpa.repository.JpaRepository;
+import jakarta.persistence.LockModeType;
+import org.springframework.data.jpa.repository.Lock;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 import vn.edu.hcmut.co3103.lms.entity.ClassMember;
@@ -19,6 +21,13 @@ public interface ClassMemberRepository
     Optional<ClassMember> findByClassIdAndStudentId(
             UUID classId,
             UUID studentId
+    );
+
+    @Lock(LockModeType.PESSIMISTIC_WRITE)
+    @Query("select cm from ClassMember cm where cm.classId = :classId and cm.studentId = :studentId")
+    Optional<ClassMember> findLockedByClassIdAndStudentId(
+            @Param("classId") UUID classId,
+            @Param("studentId") UUID studentId
     );
 
     boolean existsByClassIdAndStudentIdAndStatus(
