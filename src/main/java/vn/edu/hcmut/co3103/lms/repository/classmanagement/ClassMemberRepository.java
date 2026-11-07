@@ -41,6 +41,11 @@ public interface ClassMemberRepository
             UUID classId
     );
 
+    List<ClassMember> findByClassIdAndStatusOrderByJoinedAtAsc(
+            UUID classId,
+            MembershipStatus status
+    );
+
     @Query(value = """
             SELECT cm.*
             FROM class_member cm
