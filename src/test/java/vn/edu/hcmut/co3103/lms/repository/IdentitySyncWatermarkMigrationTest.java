@@ -26,7 +26,7 @@ class IdentitySyncWatermarkMigrationTest {
         String schema = "identity_sync_" + UUID.randomUUID().toString().replace("-", "");
         var migration = Flyway.configure().dataSource(dataSource).schemas(schema);
         try {
-            migration.target(upgrade ? "6" : "latest").load().migrate();
+            migration.target(upgrade ? "7" : "latest").load().migrate();
             String table = schema + ".lms_user_access";
             jdbc.execute("""
                     INSERT INTO %s (user_id, full_name, email, lms_role, access_status,
@@ -43,7 +43,7 @@ class IdentitySyncWatermarkMigrationTest {
             var flyway = migration.target("latest").load();
             flyway.migrate();
             flyway.validate();
-            assertThat(flyway.info().current().getVersion().getVersion()).isEqualTo("8");
+            assertThat(flyway.info().current().getVersion().getVersion()).isEqualTo("9");
             assertThat(jdbc.queryForList(originalColumns)).isEqualTo(before);
             assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM " + table
                     + " WHERE last_synced_profile_iat IS NULL AND last_login_token_iat IS NULL", Integer.class)).isEqualTo(2);

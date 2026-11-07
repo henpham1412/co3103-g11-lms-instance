@@ -201,15 +201,15 @@ export DB_PASSWORD
 
 Flyway runs `src/main/resources/db/migration` on application startup: V1 creates
 local access, V2 aligns columns, V3 initializes administrator setup, V4 creates
-classes and memberships, V5 creates learning-content tables, V6 adds the default
-admin-listing index, V7 adds independent profile/login token issuance watermarks,
-and V8 creates audit logs. An empty database receives V1 through V8. A database
-with the official main V5 learning-content history upgrades through V6 through V8
+classes and memberships, V5 creates learning-content tables, V6 creates assessments,
+V7 adds the default admin-listing index, V8 adds independent profile/login token
+issuance watermarks, and V9 creates audit logs. An empty database receives V1 through V9.
+A database with the official main V6 assessment history upgrades through V7 through V9
 without changing existing migrations or data.
 
 Before upgrading an existing database, inspect its Flyway history. A database that
 already applied the PR's former `V4__create_audit_logs.sql` has an incompatible V4
-history: renaming that script to V8 is not an in-place upgrade. Retained databases
+history: renaming that script to V9 is not an in-place upgrade. Retained databases
 require a separately reviewed data/history transition and rehearsal; disposable
 databases may be recreated only with the owner's authorization. Do not repair,
 clean, baseline, disable validation, or edit history to conceal a mismatch.

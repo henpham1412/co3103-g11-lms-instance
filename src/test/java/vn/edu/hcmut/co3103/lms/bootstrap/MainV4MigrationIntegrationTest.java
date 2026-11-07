@@ -67,7 +67,7 @@ class MainV4MigrationIntegrationTest {
             latest.validate();
             assertThat(latest.info().applied()).filteredOn(info -> info.getVersion() != null)
                     .extracting(info -> info.getVersion().getVersion())
-                    .containsExactly("1", "2", "3", "4", "5", "6", "7", "8");
+                    .containsExactly("1", "2", "3", "4", "5", "6", "7", "8", "9");
             assertThat(jdbc.queryForList(history)).isEqualTo(historyBefore);
             assertThat(jdbc.queryForList(userProjection)).isEqualTo(usersBefore);
             assertThat(jdbc.queryForList("SELECT * FROM " + schema + ".class")).isEqualTo(classesBefore);

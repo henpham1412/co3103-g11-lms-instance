@@ -93,7 +93,7 @@ and implementation components.
   login issuance. This is local authentication,
   independent of whether the particular endpoint permits the user's role, and
   distinct from Central Identity's authentication timestamp.
-- Flyway V7 adds these nullable bookkeeping columns to the DOC-04 §2.1.5 local
+- Flyway V8 adds these nullable bookkeeping columns to the DOC-04 §2.1.5 local
   access record, following DOC-07 versioned migration conventions. Both store exact
   epoch seconds as `NUMERIC(21,9)` because PostgreSQL timestamps round decoded
   nanoseconds to microseconds. Existing wall-clock timestamps cannot recover past

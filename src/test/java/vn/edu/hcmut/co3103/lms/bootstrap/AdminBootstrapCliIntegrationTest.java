@@ -28,7 +28,7 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 class AdminBootstrapCliIntegrationTest {
 
     @Test
-    void upgradesV1WithDuplicateEmailProjectionsThroughV8() {
+    void upgradesV1WithDuplicateEmailProjectionsThroughV9() {
         String schema = "bootstrap_v1_upgrade_" + UUID.randomUUID().toString().replace("-", "");
         UUID firstId = UUID.randomUUID();
         UUID secondId = UUID.randomUUID();
@@ -47,9 +47,9 @@ class AdminBootstrapCliIntegrationTest {
         try (var context = application(schema).run()) {
             var flyway = context.getBean(Flyway.class);
             flyway.validate();
-            assertThat(flyway.info().current().getVersion().getVersion()).isEqualTo("8");
+            assertThat(flyway.info().current().getVersion().getVersion()).isEqualTo("9");
             assertThat(flyway.info().applied()).filteredOn(info -> info.getVersion() != null)
-                    .extracting(info -> info.getVersion().getVersion()).containsExactly("1", "2", "3", "4", "5", "6", "7", "8");
+                    .extracting(info -> info.getVersion().getVersion()).containsExactly("1", "2", "3", "4", "5", "6", "7", "8", "9");
             var users = context.getBean(LmsUserAccessRepository.class);
             assertThat(users.findAll()).extracting(LmsUserAccess::getUserId)
                     .containsExactlyInAnyOrder(firstId, secondId);
@@ -132,9 +132,9 @@ class AdminBootstrapCliIntegrationTest {
         try (var context = application(schema).run()) {
             var flyway = context.getBean(Flyway.class);
             flyway.validate();
-            assertThat(flyway.info().current().getVersion().getVersion()).isEqualTo("8");
+            assertThat(flyway.info().current().getVersion().getVersion()).isEqualTo("9");
             assertThat(flyway.info().applied()).filteredOn(info -> info.getVersion() != null)
-                    .extracting(info -> info.getVersion().getVersion()).containsExactly("1", "2", "3", "4", "5", "6", "7", "8");
+                    .extracting(info -> info.getVersion().getVersion()).containsExactly("1", "2", "3", "4", "5", "6", "7", "8", "9");
             assertThat(context.getBeansOfType(AdminBootstrapRunner.class)).isEmpty();
             var state = context.getBean(LmsSetupStateRepository.class).findById(LmsSetupState.GLOBAL_ID).orElseThrow();
             assertThat(state.isCompleted()).isTrue();
@@ -211,7 +211,7 @@ class AdminBootstrapCliIntegrationTest {
     }
 
     private void insertLegacyUser(ConfigurableApplicationContext context, String schema, LmsUserAccess user) {
-        // Seed V1/V2 columns directly: the current entity also maps columns introduced by V7.
+        // Seed V1/V2 columns directly: the current entity also maps columns introduced by V8.
         context.getBean(JdbcTemplate.class).update("""
                 INSERT INTO %s.lms_user_access (user_id, full_name, email, lms_role, access_status, created_at, updated_at)
                 VALUES (?, ?, ?, ?, ?, COALESCE(CAST(? AS TIMESTAMPTZ), CURRENT_TIMESTAMP),
