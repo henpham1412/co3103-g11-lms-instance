@@ -45,6 +45,9 @@ public class GlobalExceptionHandler {
             case NOT_FOUND -> "The requested resource was not found.";
             case FORBIDDEN -> "Access to this resource is denied.";
             case CONFLICT -> "The request conflicts with the current resource state.";
+            // An upload can be rejected either by the container or by a storage service, so both
+            // paths have to produce the same documented envelope.
+            case CONTENT_TOO_LARGE -> "The uploaded file exceeds the maximum allowed size.";
             default -> status.is5xxServerError()
                     ? "An unexpected server error occurred."
                     : "The request could not be completed.";

@@ -227,7 +227,7 @@ class ClassThumbnailUploadHttpTest {
     }
 
     @Test
-    void theContainerRejectsABodyAboveTheDocumentedFiveMegabyteLimit() throws Exception {
+    void rejectsABodyAboveTheDocumentedFiveMegabyteLimit() throws Exception {
         LmsUserAccess tutor = saveUser(LmsRole.TUTOR);
         UUID classId = saveClass(tutor.getUserId());
         byte[] oversized = new byte[(int) ClassThumbnailStorageService.MAX_BYTES + 1024];
@@ -238,8 +238,9 @@ class ClassThumbnailUploadHttpTest {
         assertThat(response.statusCode()).isEqualTo(413);
         var error = objectMapper.readTree(response.body());
         assertThat(error.get("code").asString()).isEqualTo("FILE_TOO_LARGE");
-        // This exact message comes from the MaxUploadSizeExceededException handler, proving the
-        // container - not ClassThumbnailStorageService - rejected the body.
+        // The container ceiling now has to admit the learning-content video upload, so this body
+        // reaches ClassThumbnailStorageService, which enforces the five-megabyte thumbnail limit
+        // and shares the documented envelope with the container-level rejection.
         assertThat(error.get("message").asString()).isEqualTo("The uploaded file exceeds the maximum allowed size.");
         try (Stream<Path> files = Files.list(STORAGE_DIRECTORY)) {
             assertThat(files.toList()).isEmpty();
