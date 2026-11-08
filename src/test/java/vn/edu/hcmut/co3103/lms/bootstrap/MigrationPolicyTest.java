@@ -23,16 +23,20 @@ import static org.assertj.core.api.Assertions.assertThat;
  */
 class MigrationPolicyTest {
 
-    private static final Map<String, Integer> APPROVED_CHECKSUMS = Map.of(
-            "V1__create_lms_user_access.sql", 15260926,
-            "V2__align_lms_user_access_column_lengths.sql", -231189632,
-            "V3__create_lms_setup_state.sql", 1480030657,
-            "V4__create_classes_and_memberships.sql", -1197899662,
-            "V5__create_learning_content_tables.sql", 1741533483,
-            "V6__create_assessments.sql", -1763291091,
-            "V7__create_completion_marks.sql", -1834607830,
-            "V8__create_last_visit.sql", -1912735881,
-            "V9__restrict_completion_mark_lesson_delete.sql", 1456857671);
+    private static final Map<String, Integer> APPROVED_CHECKSUMS = Map.ofEntries(
+            Map.entry("V1__create_lms_user_access.sql", 15260926),
+            Map.entry("V2__align_lms_user_access_column_lengths.sql", -231189632),
+            Map.entry("V3__create_lms_setup_state.sql", 1480030657),
+            Map.entry("V4__create_classes_and_memberships.sql", -1197899662),
+            Map.entry("V5__create_learning_content_tables.sql", 1741533483),
+            Map.entry("V6__create_assessments.sql", -1763291091),
+            Map.entry("V7__create_completion_marks.sql", -1834607830),
+            Map.entry("V8__create_last_visit.sql", -1912735881),
+            Map.entry("V9__restrict_completion_mark_lesson_delete.sql", 1456857671),
+            Map.entry("V10__create_skill_topics_and_prerequisites.sql", -1708516214),
+            Map.entry("V11__create_lesson_skill_topics.sql", 261484167),
+            Map.entry("V12__create_activity_skill_topics.sql", -1627510611),
+            Map.entry("V13__create_question_skill_topics.sql", -415992144));
 
     @Test
     void keepsTheMigrationSetDownToTheApprovedFiles() throws IOException {

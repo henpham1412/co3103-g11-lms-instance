@@ -1,6 +1,6 @@
 package vn.edu.hcmut.co3103.lms.service.assessment;
 
-import lombok.RequiredArgsConstructor;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -11,10 +11,13 @@ import vn.edu.hcmut.co3103.lms.dto.response.QuestionResponse;
 import vn.edu.hcmut.co3103.lms.entity.Question;
 import vn.edu.hcmut.co3103.lms.entity.QuestionOption;
 import vn.edu.hcmut.co3103.lms.entity.Quiz;
+import vn.edu.hcmut.co3103.lms.repository.adaptive.QuestionSkillTopicRepository;
 import vn.edu.hcmut.co3103.lms.repository.assessment.QuestionOptionRepository;
 import vn.edu.hcmut.co3103.lms.repository.assessment.QuestionRepository;
 import vn.edu.hcmut.co3103.lms.repository.assessment.QuizAttemptRepository;
 import vn.edu.hcmut.co3103.lms.repository.assessment.QuizRepository;
+import vn.edu.hcmut.co3103.lms.service.adaptive.SkillTopicAssociationService;
+import vn.edu.hcmut.co3103.lms.service.adaptive.integration.ClassAccessAdapter;
 
 import java.math.BigDecimal;
 import java.util.*;
@@ -22,7 +25,6 @@ import java.util.function.Function;
 import java.util.stream.Collectors;
 
 @Service
-@RequiredArgsConstructor
 public class QuizQuestionService {
     private final AssessmentLocks locks;
     private final QuizRepository quizRepository;
@@ -31,6 +33,40 @@ public class QuizQuestionService {
     private final QuizAttemptRepository attemptRepository;
     private final QuizConfigurationAccessService accessService;
     private final QuizGradingService gradingService;
+    private final SkillTopicAssociationService skillTopicAssociationService;
+    private final QuestionSkillTopicRepository questionSkillTopicRepository;
+
+    public QuizQuestionService(AssessmentLocks locks,
+                               QuizRepository quizRepository,
+                               QuestionRepository questionRepository,
+                               QuestionOptionRepository optionRepository,
+                               QuizAttemptRepository attemptRepository,
+                               QuizConfigurationAccessService accessService,
+                               QuizGradingService gradingService) {
+        this(locks, quizRepository, questionRepository, optionRepository,
+                attemptRepository, accessService, gradingService, null, null);
+    }
+
+    @Autowired
+    public QuizQuestionService(AssessmentLocks locks,
+                               QuizRepository quizRepository,
+                               QuestionRepository questionRepository,
+                               QuestionOptionRepository optionRepository,
+                               QuizAttemptRepository attemptRepository,
+                               QuizConfigurationAccessService accessService,
+                               QuizGradingService gradingService,
+                               SkillTopicAssociationService skillTopicAssociationService,
+                               QuestionSkillTopicRepository questionSkillTopicRepository) {
+        this.locks = locks;
+        this.quizRepository = quizRepository;
+        this.questionRepository = questionRepository;
+        this.optionRepository = optionRepository;
+        this.attemptRepository = attemptRepository;
+        this.accessService = accessService;
+        this.gradingService = gradingService;
+        this.skillTopicAssociationService = skillTopicAssociationService;
+        this.questionSkillTopicRepository = questionSkillTopicRepository;
+    }
 
     @Transactional
     public QuestionResponse addQuestion(UUID activityId, UUID userId, QuestionCreateRequest request) {
@@ -68,6 +104,12 @@ public class QuizQuestionService {
                     saved.getIsCorrect(), saved.getOrderIndex());
         }).toList();
 
+        if (request.skillTopicIds() != null && skillTopicAssociationService != null) {
+            questionRepository.flush();
+            ClassAccessAdapter.withActor(userId, () ->
+                    skillTopicAssociationService.replaceQuestionTopics(savedQuestion.getId(), request.skillTopicIds()));
+        }
+
         return new QuestionResponse(savedQuestion.getId(), savedQuestion.getQuestionType(),
                 savedQuestion.getContent(), savedQuestion.getPointsAwarded(),
                 savedQuestion.getPointsDeducted(), savedQuestion.getOrderIndex(), options);
@@ -101,11 +143,9 @@ public class QuizQuestionService {
 
         validateQuestion(newType, newContent, newPointsAwarded, newPointsDeducted,
                 newOrderIndex, requestedOptions, questionId, quiz.getId());
-        if (request.skillTopicIdsProvided()
-                && request.skillTopicIds() != null && !request.skillTopicIds().isEmpty()) {
+        if (request.skillTopicIdsProvided() && request.skillTopicIds() == null) {
             throw invalidQuestion();
         }
-        // TODO: validate and persist skill_topic_ids once SkillTopic persistence is implemented.
 
         if (hasAttempts && !newType.equals(question.getQuestionType())) throw lockedQuestion();
         Set<UUID> suppliedExistingIds = requestedOptions.stream().map(QuestionUpdateRequest.Option::optionId)
@@ -127,6 +167,12 @@ public class QuizQuestionService {
         question.setPointsAwarded(newPointsAwarded);
         question.setPointsDeducted(newPointsDeducted);
         question.setOrderIndex(newOrderIndex);
+
+        if (request.skillTopicIdsProvided() && skillTopicAssociationService != null) {
+            questionRepository.flush();
+            ClassAccessAdapter.withActor(userId, () ->
+                    skillTopicAssociationService.replaceQuestionTopics(questionId, request.skillTopicIds()));
+        }
 
         if (hasAttempts && gradingChanged) gradingService.recalculateSubmittedAttempts(quiz);
         return toResponse(question, optionRepository.findByQuestion_IdOrderByOrderIndex(questionId));
@@ -151,14 +197,29 @@ public class QuizQuestionService {
                 && questionRepository.findByQuiz_IdOrderByOrderIndex(quiz.getId()).size() <= 1) {
             throw new ResponseStatusException(HttpStatus.CONFLICT, "ASSESSMENT_CONFIGURATION_MISMATCH");
         }
+        if (questionSkillTopicRepository != null) {
+            var links = questionSkillTopicRepository.findAllById_QuestionId(questionId);
+            if (!links.isEmpty()) {
+                questionSkillTopicRepository.deleteAll(links);
+                questionSkillTopicRepository.flush();
+            }
+        }
         optionRepository.deleteByQuestion_Id(questionId);
         optionRepository.flush();
         questionRepository.delete(question);
+        questionRepository.flush();
+        if (skillTopicAssociationService != null && quiz.getActivity() != null
+                && quiz.getActivity().getActivityId() != null) {
+            UUID activityId = quiz.getActivity().getActivityId();
+            ClassAccessAdapter.withActor(userId, () ->
+                    skillTopicAssociationService.synchronizeQuizTopics(activityId));
+        }
     }
 
     private boolean hasAnyField(QuestionUpdateRequest request) {
         return request.questionTypeProvided() || request.contentProvided() || request.pointsAwardedProvided()
-                || request.pointsDeductedProvided() || request.orderIndexProvided() || request.optionsProvided();
+                || request.pointsDeductedProvided() || request.orderIndexProvided() || request.optionsProvided()
+                || request.skillTopicIdsProvided();
     }
 
     private boolean optionsAffectGrading(List<QuestionUpdateRequest.Option> requested,
@@ -242,10 +303,6 @@ public class QuizQuestionService {
                 pointsDeducted, request.orderIndex(), request.options().stream()
                         .map(option -> option == null ? null : new QuestionUpdateRequest.Option(null,
                                 option.content(), option.isCorrect(), option.orderIndex())).toList(), null, null);
-        if (request.skillTopicIds() != null && !request.skillTopicIds().isEmpty()) {
-            throw invalidQuestion();
-        }
-        // TODO: validate and persist skill_topic_ids once SkillTopic persistence is implemented.
     }
 
     private void validateQuestion(String type, String content, BigDecimal pointsAwarded,
