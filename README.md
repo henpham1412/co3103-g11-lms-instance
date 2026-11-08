@@ -14,7 +14,7 @@ Each deployed LMS instance maintains its own configuration, PostgreSQL database,
 | Framework | Spring Boot 4.1.1 |
 | Build Tool | Apache Maven 3.9.12 via Maven Wrapper |
 | Maven Wrapper | 3.3.4 (`only-script`) |
-| Database | PostgreSQL |
+| Database | PostgreSQL 18.6 |
 | Persistence | Spring Data JPA |
 | Security | Spring Security and OAuth2 Resource Server |
 | Validation | Spring Boot Validation |
@@ -22,7 +22,8 @@ Each deployed LMS instance maintains its own configuration, PostgreSQL database,
 
 Spring Boot manages compatible dependency versions through its dependency management. Avoid adding explicit versions to individual Spring Boot-managed dependencies unless required and reviewed by the team.
 
-The PostgreSQL version, database name, local connection settings, and file-storage configuration will follow the shared development baseline agreed upon by the team.
+DOC-07 §§3.2–3.3 specifies PostgreSQL **18.6** and the development database
+`lms_instance_dev`. File storage is configured separately for each deployment.
 
 ## 2. Responsibilities
 
@@ -74,7 +75,7 @@ Install the following software:
 
 - **JDK 25** — Required to compile and run the application.
 - **Git** — Required to clone and update the repository.
-- **PostgreSQL** — Required for local database-backed development.
+- **PostgreSQL 18.6** — Required for local database-backed development; include its `bin` directory on `PATH`.
 - **ffprobe** (provided by FFmpeg) — Required for server-side MP4/WebM upload validation.
   Ensure `ffprobe -version` works in the backend environment. Set `LMS_FFPROBE_EXECUTABLE`
   to its executable path if it is not on `PATH`.
@@ -133,17 +134,92 @@ On the first execution, Maven Wrapper may download the configured Maven distribu
 ./mvnw -DskipTests package
 ```
 
-This command compiles and packages the application without executing tests. Run the available test suite separately when the required configuration and tests are ready.
+This command compiles and packages the application without executing tests. Run the
+full test suite using the disposable database instructions in §5.8 before committing changes.
 
 ### 5.4 Configure PostgreSQL
 
-Each developer should use a local PostgreSQL database for development. Central Identity and each LMS instance use separate databases.
+Use PostgreSQL **18.6** with a UTF-8 database. Central Identity uses
+`central_identity_dev`; this repository uses the separate `lms_instance_dev`
+database (DOC-07 §§3.2–3.3). Verify the server version and create the database:
 
-Before running the application, configure the LMS datasource settings in accordance with the shared local development configuration.
+```powershell
+psql -h localhost -p 5432 -U postgres -d postgres -c "SHOW server_version;"
+createdb -h localhost -p 5432 -U postgres --encoding=UTF8 lms_instance_dev
+```
 
-Do not commit local database passwords, signing keys, or other secrets. Keep machine-specific configuration separate from shared project files.
+The same PostgreSQL client commands work in macOS/Linux shells. The database
+creator needs `CREATEDB` or administrator privileges. The role used by the
+application must own the database/schema or have permission to create schemas,
+tables, constraints, and indexes, alter migrated objects, and read/write tables.
+Migration ownership is required on upgrades as well as fresh installations.
 
-The exact database name, port, datasource properties, and schema migration workflow will be documented once the team finalizes the local development baseline.
+Every application/Flyway pool connection sets PostgreSQL `log_error_verbosity=terse`,
+disables failing-statement and statement/duration sampling logs, and disables error
+parameter logging. This suppresses constraint-failure row `DETAIL` and SQL/parameter
+copies in the server log. SQLSTATE and safe primary constraint errors remain available.
+The pool fails to start if these settings cannot be applied. For a non-superuser
+database owner, a database administrator must grant these narrowly scoped permissions
+(replace `lms_app` with the actual application role):
+
+```sql
+GRANT SET ON PARAMETER log_error_verbosity, log_min_error_statement,
+  log_parameter_max_length_on_error, log_statement, log_min_duration_statement,
+  log_min_duration_sample, log_transaction_sample_rate TO lms_app;
+```
+
+Use the same policy for other database clients and log collectors. `terse` removes
+DETAIL, HINT, QUERY and CONTEXT; it does not redact arbitrary primary error messages
+from custom SQL/functions. Keep PII out of those messages and restrict database-log
+access and retention. See [PostgreSQL logging settings](https://www.postgresql.org/docs/18/runtime-config-logging.html).
+
+Set the datasource variables in the shell that runs Maven; `.env` files are not
+loaded automatically by the application:
+
+| Variable | Default / purpose |
+|---|---|
+| `DB_URL` | `jdbc:postgresql://localhost:5432/lms_instance_dev` |
+| `DB_USERNAME` | `postgres`; use the role that owns the local database |
+| `DB_PASSWORD` | Required; password for that role |
+
+**Windows PowerShell**
+
+```powershell
+$env:DB_URL = 'jdbc:postgresql://localhost:5432/lms_instance_dev'
+$env:DB_USERNAME = 'postgres'
+$env:DB_PASSWORD = [System.Net.NetworkCredential]::new('', (Read-Host 'Local PostgreSQL password' -AsSecureString)).Password
+```
+
+**macOS / Linux (Bash)**
+
+```bash
+export DB_URL='jdbc:postgresql://localhost:5432/lms_instance_dev'
+export DB_USERNAME='postgres'
+read -rsp 'Local PostgreSQL password: ' DB_PASSWORD; echo
+export DB_PASSWORD
+```
+
+Flyway runs `src/main/resources/db/migration` on application startup: V1 creates
+local access, V2 aligns columns, V3 initializes administrator setup, V4 creates
+classes and memberships, V5 creates learning-content tables, V6 creates assessments,
+V7 adds the default admin-listing index, V8 adds independent profile/login token
+issuance watermarks, and V9 creates audit logs. An empty database receives V1 through V9.
+A database with the official main V6 assessment history upgrades through V7 through V9
+without changing existing migrations or data.
+
+Before upgrading an existing database, inspect its Flyway history. A database that
+already applied the PR's former `V4__create_audit_logs.sql` has an incompatible V4
+history: renaming that script to V9 is not an in-place upgrade. Retained databases
+require a separately reviewed data/history transition and rehearsal; disposable
+databases may be recreated only with the owner's authorization. Do not repair,
+clean, baseline, disable validation, or edit history to conceal a mismatch.
+
+The nullable watermarks store exact epoch seconds (`NUMERIC(21,9)`) to preserve
+decoded JWT nanoseconds. Existing rows initialize them on the first trusted token
+after upgrade; historical issuance cannot be inferred from local wall-clock timestamps.
+Hibernate does not create/update the schema (`ddl-auto=none`). Add new versioned
+migrations for schema changes; do not edit applied migrations or repair checksums
+to bypass validation. Do not commit database passwords, signing keys, or other secrets.
 
 ### 5.5 Run the Application
 
@@ -163,6 +239,10 @@ After PostgreSQL is available and the required datasource and security configura
 
 The application listens on `http://localhost:8081` by default; set `SERVER_PORT` to override the port.
 Central Identity remains on `http://localhost:8080` by default.
+Set `CENTRAL_IDENTITY_ISSUER_URI` and `CENTRAL_IDENTITY_JWKS_URI` when the identity
+service uses different endpoints; the defaults are `http://localhost:8080` and
+`http://localhost:8080/.well-known/jwks.json`. See the
+[security contract](docs/security-contract.md) for token and authorization requirements.
 
 `lms.allowed-origins` (environment variable `LMS_ALLOWED_ORIGINS`) configures exact
 browser origins for credentialed cross-origin requests. It defaults to
@@ -213,6 +293,40 @@ a missing ffprobe installation is a server storage error, not an accepted upload
 Password-protected PDFs remain encrypted uploads; the server recognizes their
 container but does not decrypt their page contents.
 
+### 5.8 Run the Full Test Suite
+
+Use JDK 25 and a **disposable PostgreSQL 18.6 database**, separate from development
+or production data. Tests create schemas, run Flyway migrations, insert/delete
+fixtures, alter constraints, and drop test schemas. The test role must own this
+database and its test objects; superuser access is not required.
+The test role also needs the logging-parameter SET grants listed in §5.4.
+
+After setting `DB_USERNAME` and `DB_PASSWORD` as above:
+
+**Windows PowerShell**
+
+```powershell
+createdb -h localhost -p 5432 -U postgres --encoding=UTF8 lms_instance_test
+$env:DB_URL = 'jdbc:postgresql://localhost:5432/lms_instance_test'
+.\mvnw.cmd test
+```
+
+**macOS / Linux (Bash)**
+
+```bash
+createdb -h localhost -p 5432 -U postgres --encoding=UTF8 lms_instance_test
+export DB_URL='jdbc:postgresql://localhost:5432/lms_instance_test'
+./mvnw test
+```
+
+These examples use `postgres` as the database owner; adjust `-U`, host, port, and
+`DB_URL` together for a different local setup. The tests supply their own JWT/JWKS
+fixtures, so a running Central Identity service is not required. Expect
+`BUILD SUCCESS` with zero failures, errors, and skips. Restore `DB_URL` to
+`lms_instance_dev` before starting the development application. See the
+[user administration verification guide](docs/admin-user-management.md) and
+[bootstrap guide](docs/administrator-bootstrap.md) for feature-specific checks.
+
 ## 6. Maven Wrapper Configuration
 
 The repository uses the following settings in `.mvn/wrapper/maven-wrapper.properties`:
@@ -235,7 +349,12 @@ Do not modify these shared settings locally unless the team agrees to update the
 
 ## 7. API Overview
 
-All LMS API endpoints use the `/api/v1` prefix and are served by the current LMS instance.
+LMS-13 user administration follows the DOC-05 `/api/v1/admin/users` contract,
+with `/api/admin/users` retained as a route alias. Both routes use snake_case
+responses and one-based pagination; see the
+[UC7.1 endpoint and verification guide](docs/admin-user-management.md) and its
+[Postman collection](docs/postman/LMS-13_AdminUserManagement.postman_collection.json).
+All LMS endpoints are served by the current LMS instance.
 
 Protected endpoints require a valid Bearer access token:
 

@@ -1,0 +1,1632 @@
+{
+  "info": {
+    "name": "LMS-13 | UC7.1 Local User Administration",
+    "description": "DOC-05 user administration: list, detail and access updates at /api/v1/admin/users. Snake_case response fields and one-based pagination. See docs/admin-user-management.md for fixtures, aliases, audit semantics and verification. Set tokens locally. Run against a disposable database with one active administrator, a separate active student and a third target; ordered mutations leave the target ACTIVE/TUTOR.",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "auth": {
+    "type": "bearer",
+    "bearer": [
+      {
+        "key": "token",
+        "value": "{{admin_jwt}}",
+        "type": "string"
+      }
+    ]
+  },
+  "variable": [
+    {
+      "key": "baseUrl",
+      "value": "http://localhost:8081",
+      "type": "string",
+      "description": "LMS origin without trailing slash; application default port 8081."
+    },
+    {
+      "key": "admin_jwt",
+      "value": "",
+      "type": "string",
+      "description": "Local-only JWT for an ACTIVE local ADMINISTRATOR; omit Bearer prefix."
+    },
+    {
+      "key": "student_jwt",
+      "value": "",
+      "type": "string",
+      "description": "Local-only JWT for a separate ACTIVE local STUDENT, distinct from target_user_id; omit Bearer prefix."
+    },
+    {
+      "key": "target_user_id",
+      "value": "",
+      "type": "string",
+      "description": "Existing disposable non-admin UUID, distinct from both token subjects. Mutations leave this user ACTIVE/TUTOR."
+    }
+  ],
+  "event": [
+    {
+      "listen": "test",
+      "script": {
+        "type": "text/javascript",
+        "exec": [
+          "pm.test('JSON response', function () {",
+          "    pm.expect(pm.response.headers.get('Content-Type').split(';')[0].toLowerCase()).to.eql('application/json');",
+          "    pm.response.json();",
+          "});",
+          "function assertUser(user) {",
+          "    pm.expect(user).to.have.all.keys('user_id', 'lms_role', 'access_status', 'created_at', 'updated_at', 'full_name', 'email', 'last_login_at');",
+          "    pm.expect(user.user_id).to.match(/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i);",
+          "    pm.expect(user.lms_role).to.be.oneOf(['STUDENT', 'TUTOR', 'ADMINISTRATOR']);",
+          "    pm.expect(user.access_status).to.be.oneOf(['ACTIVE', 'SUSPENDED']);",
+          "    ['created_at', 'updated_at'].forEach(function (key) {",
+          "        pm.expect(user[key]).to.be.a('string');",
+          "        pm.expect(Number.isFinite(Date.parse(user[key]))).to.eql(true);",
+          "    });",
+          "}",
+          "if (pm.response.code === 200) {",
+          "    pm.test('Successful response schema', function () {",
+          "        const body = pm.response.json();",
+          "        if (pm.request.method === 'GET' && Array.isArray(body.items)) {",
+          "            pm.expect(body).to.have.all.keys('items', 'page', 'size', 'total_items', 'total_pages', 'last');",
+          "            pm.expect(body.items).to.be.an('array');",
+          "            ['page', 'size', 'total_items', 'total_pages'].forEach(function (key) {",
+          "                pm.expect(Number.isInteger(body[key])).to.eql(true);",
+          "                pm.expect(body[key]).to.be.at.least((key === 'size' || key === 'page') ? 1 : 0);",
+          "            });",
+          "            pm.expect(body.last).to.be.a('boolean');",
+          "            pm.expect(body.items.length).to.be.at.most(body.size);",
+          "            pm.expect(body.total_items).to.be.at.least(body.items.length);",
+          "            pm.expect(body.total_pages).to.eql(Math.ceil(body.total_items / body.size));",
+          "            pm.expect(body.last).to.eql(body.page >= body.total_pages);",
+          "            body.items.forEach(assertUser);",
+          "        } else {",
+          "            assertUser(body);",
+          "        }",
+          "    });",
+          "} else if (pm.response.code >= 400) {",
+          "    pm.test('DOC-05 section 1.8 error schema', function () {",
+          "        const body = pm.response.json();",
+          "        pm.expect(body).to.have.all.keys('code', 'message', 'details');",
+          "        pm.expect(body.code).to.be.a('string').and.not.empty;",
+          "        pm.expect(body.message).to.be.a('string').and.not.empty;",
+          "        pm.expect(body.details).to.eql([]);",
+          "    });",
+          "}"
+        ]
+      }
+    }
+  ],
+  "item": [
+    {
+      "name": "1. GET /api/v1/admin/users",
+      "description": "Listing, search, filters, pagination and authorization.",
+      "item": [
+        {
+          "name": "1.1 List all users - default pagination",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('HTTP 200', function () { pm.response.to.have.status(200); });",
+                  "",
+                  "",
+                  "",
+                  "pm.test('Page 1 with size 20 and newest users first', function () {",
+                  "    const body = pm.response.json();",
+                  "    pm.expect(body.page).to.eql(1);",
+                  "    pm.expect(body.size).to.eql(20);",
+                  "    for (let i = 1; i < body.items.length; i++) {",
+                  "        pm.expect(Date.parse(body.items[i - 1].created_at)).to.be.at.least(Date.parse(body.items[i].created_at));",
+                  "    }",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Accept",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/admin/users",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "admin",
+                "users"
+              ]
+            },
+            "description": "Expect page 1, size 20 and created_at descending."
+          },
+          "response": []
+        },
+        {
+          "name": "1.2a Search by keyword",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('HTTP 200', function () { pm.response.to.have.status(200); });",
+                  "",
+                  "",
+                  "",
+                  "pm.test('Page 1 with size 20 and newest users first', function () {",
+                  "    const body = pm.response.json();",
+                  "    pm.expect(body.page).to.eql(1);",
+                  "    pm.expect(body.size).to.eql(20);",
+                  "    for (let i = 1; i < body.items.length; i++) {",
+                  "        pm.expect(Date.parse(body.items[i - 1].created_at)).to.be.at.least(Date.parse(body.items[i].created_at));",
+                  "    }",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Accept",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/admin/users?q=example.test",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "admin",
+                "users"
+              ],
+              "query": [
+                {
+                  "key": "q",
+                  "value": "example.test"
+                }
+              ]
+            },
+            "description": "Search local names/emails for example.test. Seed matching emails or replace q with a known keyword. An empty result is valid."
+          },
+          "response": []
+        },
+        {
+          "name": "1.2b Search by target UUID",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('HTTP 200', function () { pm.response.to.have.status(200); });",
+                  "",
+                  "",
+                  "",
+                  "pm.test('Page 1 with size 20 and newest users first', function () {",
+                  "    const body = pm.response.json();",
+                  "    pm.expect(body.page).to.eql(1);",
+                  "    pm.expect(body.size).to.eql(20);",
+                  "    for (let i = 1; i < body.items.length; i++) {",
+                  "        pm.expect(Date.parse(body.items[i - 1].created_at)).to.be.at.least(Date.parse(body.items[i].created_at));",
+                  "    }",
+                  "});",
+                  "pm.test('Exactly the target user is found', function () {",
+                  "    const body = pm.response.json();",
+                  "    pm.expect(body.total_items).to.eql(1);",
+                  "    pm.expect(body.items).to.have.lengthOf(1);",
+                  "    pm.expect(body.items[0].user_id.toLowerCase()).to.eql(pm.variables.get('target_user_id').toLowerCase());",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Accept",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/admin/users?q={{target_user_id}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "admin",
+                "users"
+              ],
+              "query": [
+                {
+                  "key": "q",
+                  "value": "{{target_user_id}}"
+                }
+              ]
+            },
+            "description": "A canonical UUID also searches user_id exactly. Requires the existing target fixture."
+          },
+          "response": []
+        },
+        {
+          "name": "1.3a Filter by role - STUDENT",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('HTTP 200', function () { pm.response.to.have.status(200); });",
+                  "",
+                  "",
+                  "",
+                  "pm.test('Page 1 with size 20 and newest users first', function () {",
+                  "    const body = pm.response.json();",
+                  "    pm.expect(body.page).to.eql(1);",
+                  "    pm.expect(body.size).to.eql(20);",
+                  "    for (let i = 1; i < body.items.length; i++) {",
+                  "        pm.expect(Date.parse(body.items[i - 1].created_at)).to.be.at.least(Date.parse(body.items[i].created_at));",
+                  "    }",
+                  "});",
+                  "pm.test('Every returned role is STUDENT', function () {",
+                  "    pm.response.json().items.forEach(function (user) { pm.expect(user.lms_role).to.eql('STUDENT'); });",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Accept",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/admin/users?lms_role=STUDENT",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "admin",
+                "users"
+              ],
+              "query": [
+                {
+                  "key": "lms_role",
+                  "value": "STUDENT"
+                }
+              ]
+            },
+            "description": "Only local STUDENT records should be returned. Seed matching records to exercise the filter."
+          },
+          "response": []
+        },
+        {
+          "name": "1.3b Filter by role - TUTOR",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('HTTP 200', function () { pm.response.to.have.status(200); });",
+                  "",
+                  "",
+                  "",
+                  "pm.test('Page 1 with size 20 and newest users first', function () {",
+                  "    const body = pm.response.json();",
+                  "    pm.expect(body.page).to.eql(1);",
+                  "    pm.expect(body.size).to.eql(20);",
+                  "    for (let i = 1; i < body.items.length; i++) {",
+                  "        pm.expect(Date.parse(body.items[i - 1].created_at)).to.be.at.least(Date.parse(body.items[i].created_at));",
+                  "    }",
+                  "});",
+                  "pm.test('Every returned role is TUTOR', function () {",
+                  "    pm.response.json().items.forEach(function (user) { pm.expect(user.lms_role).to.eql('TUTOR'); });",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Accept",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/admin/users?lms_role=TUTOR",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "admin",
+                "users"
+              ],
+              "query": [
+                {
+                  "key": "lms_role",
+                  "value": "TUTOR"
+                }
+              ]
+            },
+            "description": "Only local TUTOR records should be returned. Seed matching records to exercise the filter."
+          },
+          "response": []
+        },
+        {
+          "name": "1.3c Filter by role - ADMINISTRATOR",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('HTTP 200', function () { pm.response.to.have.status(200); });",
+                  "",
+                  "",
+                  "",
+                  "pm.test('Page 1 with size 20 and newest users first', function () {",
+                  "    const body = pm.response.json();",
+                  "    pm.expect(body.page).to.eql(1);",
+                  "    pm.expect(body.size).to.eql(20);",
+                  "    for (let i = 1; i < body.items.length; i++) {",
+                  "        pm.expect(Date.parse(body.items[i - 1].created_at)).to.be.at.least(Date.parse(body.items[i].created_at));",
+                  "    }",
+                  "});",
+                  "pm.test('Every returned role is ADMINISTRATOR', function () {",
+                  "    pm.response.json().items.forEach(function (user) { pm.expect(user.lms_role).to.eql('ADMINISTRATOR'); });",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Accept",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/admin/users?lms_role=ADMINISTRATOR",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "admin",
+                "users"
+              ],
+              "query": [
+                {
+                  "key": "lms_role",
+                  "value": "ADMINISTRATOR"
+                }
+              ]
+            },
+            "description": "Only local ADMINISTRATOR records should be returned. Seed matching records to exercise the filter."
+          },
+          "response": []
+        },
+        {
+          "name": "1.4a Filter by status - ACTIVE",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('HTTP 200', function () { pm.response.to.have.status(200); });",
+                  "",
+                  "",
+                  "",
+                  "pm.test('Page 1 with size 20 and newest users first', function () {",
+                  "    const body = pm.response.json();",
+                  "    pm.expect(body.page).to.eql(1);",
+                  "    pm.expect(body.size).to.eql(20);",
+                  "    for (let i = 1; i < body.items.length; i++) {",
+                  "        pm.expect(Date.parse(body.items[i - 1].created_at)).to.be.at.least(Date.parse(body.items[i].created_at));",
+                  "    }",
+                  "});",
+                  "pm.test('Every returned access status is ACTIVE', function () {",
+                  "    pm.response.json().items.forEach(function (user) { pm.expect(user.access_status).to.eql('ACTIVE'); });",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Accept",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/admin/users?access_status=ACTIVE",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "admin",
+                "users"
+              ],
+              "query": [
+                {
+                  "key": "access_status",
+                  "value": "ACTIVE"
+                }
+              ]
+            },
+            "description": "Only ACTIVE access records should be returned. Query and PATCH both use access_status."
+          },
+          "response": []
+        },
+        {
+          "name": "1.4b Filter by status - SUSPENDED",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('HTTP 200', function () { pm.response.to.have.status(200); });",
+                  "",
+                  "",
+                  "",
+                  "pm.test('Page 1 with size 20 and newest users first', function () {",
+                  "    const body = pm.response.json();",
+                  "    pm.expect(body.page).to.eql(1);",
+                  "    pm.expect(body.size).to.eql(20);",
+                  "    for (let i = 1; i < body.items.length; i++) {",
+                  "        pm.expect(Date.parse(body.items[i - 1].created_at)).to.be.at.least(Date.parse(body.items[i].created_at));",
+                  "    }",
+                  "});",
+                  "pm.test('Every returned access status is SUSPENDED', function () {",
+                  "    pm.response.json().items.forEach(function (user) { pm.expect(user.access_status).to.eql('SUSPENDED'); });",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Accept",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/admin/users?access_status=SUSPENDED",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "admin",
+                "users"
+              ],
+              "query": [
+                {
+                  "key": "access_status",
+                  "value": "SUSPENDED"
+                }
+              ]
+            },
+            "description": "Only SUSPENDED access records should be returned. Query and PATCH both use access_status."
+          },
+          "response": []
+        },
+        {
+          "name": "1.5 Pagination - page 1, size 5, newest first",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('HTTP 200', function () { pm.response.to.have.status(200); });",
+                  "",
+                  "",
+                  "",
+                  "pm.test('Page 1 with size 5 and newest users first', function () {",
+                  "    const body = pm.response.json();",
+                  "    pm.expect(body.page).to.eql(1);",
+                  "    pm.expect(body.size).to.eql(5);",
+                  "    for (let i = 1; i < body.items.length; i++) {",
+                  "        pm.expect(Date.parse(body.items[i - 1].created_at)).to.be.at.least(Date.parse(body.items[i].created_at));",
+                  "    }",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Accept",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/admin/users?page=1&size=5&sort=created_at,desc",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "admin",
+                "users"
+              ],
+              "query": [
+                {
+                  "key": "page",
+                  "value": "1"
+                },
+                {
+                  "key": "size",
+                  "value": "5"
+                },
+                {
+                  "key": "sort",
+                  "value": "created_at,desc"
+                }
+              ]
+            },
+            "description": "Explicit page=1, size=5, sort=created_at,desc. At most five users are returned, with matching page totals."
+          },
+          "response": []
+        },
+        {
+          "name": "1.6 Unauthenticated list - 401",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('HTTP 401', function () { pm.response.to.have.status(401); });",
+                  "pm.test('UNAUTHORIZED error envelope', function () {",
+                  "    const body = pm.response.json();",
+                  "    pm.expect(body.code).to.eql(\"UNAUTHORIZED\");",
+                  "    pm.expect(body.message).to.eql(\"A valid Bearer access token is required.\");",
+                  "});",
+                  "pm.test('Bearer authentication challenge', function () {",
+                  "    pm.expect(pm.response.headers.get('WWW-Authenticate')).to.eql('Bearer');",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Accept",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/admin/users",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "admin",
+                "users"
+              ]
+            },
+            "description": "Explicit noauth overrides collection Bearer authentication.",
+            "auth": {
+              "type": "noauth"
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "1.7 Student list - 403",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('HTTP 403', function () { pm.response.to.have.status(403); });",
+                  "pm.test('FORBIDDEN error envelope', function () {",
+                  "    const body = pm.response.json();",
+                  "    pm.expect(body.code).to.eql(\"FORBIDDEN\");",
+                  "    pm.expect(body.message).to.eql(\"Access to this resource is denied.\");",
+                  "});",
+                  "pm.test('No authentication challenge for forbidden access', function () {",
+                  "    pm.expect(pm.response.headers.has('WWW-Authenticate')).to.eql(false);",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Accept",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/admin/users",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "admin",
+                "users"
+              ]
+            },
+            "description": "student_jwt must identify an ACTIVE local STUDENT (ROLE_STUDENT). External token claims cannot grant ADMINISTRATOR access.",
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{student_jwt}}",
+                  "type": "string"
+                }
+              ]
+            }
+          },
+          "response": []
+        }
+      ]
+    },
+    {
+      "name": "2. PATCH /api/v1/admin/users/{user_id}",
+      "description": "Run in order using disposable fixtures. Collection Bearer auth uses admin_jwt except the explicit student request.",
+      "item": [
+        {
+          "name": "2.1 Update role to TUTOR - 200",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('HTTP 200', function () { pm.response.to.have.status(200); });",
+                  "",
+                  "",
+                  "",
+                  "pm.test('Target UUID and requested access values', function () {",
+                  "    const body = pm.response.json();",
+                  "    pm.expect(body.user_id.toLowerCase()).to.eql(pm.variables.get('target_user_id').toLowerCase());",
+                  "    pm.expect(body.lms_role).to.eql(\"TUTOR\");",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "PATCH",
+            "header": [
+              {
+                "key": "Accept",
+                "value": "application/json"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/admin/users/{{target_user_id}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "admin",
+                "users",
+                "{{target_user_id}}"
+              ]
+            },
+            "description": "Assign the disposable target TUTOR. Omitted access_status preserves the current status.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"lms_role\": \"TUTOR\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "2.2 Suspend user - 200",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('HTTP 200', function () { pm.response.to.have.status(200); });",
+                  "",
+                  "",
+                  "",
+                  "pm.test('Target UUID and requested access values', function () {",
+                  "    const body = pm.response.json();",
+                  "    pm.expect(body.user_id.toLowerCase()).to.eql(pm.variables.get('target_user_id').toLowerCase());",
+                  "    pm.expect(body.lms_role).to.eql(\"TUTOR\");",
+                  "    pm.expect(body.access_status).to.eql(\"SUSPENDED\");",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "PATCH",
+            "header": [
+              {
+                "key": "Accept",
+                "value": "application/json"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/admin/users/{{target_user_id}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "admin",
+                "users",
+                "{{target_user_id}}"
+              ]
+            },
+            "description": "After 2.1, suspend the target while retaining TUTOR. Body property is access_status.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"access_status\": \"SUSPENDED\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "2.3 Reactivate user - 200",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('HTTP 200', function () { pm.response.to.have.status(200); });",
+                  "",
+                  "",
+                  "",
+                  "pm.test('Target UUID and requested access values', function () {",
+                  "    const body = pm.response.json();",
+                  "    pm.expect(body.user_id.toLowerCase()).to.eql(pm.variables.get('target_user_id').toLowerCase());",
+                  "    pm.expect(body.lms_role).to.eql(\"TUTOR\");",
+                  "    pm.expect(body.access_status).to.eql(\"ACTIVE\");",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "PATCH",
+            "header": [
+              {
+                "key": "Accept",
+                "value": "application/json"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/admin/users/{{target_user_id}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "admin",
+                "users",
+                "{{target_user_id}}"
+              ]
+            },
+            "description": "After 2.2, reactivate the target while retaining TUTOR.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"access_status\": \"ACTIVE\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "2.4 User not found - 404",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('HTTP 404', function () { pm.response.to.have.status(404); });",
+                  "pm.test('LOCAL_USER_NOT_FOUND error envelope', function () {",
+                  "    const body = pm.response.json();",
+                  "    pm.expect(body.code).to.eql(\"LOCAL_USER_NOT_FOUND\");",
+                  "    pm.expect(body.message).to.eql(\"User not found\");",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "PATCH",
+            "header": [
+              {
+                "key": "Accept",
+                "value": "application/json"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/admin/users/ffffffff-ffff-4fff-8fff-ffffffffffff",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "admin",
+                "users",
+                "ffffffff-ffff-4fff-8fff-ffffffffffff"
+              ]
+            },
+            "description": "The reserved example UUID must be absent from the disposable database. No record is created.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"lms_role\": \"TUTOR\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "2.5 Last-Active-Admin Protection",
+          "description": "Requires exactly one ACTIVE ADMINISTRATOR. Before each PATCH, a read-only authenticated preflight checks this and derives last_active_admin_id without changing target_user_id. A missing prerequisite fails an assertion and skips the mutation. Use a runtime supporting pm.execution.skipRequest(). Run with other administrator writers idle; this preflight is not a transaction or a concurrency test.",
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.sendRequest({",
+                  "    url: pm.variables.replaceIn('{{baseUrl}}/api/v1/admin/users?lms_role=ADMINISTRATOR&access_status=ACTIVE&page=1&size=2'),",
+                  "    method: 'GET',",
+                  "    header: { Authorization: pm.variables.replaceIn('Bearer {{admin_jwt}}'), Accept: 'application/json' }",
+                  "}, function (error, response) {",
+                  "    let adminId;",
+                  "    pm.test('Prerequisite: exactly one active administrator', function () {",
+                  "        pm.expect(error).to.not.exist;",
+                  "        pm.expect(response.code).to.eql(200);",
+                  "        const page = response.json();",
+                  "        pm.expect(page.total_items, 'Use a fixture with exactly one ACTIVE ADMINISTRATOR').to.eql(1);",
+                  "        pm.expect(page.items).to.have.lengthOf(1);",
+                  "        pm.expect(page.items[0].lms_role).to.eql('ADMINISTRATOR');",
+                  "        pm.expect(page.items[0].access_status).to.eql('ACTIVE');",
+                  "        pm.expect(page.items[0].user_id).to.match(/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i);",
+                  "        adminId = page.items[0].user_id;",
+                  "    });",
+                  "    if (!adminId) {",
+                  "        pm.execution.skipRequest();",
+                  "        return;",
+                  "    }",
+                  "    pm.variables.set('last_active_admin_id', adminId);",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "item": [
+            {
+              "name": "2.5a Demote last active administrator - 409",
+              "event": [
+                {
+                  "listen": "test",
+                  "script": {
+                    "type": "text/javascript",
+                    "exec": [
+                      "pm.test('HTTP 409', function () { pm.response.to.have.status(409); });",
+                      "pm.test('INVALID_ROLE_OR_STATUS_TRANSITION error envelope', function () {",
+                      "    const body = pm.response.json();",
+                      "    pm.expect(body.code).to.eql(\"INVALID_ROLE_OR_STATUS_TRANSITION\");",
+                      "    pm.expect(body.message).to.eql(\"Cannot demote or suspend the last active administrator\");",
+                      "});"
+                    ]
+                  }
+                }
+              ],
+              "request": {
+                "method": "PATCH",
+                "header": [
+                  {
+                    "key": "Accept",
+                    "value": "application/json"
+                  },
+                  {
+                    "key": "Content-Type",
+                    "value": "application/json"
+                  }
+                ],
+                "url": {
+                  "raw": "{{baseUrl}}/api/v1/admin/users/{{last_active_admin_id}}",
+                  "host": [
+                    "{{baseUrl}}"
+                  ],
+                  "path": [
+                    "api",
+                    "v1",
+                    "admin",
+                    "users",
+                    "{{last_active_admin_id}}"
+                  ]
+                },
+                "description": "Preflight selects the sole active administrator; attempt demotion to STUDENT.",
+                "body": {
+                  "mode": "raw",
+                  "raw": "{\n  \"lms_role\": \"STUDENT\"\n}",
+                  "options": {
+                    "raw": {
+                      "language": "json"
+                    }
+                  }
+                }
+              },
+              "response": []
+            },
+            {
+              "name": "2.5b Suspend last active administrator - 409",
+              "event": [
+                {
+                  "listen": "test",
+                  "script": {
+                    "type": "text/javascript",
+                    "exec": [
+                      "pm.test('HTTP 409', function () { pm.response.to.have.status(409); });",
+                      "pm.test('INVALID_ROLE_OR_STATUS_TRANSITION error envelope', function () {",
+                      "    const body = pm.response.json();",
+                      "    pm.expect(body.code).to.eql(\"INVALID_ROLE_OR_STATUS_TRANSITION\");",
+                      "    pm.expect(body.message).to.eql(\"Cannot demote or suspend the last active administrator\");",
+                      "});"
+                    ]
+                  }
+                }
+              ],
+              "request": {
+                "method": "PATCH",
+                "header": [
+                  {
+                    "key": "Accept",
+                    "value": "application/json"
+                  },
+                  {
+                    "key": "Content-Type",
+                    "value": "application/json"
+                  }
+                ],
+                "url": {
+                  "raw": "{{baseUrl}}/api/v1/admin/users/{{last_active_admin_id}}",
+                  "host": [
+                    "{{baseUrl}}"
+                  ],
+                  "path": [
+                    "api",
+                    "v1",
+                    "admin",
+                    "users",
+                    "{{last_active_admin_id}}"
+                  ]
+                },
+                "description": "Preflight selects the sole active administrator; attempt suspension.",
+                "body": {
+                  "mode": "raw",
+                  "raw": "{\n  \"access_status\": \"SUSPENDED\"\n}",
+                  "options": {
+                    "raw": {
+                      "language": "json"
+                    }
+                  }
+                }
+              },
+              "response": []
+            }
+          ]
+        },
+        {
+          "name": "2.6 Invalid bodies - 400",
+          "description": "A missing body or whole-body null is invalid. Empty object and null fields are accepted; see 2.8.",
+          "item": [
+            {
+              "name": "2.6a Missing (zero-length) body - 400",
+              "event": [
+                {
+                  "listen": "test",
+                  "script": {
+                    "type": "text/javascript",
+                    "exec": [
+                      "pm.test('HTTP 400', function () { pm.response.to.have.status(400); });",
+                      "pm.test('BAD_REQUEST error envelope', function () {",
+                      "    const body = pm.response.json();",
+                      "    pm.expect(body.code).to.eql(\"BAD_REQUEST\");",
+                      "    pm.expect(body.message).to.eql(\"Bad Request\");",
+                      "});"
+                    ]
+                  }
+                }
+              ],
+              "request": {
+                "method": "PATCH",
+                "header": [
+                  {
+                    "key": "Accept",
+                    "value": "application/json"
+                  },
+                  {
+                    "key": "Content-Type",
+                    "value": "application/json"
+                  }
+                ],
+                "url": {
+                  "raw": "{{baseUrl}}/api/v1/admin/users/{{target_user_id}}",
+                  "host": [
+                    "{{baseUrl}}"
+                  ],
+                  "path": [
+                    "api",
+                    "v1",
+                    "admin",
+                    "users",
+                    "{{target_user_id}}"
+                  ]
+                },
+                "description": "A required request body is absent. This is different from the valid empty JSON object {}.",
+                "body": {
+                  "mode": "raw",
+                  "raw": "",
+                  "options": {
+                    "raw": {
+                      "language": "json"
+                    }
+                  }
+                }
+              },
+              "response": []
+            },
+            {
+              "name": "2.6b Whole-body JSON null - 400",
+              "event": [
+                {
+                  "listen": "test",
+                  "script": {
+                    "type": "text/javascript",
+                    "exec": [
+                      "pm.test('HTTP 400', function () { pm.response.to.have.status(400); });",
+                      "pm.test('BAD_REQUEST error envelope', function () {",
+                      "    const body = pm.response.json();",
+                      "    pm.expect(body.code).to.eql(\"BAD_REQUEST\");",
+                      "    pm.expect(body.message).to.eql(\"Bad Request\");",
+                      "});"
+                    ]
+                  }
+                }
+              ],
+              "request": {
+                "method": "PATCH",
+                "header": [
+                  {
+                    "key": "Accept",
+                    "value": "application/json"
+                  },
+                  {
+                    "key": "Content-Type",
+                    "value": "application/json"
+                  }
+                ],
+                "url": {
+                  "raw": "{{baseUrl}}/api/v1/admin/users/{{target_user_id}}",
+                  "host": [
+                    "{{baseUrl}}"
+                  ],
+                  "path": [
+                    "api",
+                    "v1",
+                    "admin",
+                    "users",
+                    "{{target_user_id}}"
+                  ]
+                },
+                "description": "The entire required body cannot be null; individual fields can be null.",
+                "body": {
+                  "mode": "raw",
+                  "raw": "null",
+                  "options": {
+                    "raw": {
+                      "language": "json"
+                    }
+                  }
+                }
+              },
+              "response": []
+            },
+            {
+              "name": "2.6c Invalid role enum - 400",
+              "event": [
+                {
+                  "listen": "test",
+                  "script": {
+                    "type": "text/javascript",
+                    "exec": [
+                      "pm.test('HTTP 400', function () { pm.response.to.have.status(400); });",
+                      "pm.test('VALIDATION_ERROR error envelope', function () {",
+                      "    const body = pm.response.json();",
+                      "    pm.expect(body.code).to.eql(\"VALIDATION_ERROR\");",
+                      "    pm.expect(body.message).to.eql(\"Validation failed\");",
+                      "});"
+                    ]
+                  }
+                }
+              ],
+              "request": {
+                "method": "PATCH",
+                "header": [
+                  {
+                    "key": "Accept",
+                    "value": "application/json"
+                  },
+                  {
+                    "key": "Content-Type",
+                    "value": "application/json"
+                  }
+                ],
+                "url": {
+                  "raw": "{{baseUrl}}/api/v1/admin/users/{{target_user_id}}",
+                  "host": [
+                    "{{baseUrl}}"
+                  ],
+                  "path": [
+                    "api",
+                    "v1",
+                    "admin",
+                    "users",
+                    "{{target_user_id}}"
+                  ]
+                },
+                "description": "OWNER is not an allowed LMS role.",
+                "body": {
+                  "mode": "raw",
+                  "raw": "{\"lms_role\":\"OWNER\"}",
+                  "options": {
+                    "raw": {
+                      "language": "json"
+                    }
+                  }
+                }
+              },
+              "response": []
+            },
+            {
+              "name": "2.6d Invalid access_status enum - 400",
+              "event": [
+                {
+                  "listen": "test",
+                  "script": {
+                    "type": "text/javascript",
+                    "exec": [
+                      "pm.test('HTTP 400', function () { pm.response.to.have.status(400); });",
+                      "pm.test('VALIDATION_ERROR error envelope', function () {",
+                      "    const body = pm.response.json();",
+                      "    pm.expect(body.code).to.eql(\"VALIDATION_ERROR\");",
+                      "    pm.expect(body.message).to.eql(\"Validation failed\");",
+                      "});"
+                    ]
+                  }
+                }
+              ],
+              "request": {
+                "method": "PATCH",
+                "header": [
+                  {
+                    "key": "Accept",
+                    "value": "application/json"
+                  },
+                  {
+                    "key": "Content-Type",
+                    "value": "application/json"
+                  }
+                ],
+                "url": {
+                  "raw": "{{baseUrl}}/api/v1/admin/users/{{target_user_id}}",
+                  "host": [
+                    "{{baseUrl}}"
+                  ],
+                  "path": [
+                    "api",
+                    "v1",
+                    "admin",
+                    "users",
+                    "{{target_user_id}}"
+                  ]
+                },
+                "description": "DELETED is not an allowed access status.",
+                "body": {
+                  "mode": "raw",
+                  "raw": "{\"access_status\":\"DELETED\"}",
+                  "options": {
+                    "raw": {
+                      "language": "json"
+                    }
+                  }
+                }
+              },
+              "response": []
+            },
+            {
+              "name": "2.6e Malformed JSON - 400",
+              "event": [
+                {
+                  "listen": "test",
+                  "script": {
+                    "type": "text/javascript",
+                    "exec": [
+                      "pm.test('HTTP 400', function () { pm.response.to.have.status(400); });",
+                      "pm.test('BAD_REQUEST error envelope', function () {",
+                      "    const body = pm.response.json();",
+                      "    pm.expect(body.code).to.eql(\"BAD_REQUEST\");",
+                      "    pm.expect(body.message).to.eql(\"Bad Request\");",
+                      "});"
+                    ]
+                  }
+                }
+              ],
+              "request": {
+                "method": "PATCH",
+                "header": [
+                  {
+                    "key": "Accept",
+                    "value": "application/json"
+                  },
+                  {
+                    "key": "Content-Type",
+                    "value": "application/json"
+                  }
+                ],
+                "url": {
+                  "raw": "{{baseUrl}}/api/v1/admin/users/{{target_user_id}}",
+                  "host": [
+                    "{{baseUrl}}"
+                  ],
+                  "path": [
+                    "api",
+                    "v1",
+                    "admin",
+                    "users",
+                    "{{target_user_id}}"
+                  ]
+                },
+                "description": "Incomplete JSON must be rejected before the service updates access.",
+                "body": {
+                  "mode": "raw",
+                  "raw": "{",
+                  "options": {
+                    "raw": {
+                      "language": "json"
+                    }
+                  }
+                }
+              },
+              "response": []
+            }
+          ]
+        },
+        {
+          "name": "2.7 Student update - 403",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('HTTP 403', function () { pm.response.to.have.status(403); });",
+                  "pm.test('FORBIDDEN error envelope', function () {",
+                  "    const body = pm.response.json();",
+                  "    pm.expect(body.code).to.eql(\"FORBIDDEN\");",
+                  "    pm.expect(body.message).to.eql(\"Access to this resource is denied.\");",
+                  "});",
+                  "pm.test('No authentication challenge for forbidden access', function () {",
+                  "    pm.expect(pm.response.headers.has('WWW-Authenticate')).to.eql(false);",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "PATCH",
+            "header": [
+              {
+                "key": "Accept",
+                "value": "application/json"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/admin/users/{{target_user_id}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "admin",
+                "users",
+                "{{target_user_id}}"
+              ]
+            },
+            "description": "An ACTIVE local STUDENT cannot update any local user, even with an otherwise valid payload.",
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{student_jwt}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"lms_role\": \"TUTOR\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "2.8 Accepted no-op bodies - 200",
+          "description": "Run after 2.1-2.3: the target is ACTIVE/TUTOR. The partial-update DTO permits empty objects and explicit null fields; neither clears existing values.",
+          "item": [
+            {
+              "name": "2.8a Empty object preserves access - 200",
+              "event": [
+                {
+                  "listen": "test",
+                  "script": {
+                    "type": "text/javascript",
+                    "exec": [
+                      "pm.test('HTTP 200', function () { pm.response.to.have.status(200); });",
+                      "",
+                      "",
+                      "",
+                      "pm.test('Target UUID and requested access values', function () {",
+                      "    const body = pm.response.json();",
+                      "    pm.expect(body.user_id.toLowerCase()).to.eql(pm.variables.get('target_user_id').toLowerCase());",
+                      "    pm.expect(body.lms_role).to.eql(\"TUTOR\");",
+                      "    pm.expect(body.access_status).to.eql(\"ACTIVE\");",
+                      "});"
+                    ]
+                  }
+                }
+              ],
+              "request": {
+                "method": "PATCH",
+                "header": [
+                  {
+                    "key": "Accept",
+                    "value": "application/json"
+                  },
+                  {
+                    "key": "Content-Type",
+                    "value": "application/json"
+                  }
+                ],
+                "url": {
+                  "raw": "{{baseUrl}}/api/v1/admin/users/{{target_user_id}}",
+                  "host": [
+                    "{{baseUrl}}"
+                  ],
+                  "path": [
+                    "api",
+                    "v1",
+                    "admin",
+                    "users",
+                    "{{target_user_id}}"
+                  ]
+                },
+                "description": "An empty JSON object is a valid no-op.",
+                "body": {
+                  "mode": "raw",
+                  "raw": "{}",
+                  "options": {
+                    "raw": {
+                      "language": "json"
+                    }
+                  }
+                }
+              },
+              "response": []
+            },
+            {
+              "name": "2.8b Null fields preserve access - 200",
+              "event": [
+                {
+                  "listen": "test",
+                  "script": {
+                    "type": "text/javascript",
+                    "exec": [
+                      "pm.test('HTTP 200', function () { pm.response.to.have.status(200); });",
+                      "",
+                      "",
+                      "",
+                      "pm.test('Target UUID and requested access values', function () {",
+                      "    const body = pm.response.json();",
+                      "    pm.expect(body.user_id.toLowerCase()).to.eql(pm.variables.get('target_user_id').toLowerCase());",
+                      "    pm.expect(body.lms_role).to.eql(\"TUTOR\");",
+                      "    pm.expect(body.access_status).to.eql(\"ACTIVE\");",
+                      "});"
+                    ]
+                  }
+                }
+              ],
+              "request": {
+                "method": "PATCH",
+                "header": [
+                  {
+                    "key": "Accept",
+                    "value": "application/json"
+                  },
+                  {
+                    "key": "Content-Type",
+                    "value": "application/json"
+                  }
+                ],
+                "url": {
+                  "raw": "{{baseUrl}}/api/v1/admin/users/{{target_user_id}}",
+                  "host": [
+                    "{{baseUrl}}"
+                  ],
+                  "path": [
+                    "api",
+                    "v1",
+                    "admin",
+                    "users",
+                    "{{target_user_id}}"
+                  ]
+                },
+                "description": "Null fields preserve the existing values.",
+                "body": {
+                  "mode": "raw",
+                  "raw": "{\n  \"lms_role\": null,\n  \"access_status\": null\n}",
+                  "options": {
+                    "raw": {
+                      "language": "json"
+                    }
+                  }
+                }
+              },
+              "response": []
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "3. GET user details",
+      "item": [
+        {
+          "name": "3.1 Retrieve the local user",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Accept",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/admin/users/{{target_user_id}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "admin",
+                "users",
+                "{{target_user_id}}"
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('HTTP 200', function () { pm.response.to.have.status(200); });",
+                  "pm.test('Requested local user', function () { pm.expect(pm.response.json().user_id).to.eql(pm.variables.get('target_user_id')); });"
+                ]
+              }
+            }
+          ],
+          "response": []
+        }
+      ]
+    }
+  ]
+}

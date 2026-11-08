@@ -1,9 +1,11 @@
 package vn.edu.hcmut.co3103.lms.security.jwt;
 
+import jakarta.validation.Validator;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.EnumSource;
+import org.junit.jupiter.params.provider.MethodSource;
 import org.junit.jupiter.params.provider.NullAndEmptySource;
 import org.junit.jupiter.params.provider.ValueSource;
 import org.springframework.dao.DataAccessResourceFailureException;
@@ -20,6 +22,7 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Optional;
 import java.util.UUID;
+import java.time.Instant;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -40,7 +43,7 @@ class LocalAccessJwtAuthenticationConverterTest {
     @BeforeEach
     void setUp() {
         repository = mock(LmsUserAccessRepository.class);
-        converter = new LocalAccessJwtAuthenticationConverter(repository);
+        converter = new LocalAccessJwtAuthenticationConverter(repository, mock(Validator.class), JwtTestSupport.CLOCK);
     }
 
     @ParameterizedTest
@@ -82,7 +85,7 @@ class LocalAccessJwtAuthenticationConverterTest {
 
         assertThat(converter.convert(jwt(USER_ID.toString())).getAuthorities()).isEmpty();
     }
-    
+
     @Test
     void failsClosedForMissingLocalStatusOrRole() {
         when(repository.findById(USER_ID)).thenReturn(
@@ -132,6 +135,95 @@ class LocalAccessJwtAuthenticationConverterTest {
         verifyNoInteractions(repository);
     }
 
+    @ParameterizedTest
+    @MethodSource("vn.edu.hcmut.co3103.lms.security.jwt.JwtTestSupport#unpreservableDisplayClaims")
+    void rejectsUnpreservableDisplayClaimBeforeDatabaseLookup(String name, String value) {
+        var token = Jwt.withTokenValue("invalid-display-token").header("alg", "RS256")
+                .subject(USER_ID.toString()).issuedAt(JwtTestSupport.NOW)
+                .claim("fullName", "Valid Name").claim("email", "valid@example.test")
+                .claim(name, value).build();
+
+        assertThatThrownBy(() -> converter.convert(token))
+                .isInstanceOfSatisfying(OAuth2AuthenticationException.class,
+                        exception -> assertThat(exception.getError().getErrorCode()).isEqualTo("invalid_token"));
+        verifyNoInteractions(repository);
+    }
+
+    @Test
+    void preservesValidUnicodeDisplayClaimsIncludingSurrogatePairs() {
+        String fullName = "Nguyễn \uD83D\uDE00 \uD840\uDC00";
+        String email = "nguyễn@example.test";
+        when(repository.findById(USER_ID)).thenReturn(Optional.of(user(LmsRole.TUTOR, AccessStatus.ACTIVE)));
+        var token = Jwt.withTokenValue("unicode-token").header("alg", "RS256")
+                .subject(USER_ID.toString()).issuedAt(JwtTestSupport.NOW)
+                .claim("fullName", fullName).claim("email", email).build();
+
+        assertThat(converter.convert(token).isAuthenticated()).isTrue();
+        verify(repository).synchronizeIdentity(USER_ID, fullName, email, JwtTestSupport.NOW, JwtTestSupport.NOW);
+    }
+
+    @Test
+    void olderTrustedTokenCannotOverwriteNewerIdentityProjection() {
+        var user = user(LmsRole.TUTOR, AccessStatus.ACTIVE);
+        user.setLastSyncedProfileIat(JwtTestSupport.NOW);
+        user.setLastLoginTokenIat(JwtTestSupport.NOW);
+        when(repository.findById(USER_ID)).thenReturn(Optional.of(user));
+        var oldToken = Jwt.withTokenValue("older-token").header("alg", "RS256").subject(USER_ID.toString())
+                .issuedAt(JwtTestSupport.NOW.minusSeconds(30))
+                .claim("fullName", "Older Name").claim("email", "older@example.test").build();
+
+        var authentication = converter.convert(oldToken);
+
+        assertThat(authentication.isAuthenticated()).isTrue();
+        assertThat(authentication.getAuthorities()).extracting(GrantedAuthority::getAuthority).containsExactly("ROLE_TUTOR");
+        verify(repository).findById(USER_ID);
+        verifyNoMoreInteractions(repository);
+    }
+
+    @Test
+    void consumedFutureIssuedTokenDoesNotSynchronizeAgain() {
+        var user = user(LmsRole.STUDENT, AccessStatus.ACTIVE);
+        Instant issuedAt = JwtTestSupport.NOW.plusSeconds(45);
+        user.setLastLoginAt(JwtTestSupport.NOW);
+        user.setLastLoginTokenIat(issuedAt);
+        user.setLastSyncedProfileIat(issuedAt);
+        when(repository.findById(USER_ID)).thenReturn(Optional.of(user));
+        var token = Jwt.withTokenValue("future-token").header("alg", "RS256").subject(USER_ID.toString())
+                .issuedAt(issuedAt).claim("email", user.getEmail()).build();
+
+        assertThat(converter.convert(token).isAuthenticated()).isTrue();
+        assertThat(converter.convert(token).isAuthenticated()).isTrue();
+        verify(repository, times(2)).findById(USER_ID);
+        verifyNoMoreInteractions(repository);
+    }
+
+    @Test
+    void newerUnchangedProfileAdvancesWatermarkEvenForSuspendedUser() {
+        var user = user(LmsRole.STUDENT, AccessStatus.SUSPENDED);
+        user.setLastSyncedProfileIat(JwtTestSupport.NOW.minusSeconds(30));
+        when(repository.findById(USER_ID)).thenReturn(Optional.of(user));
+        var token = Jwt.withTokenValue("newer-token").header("alg", "RS256").subject(USER_ID.toString())
+                .issuedAt(JwtTestSupport.NOW).claim("email", user.getEmail()).build();
+
+        assertThat(converter.convert(token).getAuthorities()).isEmpty();
+        verify(repository).synchronizeIdentity(USER_ID, null, user.getEmail(), JwtTestSupport.NOW, JwtTestSupport.NOW);
+        verify(repository, times(2)).findById(USER_ID);
+        verifyNoMoreInteractions(repository);
+    }
+
+    @Test
+    void rereadsAccessAfterConcurrentSuspensionDuringSynchronization() {
+        var active = user(LmsRole.ADMINISTRATOR, AccessStatus.ACTIVE);
+        var suspended = user(LmsRole.ADMINISTRATOR, AccessStatus.SUSPENDED);
+        when(repository.findById(USER_ID)).thenReturn(Optional.of(active), Optional.of(suspended));
+        var token = Jwt.withTokenValue("new-token").header("alg", "RS256").subject(USER_ID.toString())
+                .issuedAt(JwtTestSupport.NOW).build();
+
+        assertThat(converter.convert(token).getAuthorities()).isEmpty();
+        verify(repository).synchronizeIdentity(USER_ID, null, null, JwtTestSupport.NOW, JwtTestSupport.NOW);
+        verify(repository, times(2)).findById(USER_ID);
+    }
+
     @Test
     void neverFallsBackToTokenAuthoritiesWhenDatabaseLookupFails() {
         var failure = new DataAccessResourceFailureException("Database unavailable");
@@ -151,7 +243,7 @@ class LocalAccessJwtAuthenticationConverterTest {
                 .claim("scp", List.of("STUDENT", "TUTOR", "ADMINISTRATOR"))
                 .claim("roles", List.of("ADMINISTRATOR"))
                 .claim("authorities", List.of("ROLE_ADMINISTRATOR"))
-                .claim("email", "external@example.test")
+                .claim("email", "local@example.test")
                 .claims(claims -> {
                     if (subject != null) {
                         claims.put("sub", subject);

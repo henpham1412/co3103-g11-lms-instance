@@ -73,6 +73,33 @@ and implementation components.
   Local email is **not unique** in the LMS schema; Central Identity's email
   uniqueness applies to its separate identity database.
   Upgrades from V1 must preserve duplicate email projections through V2 and V3.
+- After trusted JWT validation, optional `fullName` and `email` claims synchronize
+  the existing row selected by `sub`. Missing claims preserve existing copies;
+  supplied claims must satisfy the local display-field validation or return 401.
+  Updates never provision users or change UUID, role, status, or creation time.
+  Suspended users can refresh display copies but still receive 403 and do not
+  record a successful LMS login. A column-specific update and a fresh access read
+  preserve concurrent role/status revocations.
+- Profile synchronization atomically accepts only issuance at or after
+  `last_synced_profile_iat`. A newer token carrying display claims advances this
+  watermark even when the display values match. Missing display claims leave the
+  profile watermark unchanged; equal issuance may fill partial display claims.
+  Older valid tokens still authenticate using current local access, without
+  rolling back the display projection.
+- For active local users, issuance strictly newer than `last_login_token_iat`
+  records the LMS clock time in `last_login_at` and consumes that issuance once.
+  Reusing a token, including one issued in the accepted future clock-skew window,
+  changes neither `last_login_at` nor `updated_at`. Suspended requests never consume
+  login issuance. This is local authentication,
+  independent of whether the particular endpoint permits the user's role, and
+  distinct from Central Identity's authentication timestamp.
+- Flyway V8 adds these nullable bookkeeping columns to the DOC-04 §2.1.5 local
+  access record, following DOC-07 versioned migration conventions. Both store exact
+  epoch seconds as `NUMERIC(21,9)` because PostgreSQL timestamps round decoded
+  nanoseconds to microseconds. Existing wall-clock timestamps cannot recover past
+  token issuance, so migrated rows initialize watermarks with the first trusted
+  token after upgrade. These fields are internal and do not change API responses,
+  authorize requests, store sessions, or blacklist tokens.
 
 ## CORS and OPTIONS
 

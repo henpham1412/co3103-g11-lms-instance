@@ -10,6 +10,7 @@ import org.junit.jupiter.params.provider.MethodSource;
 import org.springframework.jdbc.core.JdbcTemplate;
 import vn.edu.hcmut.co3103.lms.support.ThumbnailImages;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.test.annotation.DirtiesContext;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.test.context.TestConfiguration;
 import org.springframework.boot.test.web.server.LocalServerPort;
@@ -52,6 +53,7 @@ import static org.assertj.core.api.Assertions.assertThat;
  * Drives the thumbnail contract through a real servlet container, which MockMvc bypasses: the
  * container's own multipart limits and the public static-resource chain are only reachable here.
  */
+@DirtiesContext(classMode = DirtiesContext.ClassMode.AFTER_CLASS)
 @SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT)
 @Import(ClassThumbnailUploadHttpTest.FixedClockConfiguration.class)
 class ClassThumbnailUploadHttpTest {

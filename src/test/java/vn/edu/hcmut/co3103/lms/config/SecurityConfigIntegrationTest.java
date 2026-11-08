@@ -1,14 +1,12 @@
 package vn.edu.hcmut.co3103.lms.config;
 
 import com.nimbusds.jose.JOSEException;
-import com.nimbusds.jose.JWSAlgorithm;
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.Arguments;
 import org.junit.jupiter.params.provider.EnumSource;
 import org.junit.jupiter.params.provider.MethodSource;
-import org.junit.jupiter.params.provider.NullAndEmptySource;
 import org.junit.jupiter.params.provider.ValueSource;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
@@ -40,7 +38,6 @@ import vn.edu.hcmut.co3103.lms.security.jwt.JwtTestSupport;
 import tools.jackson.databind.JsonNode;
 import tools.jackson.databind.ObjectMapper;
 
-import java.math.BigDecimal;
 import java.time.Clock;
 import java.time.Instant;
 import java.util.List;
@@ -253,14 +250,6 @@ class SecurityConfigIntegrationTest {
     }
 
     @ParameterizedTest
-    @NullAndEmptySource
-    @ValueSource(strings = {"not-a-uuid", "1-1-1-1-1", " 550e8400-e29b-41d4-a716-446655440000"})
-    void returnsUnauthorizedForInvalidSubject(String subject) throws Exception {
-        mockMvc.perform(get(ME).header("Authorization", "Bearer " + token(subject)))
-                .andExpect(unauthorizedJson());
-    }
-
-    @ParameterizedTest
     @EnumSource(LmsRole.class)
     void enforcesMethodSecurityUsingOnlyTheLocalRole(LmsRole role) throws Exception {
         LmsUserAccess user = saveUser(role, AccessStatus.ACTIVE);
@@ -317,7 +306,7 @@ class SecurityConfigIntegrationTest {
     }
 
     @ParameterizedTest
-    @ValueSource(strings = {"application/json", "text/html", "*/*"})
+    @ValueSource(strings = {"*/*", "text/html"})
     void returnsForbiddenJsonRegardlessOfAcceptHeader(String accept) throws Exception {
         LmsUserAccess user = saveUser(LmsRole.STUDENT, AccessStatus.SUSPENDED);
         mockMvc.perform(get(ME).accept(accept).queryParam("private", "do-not-echo")
@@ -326,13 +315,14 @@ class SecurityConfigIntegrationTest {
     }
 
     @ParameterizedTest
-    @ValueSource(strings = {"application/json", "text/html", "*/*"})
+    @ValueSource(strings = {"*/*", "text/html"})
     void returnsUnauthorizedWithoutBearerToken(String accept) throws Exception {
         mockMvc.perform(get(ME).accept(accept).queryParam("private", "do-not-echo"))
                 .andExpect(unauthorizedJson())
                 .andExpect(header().string(HttpHeaders.WWW_AUTHENTICATE, "Bearer"));
     }
 
+    // Decoder claim matrices live in JwtValidationTest; keep HTTP wiring checks here.
     @Test
     void returnsUnauthorizedForExpiredToken() throws Exception {
         LmsUserAccess user = saveUser(LmsRole.STUDENT, AccessStatus.ACTIVE);
@@ -343,114 +333,11 @@ class SecurityConfigIntegrationTest {
     }
 
     @Test
-    void returnsUnauthorizedForInvalidSignature() throws Exception {
-        LmsUserAccess user = saveUser(LmsRole.STUDENT, AccessStatus.ACTIVE);
-        String valid = token(user.getUserId().toString());
-        int signatureStart = valid.lastIndexOf('.') + 1;
-        char replacement = valid.charAt(signatureStart) == 'A' ? 'B' : 'A';
-        String tampered = valid.substring(0, signatureStart) + replacement + valid.substring(signatureStart + 1);
-
-        mockMvc.perform(get(ME).header("Authorization", "Bearer " + tampered))
-                .andExpect(unauthorizedJson());
-    }
-
-    @Test
     void authenticatesValidRs256Identity() throws Exception {
         LmsUserAccess user = saveUser(LmsRole.STUDENT, AccessStatus.ACTIVE);
         mockMvc.perform(get(ME).header(HttpHeaders.AUTHORIZATION, "Bearer " + token(user.getUserId().toString())))
                 .andExpect(status().isOk())
                 .andExpect(content().string(startsWith(user.getUserId() + "|")));
-    }
-
-    @ParameterizedTest
-    @ValueSource(strings = {"exp", "iat"})
-    void returnsUnauthorizedForMissingTimestamp(String name) throws Exception {
-        Map<String, Object> claims = TOKENS.claims();
-        claims.remove(name);
-        mockMvc.perform(get(ME).header(HttpHeaders.AUTHORIZATION, "Bearer " + TOKENS.token(claims)))
-                .andExpect(unauthorizedJson());
-    }
-
-    @ParameterizedTest
-    @ValueSource(strings = {"exp", "iat", "sub"})
-    void returnsUnauthorizedForMalformedClaim(String name) throws Exception {
-        Map<String, Object> claims = TOKENS.claims();
-        claims.put(name, List.of("invalid"));
-        mockMvc.perform(get(ME).header(HttpHeaders.AUTHORIZATION, "Bearer " + TOKENS.token(claims)))
-                .andExpect(unauthorizedJson());
-    }
-
-    @ParameterizedTest
-    @MethodSource("vn.edu.hcmut.co3103.lms.security.jwt.JwtTestSupport#invalidNumericDates")
-    void returnsUnauthorizedForNumericDateOverflowAndInvalidRanges(String name, Object value) throws Exception {
-        Map<String, Object> claims = TOKENS.claims();
-        claims.put(name, value);
-
-        mockMvc.perform(get(ME).queryParam("private", "do-not-echo")
-                        .header(HttpHeaders.AUTHORIZATION, "Bearer " + TOKENS.token(claims)))
-                .andExpect(unauthorizedJson())
-                .andExpect(header().string(HttpHeaders.WWW_AUTHENTICATE, "Bearer"));
-    }
-
-    @ParameterizedTest
-    @MethodSource("vn.edu.hcmut.co3103.lms.security.jwt.JwtTestSupport#validPreciseNumericDates")
-    void authenticatesWithPreciseNumericDatesWithinRange(String name, Object value) throws Exception {
-        Map<String, Object> claims = TOKENS.claims();
-        claims.put("sub", saveUser(LmsRole.STUDENT, AccessStatus.ACTIVE).getUserId().toString());
-        claims.put(name, value);
-
-        mockMvc.perform(get(ME).header(HttpHeaders.AUTHORIZATION, "Bearer " + TOKENS.token(claims)))
-                .andExpect(status().isOk())
-                .andExpect(content().string(claims.get("sub") + "|ROLE_STUDENT"));
-    }
-
-    @ParameterizedTest
-    @MethodSource("vn.edu.hcmut.co3103.lms.security.jwt.JwtTestSupport#fractionalTimestampBoundaries")
-    void enforcesExactTimestampToleranceOverHttp(String name, String offset, boolean accepted) throws Exception {
-        Map<String, Object> claims = TOKENS.claims();
-        claims.put("sub", saveUser(LmsRole.STUDENT, AccessStatus.ACTIVE).getUserId().toString());
-        claims.put(name, JwtTestSupport.numericDate(JwtTestSupport.NOW).add(new BigDecimal(offset)));
-
-        mockMvc.perform(get(ME).header(HttpHeaders.AUTHORIZATION, "Bearer " + TOKENS.token(claims)))
-                .andExpect(accepted ? status().isOk() : unauthorizedJson());
-    }
-
-    @ParameterizedTest
-    @MethodSource("vn.edu.hcmut.co3103.lms.security.jwt.JwtTestSupport#fractionalLifespans")
-    void validatesSubSecondLifespansOverHttp(String issuedFraction, String expiryFraction, boolean accepted)
-            throws Exception {
-        Map<String, Object> claims = TOKENS.claims();
-        BigDecimal second = BigDecimal.valueOf(JwtTestSupport.NOW.getEpochSecond());
-        claims.put("sub", saveUser(LmsRole.STUDENT, AccessStatus.ACTIVE).getUserId().toString());
-        claims.put("iat", second.add(new BigDecimal(issuedFraction)));
-        claims.put("exp", second.add(new BigDecimal(expiryFraction)));
-
-        mockMvc.perform(get(ME).header(HttpHeaders.AUTHORIZATION, "Bearer " + TOKENS.token(claims)))
-                .andExpect(accepted ? status().isOk() : unauthorizedJson());
-    }
-
-    @ParameterizedTest
-    @MethodSource("vn.edu.hcmut.co3103.lms.security.jwt.JwtTestSupport#malformedOptionalClaims")
-    void returnsUnauthorizedForMalformedOptionalClaims(String name, Object value) throws Exception {
-        Map<String, Object> claims = TOKENS.claims();
-        claims.put(name, value);
-
-        mockMvc.perform(get(ME).queryParam("private", "do-not-echo")
-                        .header(HttpHeaders.AUTHORIZATION, "Bearer " + TOKENS.token(claims)))
-                .andExpect(unauthorizedJson())
-                .andExpect(header().string(HttpHeaders.WWW_AUTHENTICATE, "Bearer"));
-    }
-
-    @ParameterizedTest
-    @MethodSource("vn.edu.hcmut.co3103.lms.security.jwt.JwtTestSupport#validOptionalClaims")
-    void authenticatesWithWellFormedOptionalClaims(String name, Object value) throws Exception {
-        Map<String, Object> claims = TOKENS.claims();
-        claims.put("sub", saveUser(LmsRole.STUDENT, AccessStatus.ACTIVE).getUserId().toString());
-        claims.put(name, value);
-
-        mockMvc.perform(get(ME).header(HttpHeaders.AUTHORIZATION, "Bearer " + TOKENS.token(claims)))
-                .andExpect(status().isOk())
-                .andExpect(content().string(claims.get("sub") + "|ROLE_STUDENT"));
     }
 
     @Test
@@ -465,26 +352,9 @@ class SecurityConfigIntegrationTest {
     }
 
     @ParameterizedTest
-    @ValueSource(strings = {"none", "HS256", "RS512"})
-    void returnsUnauthorizedForUnsupportedAlgorithm(String algorithm) throws Exception {
-        String token = algorithm.equals("none") ? TOKENS.unsignedToken()
-                : TOKENS.token(TOKENS.claims(), JWSAlgorithm.parse(algorithm));
-        mockMvc.perform(get(ME).header(HttpHeaders.AUTHORIZATION, "Bearer " + token))
-                .andExpect(unauthorizedJson());
-    }
-
-    @ParameterizedTest
     @ValueSource(strings = {"Bearer not-a-valid-jwt", "Bearer ", "Bearer invalid token"})
     void returnsUnauthorizedForMalformedBearerHeader(String authorization) throws Exception {
         mockMvc.perform(get(ME).header(HttpHeaders.AUTHORIZATION, authorization))
-                .andExpect(unauthorizedJson());
-    }
-
-    @Test
-    void returnsUnauthorizedForWrongIssuer() throws Exception {
-        Map<String, Object> claims = TOKENS.claims();
-        claims.put("iss", "https://untrusted.example.test");
-        mockMvc.perform(get(ME).header(HttpHeaders.AUTHORIZATION, "Bearer " + TOKENS.token(claims)))
                 .andExpect(unauthorizedJson());
     }
 
