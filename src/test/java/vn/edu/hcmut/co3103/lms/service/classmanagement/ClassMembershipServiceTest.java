@@ -28,12 +28,15 @@ class ClassMembershipServiceTest {
 
     private final ClassRepository classRepository = mock(ClassRepository.class);
     private final ClassMemberRepository classMemberRepository = mock(ClassMemberRepository.class);
+    private final LmsUserAccessRepository userAccessRepository = mock(LmsUserAccessRepository.class);
+    private final LessonRepository lessonRepository = mock(LessonRepository.class);
+    private final CompletionMarkRepository completionMarkRepository = mock(CompletionMarkRepository.class);
     private final ClassMembershipService service = new ClassMembershipService(
             classRepository,
             classMemberRepository,
-            mock(LmsUserAccessRepository.class),
-            mock(LessonRepository.class),
-            mock(CompletionMarkRepository.class)
+            userAccessRepository,
+            lessonRepository,
+            completionMarkRepository
     );
 
     private final UUID classId = UUID.randomUUID();
@@ -411,6 +414,37 @@ class ClassMembershipServiceTest {
         assertEquals(HttpStatus.BAD_REQUEST, error.getStatusCode());
         assertEquals("INVALID_QUERY_PARAMETER", error.getReason());
         verify(classMemberRepository, never()).searchRoster(any(), any(), any(), any());
+    }
+
+    @Test
+    void listStudentClassesReturnsZeroPercentForEmptyClassAndNullForPendingMembership() {
+        Class openClass = new Class(tutorId, "CS101", "Programming", null, null, 10, Class.EnrollmentPolicy.OPEN);
+        ReflectionTestUtils.setField(openClass, "classId", classId);
+        when(classRepository.findById(classId)).thenReturn(Optional.of(openClass));
+
+        ClassMember active = membership(ClassMember.MembershipStatus.ACTIVE);
+        ClassMember pending = membership(ClassMember.MembershipStatus.PENDING);
+        var pageable = org.springframework.data.domain.PageRequest.of(0, 20);
+        when(classMemberRepository.findStudentClassHistory(studentId, "ACTIVE", pageable))
+                .thenReturn(new org.springframework.data.domain.PageImpl<>(List.of(active, pending), pageable, 2));
+        when(lessonRepository.findEligibleLessons(classId, vn.edu.hcmut.co3103.lms.entity.Chapter.VisibilityStatus.PUBLISHED))
+                .thenReturn(List.of());
+        when(completionMarkRepository.findByClassMemberId(active.getClassMemberId())).thenReturn(List.of());
+
+        var result = service.listStudentClasses(studentId, Class.ClassStatus.ACTIVE, pageable);
+
+        assertEquals(2, result.getContent().size());
+        var activeItem = result.getContent().get(0);
+        assertEquals("ACTIVE", activeItem.membershipStatus());
+        assertNotNull(activeItem.progress());
+        assertEquals(0, activeItem.progress().completedLessons());
+        assertEquals(0, activeItem.progress().eligibleLessons());
+        assertEquals(0, activeItem.progress().progressPercentage());
+        assertEquals("IN_PROGRESS", activeItem.progress().status());
+
+        var pendingItem = result.getContent().get(1);
+        assertEquals("PENDING", pendingItem.membershipStatus());
+        assertNull(pendingItem.progress());
     }
 
     private ClassMember membership(ClassMember.MembershipStatus status) {

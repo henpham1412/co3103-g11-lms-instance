@@ -17,6 +17,7 @@ import vn.edu.hcmut.co3103.lms.repository.learningcontent.CompletionMarkReposito
 import vn.edu.hcmut.co3103.lms.repository.learningcontent.LessonRepository;
 
 import java.time.Instant;
+import java.time.temporal.ChronoUnit;
 import java.util.UUID;
 
 @Service
@@ -53,7 +54,7 @@ public class LessonCompletionService {
                     CompletionMark created = new CompletionMark(
                             membership.getClassMemberId(),
                             lessonId,
-                            Instant.now()
+                            Instant.now().truncatedTo(ChronoUnit.MICROS)
                     );
                     return CompletionMarkResponse.from(completionMarkRepository.save(created));
                 });
