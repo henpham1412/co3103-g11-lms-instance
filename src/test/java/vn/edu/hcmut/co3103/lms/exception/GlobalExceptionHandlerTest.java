@@ -7,6 +7,7 @@ import java.util.Arrays;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.UUID;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
@@ -20,6 +21,7 @@ import org.springframework.data.core.TypeInformation;
 import org.springframework.http.HttpMethod;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
+import org.springframework.security.access.AccessDeniedException;
 import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.setup.MockMvcBuilders;
 import org.springframework.web.bind.annotation.GetMapping;
@@ -27,16 +29,28 @@ import org.springframework.web.bind.annotation.PatchMapping;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestParam;
+import org.springframework.web.bind.annotation.RequestPart;
 import org.springframework.web.bind.annotation.RestController;
+import org.springframework.web.multipart.MaxUploadSizeExceededException;
+import org.springframework.web.multipart.MultipartFile;
 import org.springframework.web.server.ResponseStatusException;
 import org.springframework.web.servlet.resource.NoResourceFoundException;
+import vn.edu.hcmut.co3103.lms.controller.adaptive.SkillTopicController;
+import vn.edu.hcmut.co3103.lms.controller.admin.AdminUserController;
 import vn.edu.hcmut.co3103.lms.dto.admin.UpdateUserRoleRequest;
 import vn.edu.hcmut.co3103.lms.dto.admin.UpdateUserStatusRequest;
+import vn.edu.hcmut.co3103.lms.service.adaptive.SkillTopicService;
+import vn.edu.hcmut.co3103.lms.service.admin.AdminUserService;
 
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.hamcrest.Matchers.containsString;
 import static org.hamcrest.Matchers.not;
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.verifyNoInteractions;
+import static org.mockito.Mockito.when;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.multipart;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.patch;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.*;
@@ -44,11 +58,17 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 class GlobalExceptionHandlerTest {
 
     private MockMvc mockMvc;
+    private AdminUserService adminService;
+    private SkillTopicService topicService;
 
     @BeforeEach
     void setUp() {
-        mockMvc = MockMvcBuilders.standaloneSetup(new TestController(), new ErrorProbe())
-                .setControllerAdvice(new ClassManagementExceptionHandler(), new GlobalExceptionHandler())
+        adminService = mock(AdminUserService.class);
+        topicService = mock(SkillTopicService.class);
+        mockMvc = MockMvcBuilders.standaloneSetup(new TestController(), new ErrorProbe(),
+                        new AdminUserController(adminService), new SkillTopicController(topicService))
+                .setControllerAdvice(new ClassManagementExceptionHandler(), new AdminUserExceptionHandler(),
+                        new GlobalExceptionHandler())
                 .build();
     }
 
@@ -157,9 +177,180 @@ class GlobalExceptionHandlerTest {
                 .andExpect(jsonPath("$.details").isEmpty());
     }
 
+    @ParameterizedTest
+    @ValueSource(strings = {"/api/admin/users", "/api/v1/admin/users"})
+    void realAdminAliasesKeepMalformedAndNestedValidationContractsWithContextPath(String prefix) throws Exception {
+        for (String context : List.of("", "/lms")) {
+            String path = context + prefix + "/" + new UUID(0, 2);
+            mockMvc.perform(patch(path).contextPath(context).contentType(MediaType.APPLICATION_JSON).content("{"))
+                    .andExpect(status().isBadRequest())
+                    .andExpect(jsonPath("$.code").value("BAD_REQUEST"))
+                    .andExpect(jsonPath("$.message").value("Bad Request"))
+                    .andExpect(jsonPath("$.details").isEmpty());
+            for (String body : List.of("{\"role\":\"INVALID_PRIVATE_VALUE\"}", "{\"unknown\":true}",
+                    "{\"role\":\"TUTOR\",\"lms_role\":\"STUDENT\"}")) {
+                mockMvc.perform(patch(path).contextPath(context).contentType(MediaType.APPLICATION_JSON).content(body))
+                        .andExpect(status().isBadRequest())
+                        .andExpect(content().contentTypeCompatibleWith(MediaType.APPLICATION_JSON))
+                        .andExpect(jsonPath("$.length()").value(3))
+                        .andExpect(jsonPath("$.code").value("VALIDATION_ERROR"))
+                        .andExpect(jsonPath("$.message").value("Validation failed"))
+                        .andExpect(jsonPath("$.details").isEmpty())
+                        .andExpect(content().string(not(containsString("INVALID_PRIVATE_VALUE"))));
+            }
+            mockMvc.perform(get(context + prefix + "/invalid-private-uuid").contextPath(context))
+                    .andExpect(status().isBadRequest())
+                    .andExpect(jsonPath("$.code").value("BAD_REQUEST"))
+                    .andExpect(jsonPath("$.message").value("Bad Request"));
+        }
+        verifyNoInteractions(adminService, topicService);
+    }
+
+    @Test
+    void adaptiveInputContractsAndLegacyRequiredFieldsSurviveContextPaths() throws Exception {
+        String topics = "/lms/api/v1/classes/" + new UUID(0, 3) + "/skill-topics";
+        for (String body : List.of("{", "{}")) {
+            mockMvc.perform(post(topics).contextPath("/lms").contentType(MediaType.APPLICATION_JSON).content(body))
+                    .andExpect(status().isBadRequest())
+                    .andExpect(jsonPath("$.code").value("INVALID_REQUEST"))
+                    .andExpect(jsonPath("$.message").value(ErrorCode.INVALID_REQUEST.getMessage()))
+                    .andExpect(jsonPath("$.details").isEmpty());
+        }
+        mockMvc.perform(patch("/lms/test/admin/role").contextPath("/lms")
+                        .contentType(MediaType.APPLICATION_JSON).content("{}"))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.code").value("BAD_REQUEST"))
+                .andExpect(jsonPath("$.message").value("Validation failed"))
+                .andExpect(jsonPath("$.details[0].field").value("role"))
+                .andExpect(jsonPath("$.details[0].message").value("Role is required"));
+        mockMvc.perform(get("/lms/api/v1/skill-topics/invalid-private-uuid").contextPath("/lms"))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.code").value("INVALID_REQUEST"));
+        for (String id : List.of(new UUID(0, 4).toString(), "invalid-private-uuid")) {
+            mockMvc.perform(patch("/lms/api/v1/skill-topics/" + id).contextPath("/lms")
+                            .contentType(MediaType.APPLICATION_JSON).content("{"))
+                    .andExpect(status().isBadRequest())
+                    .andExpect(jsonPath("$.code").value("VALIDATION_ERROR"))
+                    .andExpect(jsonPath("$.message").value(ErrorCode.VALIDATION_ERROR.getMessage()))
+                    .andExpect(jsonPath("$.details").isEmpty());
+        }
+        verifyNoInteractions(adminService, topicService);
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {"/api/admin/users", "/api/v1/admin/users"})
+    void adminNegotiationRejectsBeforeServiceCallsAndKeepsLegacyMessage(String prefix) throws Exception {
+        for (String accept : List.of("text/html", "text/plain", "application/json;q=0")) {
+            mockMvc.perform(patch("/lms" + prefix + "/" + new UUID(0, 2)).contextPath("/lms")
+                            .contentType(MediaType.APPLICATION_JSON).content("{}").header("Accept", accept))
+                    .andExpect(status().isNotAcceptable())
+                    .andExpect(content().contentTypeCompatibleWith(MediaType.APPLICATION_JSON))
+                    .andExpect(jsonPath("$.length()").value(3))
+                    .andExpect(jsonPath("$.code").value("NOT_ACCEPTABLE"))
+                    .andExpect(jsonPath("$.message").value("Not Acceptable"))
+                    .andExpect(jsonPath("$.details").isEmpty());
+        }
+        verifyNoInteractions(adminService);
+        for (String accept : List.of("application/json", "*/*", "application/json;charset=UTF-8")) {
+            mockMvc.perform(get("/lms" + prefix + "/" + new UUID(0, 2)).contextPath("/lms").header("Accept", accept))
+                    .andExpect(status().isOk())
+                    .andExpect(content().contentType("application/json;charset=UTF-8"));
+        }
+        mockMvc.perform(post("/lms/test/body").contextPath("/lms")
+                        .contentType(MediaType.APPLICATION_JSON).content("{}").accept("text/plain"))
+                .andExpect(status().isNotAcceptable())
+                .andExpect(jsonPath("$.message").value(ErrorCode.NOT_ACCEPTABLE.getMessage()));
+    }
+
+    @Test
+    void scopedAdminPersistenceAdviceWinsAlongsideAdaptiveAndLegacyConflicts() throws Exception {
+        UUID id = new UUID(0, 2);
+        when(adminService.getUser(id)).thenThrow(new DataIntegrityViolationException("secret SQL/profile value"));
+        when(topicService.get(id)).thenThrow(new DataIntegrityViolationException("secret SQL/profile value"));
+        for (String prefix : List.of("/api/admin/users/", "/api/v1/admin/users/")) {
+            mockMvc.perform(get("/lms" + prefix + id).contextPath("/lms"))
+                    .andExpect(status().isInternalServerError())
+                    .andExpect(jsonPath("$.code").value("INTERNAL_SERVER_ERROR"))
+                    .andExpect(jsonPath("$.message").value("An unexpected server error occurred."))
+                    .andExpect(jsonPath("$.details").isEmpty())
+                    .andExpect(content().string(not(containsString("secret"))));
+        }
+        mockMvc.perform(get("/lms/api/v1/skill-topics/" + id).contextPath("/lms"))
+                .andExpect(status().isConflict()).andExpect(jsonPath("$.code").value("DATA_CONFLICT"))
+                .andExpect(content().string(not(containsString("secret"))));
+        mockMvc.perform(get("/test/errors/data-conflict"))
+                .andExpect(status().isConflict()).andExpect(jsonPath("$.code").value("RESOURCE_CONFLICT"));
+        mockMvc.perform(get("/test/failure").param("kind", "unique"))
+                .andExpect(status().isConflict()).andExpect(jsonPath("$.code").value("SKILL_TOPIC_NAME_DUPLICATE"));
+    }
+
+    @Test
+    void uploadFrameworkFailuresKeepTheirDocumentedEnvelopes() throws Exception {
+        mockMvc.perform(get("/test/errors/multipart-too-large"))
+                .andExpect(status().is(413))
+                .andExpect(jsonPath("$.code").value("FILE_TOO_LARGE"))
+                .andExpect(jsonPath("$.message").value("The uploaded file exceeds the maximum allowed size."))
+                .andExpect(jsonPath("$.details").isEmpty());
+        mockMvc.perform(multipart("/test/errors/upload"))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.code").value("INVALID_FILE"))
+                .andExpect(jsonPath("$.message").value("The required upload file is missing."))
+                .andExpect(jsonPath("$.details").isEmpty());
+    }
+
+    @Test
+    void legacyMissingResourcesRemainUtf8JsonAndUncacheable() throws Exception {
+        for (String path : List.of("/test/errors/missing-resource", "/test/errors/unknown")) {
+            mockMvc.perform(get(path).accept("text/html"))
+                    .andExpect(status().isNotFound())
+                    .andExpect(content().contentType("application/json;charset=UTF-8"))
+                    .andExpect(header().string("Cache-Control", "no-store"))
+                    .andExpect(jsonPath("$.length()").value(3))
+                    .andExpect(jsonPath("$.code").value("NOT_FOUND"))
+                    .andExpect(jsonPath("$.message").value("Not Found"))
+                    .andExpect(jsonPath("$.details").isEmpty());
+        }
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {"/test/security", "/test/admin/security", "/test/errors/security"})
+    void legacySecurityFailuresStillReachTheSecurityErrorPath(String path) {
+        assertThatThrownBy(() -> mockMvc.perform(get(path)))
+                .hasRootCauseInstanceOf(AccessDeniedException.class);
+    }
+
+    @Test
+    void argumentWrappersPreserveAdminValidation() throws Exception {
+        mockMvc.perform(get("/test/admin/wrapped-validation"))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.code").value("VALIDATION_ERROR"))
+                .andExpect(jsonPath("$.message").value("Validation failed"))
+                .andExpect(jsonPath("$.details").isEmpty());
+    }
+
     @TestComponent
     @RestController
     static class TestController {
+        @GetMapping({"/test/security", "/test/admin/security", "/test/errors/security"})
+        public void security() {
+            throw new AccessDeniedException("private policy");
+        }
+
+        @GetMapping("/test/admin/wrapped-validation")
+        public void wrappedValidation() {
+            throw new IllegalArgumentException("private wrapper", new AdminAccessValidationException());
+        }
+
+        @GetMapping("/test/errors/multipart-too-large")
+        public void multipartTooLarge() {
+            throw new MaxUploadSizeExceededException(1);
+        }
+
+        @PostMapping(value = "/test/errors/upload", consumes = "multipart/form-data")
+        public void upload(@RequestPart("file") MultipartFile file) {
+            throw new AssertionError("Missing files must fail before controller invocation");
+        }
+
 
         @GetMapping("/test/errors/class-code")
         public void classCodeConflict() {
@@ -279,7 +470,7 @@ class GlobalExceptionHandlerTest {
     void unsupportedMethodIs405AndPreservesAllowHeader() throws Exception {
         mockMvc.perform(post("/test/business"))
                 .andExpect(status().isMethodNotAllowed())
-                .andExpect(header().string("Allow", containsString("GET")))
+                .andExpect(header().stringValues("Allow", "GET, HEAD, OPTIONS"))
                 .andExpect(jsonPath("$.code").value("METHOD_NOT_ALLOWED"));
     }
 

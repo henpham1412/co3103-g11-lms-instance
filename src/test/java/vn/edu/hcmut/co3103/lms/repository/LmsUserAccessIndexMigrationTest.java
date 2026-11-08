@@ -21,12 +21,12 @@ class LmsUserAccessIndexMigrationTest {
     @Autowired private JdbcTemplate jdbc;
 
     @ParameterizedTest
-    @ValueSource(booleans = {false, true})
-    void defaultListingIndexSupportsFreshAndUpgradedDatabases(boolean upgrade) {
+    @ValueSource(strings = {"latest", "4", "13"})
+    void defaultListingIndexSupportsFreshAndUpgradedDatabases(String startingVersion) {
         String schema = "user_index_" + UUID.randomUUID().toString().replace("-", "");
         var migration = Flyway.configure().dataSource(dataSource).schemas(schema);
         try {
-            migration.target(upgrade ? "4" : "latest").load().migrate();
+            migration.target(startingVersion).load().migrate();
             String table = schema + ".lms_user_access";
             // Reverse insertion order and tie timestamps to exercise the UUID tiebreaker.
             jdbc.execute("""
@@ -40,7 +40,7 @@ class LmsUserAccessIndexMigrationTest {
             String projection = "SELECT user_id, full_name, email, lms_role, access_status, last_login_at, created_at, updated_at FROM ";
             var before = jdbc.queryForList(projection + table + " ORDER BY created_at DESC, user_id ASC");
             String listing = projection + table + " ORDER BY created_at DESC, user_id ASC LIMIT 20";
-            if (upgrade) {
+            if (!"latest".equals(startingVersion)) {
                 String plan = String.join("\n", jdbc.queryForList("EXPLAIN (ANALYZE, BUFFERS) " + listing, String.class));
                 System.out.println("Default listing before V14:\n" + plan);
                 assertThat(plan).contains("Seq Scan", "Sort");
@@ -59,7 +59,7 @@ class LmsUserAccessIndexMigrationTest {
             assertThat(jdbc.queryForList(listing + " OFFSET 20")).isEqualTo(before.subList(20, 40));
 
             String plan = String.join("\n", jdbc.queryForList("EXPLAIN (ANALYZE, BUFFERS) " + listing, String.class));
-            System.out.println("Default listing after V14 (upgrade=" + upgrade + "):\n" + plan);
+            System.out.println("Default listing after V14 (startingVersion=" + startingVersion + "):\n" + plan);
             assertThat(plan).contains("Index Scan using idx_lms_user_access_created_at_user_id")
                     .doesNotContain("Sort", "Seq Scan");
         } finally {
