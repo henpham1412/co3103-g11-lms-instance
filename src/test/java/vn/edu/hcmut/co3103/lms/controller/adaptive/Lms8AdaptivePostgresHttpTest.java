@@ -205,58 +205,103 @@ class Lms8AdaptivePostgresHttpTest {
 
     @Test
     void skillTopicCrudPatchDuplicateAndAuthorizationWorkEndToEndOnPostgres() throws Exception {
-        // Non-owning tutor and student are denied with 403 CLASS_ACCESS_DENIED
-        var studentResp = http("GET", "/classes/" + classId + "/skill-topics", null, studentToken);
-        assertThat(studentResp.statusCode()).isEqualTo(403);
-        assertThat(readJson(studentResp).get("code").asString()).isEqualTo("CLASS_ACCESS_DENIED");
+        UUID pendingStudentId = UUID.randomUUID();
+        UUID inactiveStudentId = UUID.randomUUID();
+        UUID nonMemberStudentId = UUID.randomUUID();
+        insertUser(pendingStudentId, "STUDENT");
+        insertUser(inactiveStudentId, "STUDENT");
+        insertUser(nonMemberStudentId, "STUDENT");
+        db.update("""
+                INSERT INTO class_member(class_member_id, class_id, student_id, status)
+                VALUES (?, ?, ?, 'PENDING')
+                """, UUID.randomUUID(), classId, pendingStudentId);
+        db.update("""
+                INSERT INTO class_member(class_member_id, class_id, student_id, status)
+                VALUES (?, ?, ?, 'INACTIVE')
+                """, UUID.randomUUID(), classId, inactiveStudentId);
 
-        var otherTutorResp = http("POST", "/classes/" + classId + "/skill-topics",
-                "{\"name\":\"Arrays\",\"difficulty_level\":\"EASY\"}", otherTutorToken);
-        assertThat(otherTutorResp.statusCode()).isEqualTo(403);
-        assertThat(readJson(otherTutorResp).get("code").asString()).isEqualTo("CLASS_ACCESS_DENIED");
+        try {
+            // ACTIVE student may read, but cannot write
+            var activeStudentRead = http("GET", "/classes/" + classId + "/skill-topics", null, studentToken);
+            assertThat(activeStudentRead.statusCode()).isEqualTo(200);
+            var activeStudentWrite = http("POST", "/classes/" + classId + "/skill-topics",
+                    "{\"name\":\"Arrays\",\"difficulty_level\":\"EASY\"}", studentToken);
+            assertThat(activeStudentWrite.statusCode()).isEqualTo(403);
+            assertThat(readJson(activeStudentWrite).get("code").asString()).isEqualTo("CLASS_ACCESS_DENIED");
 
-        // Owning tutor creates topic (stores difficulty 1 in DB, returns EASY)
-        var createResp = http("POST", "/classes/" + classId + "/skill-topics",
-                "{\"name\":\"  Arrays  \",\"description\":\"Linear structures\",\"difficulty_level\":\"EASY\"}",
-                ownerToken);
-        assertThat(createResp.statusCode()).isEqualTo(201);
-        JsonNode created = readJson(createResp);
-        UUID topicId = UUID.fromString(created.get("skill_topic_id").asString());
-        assertThat(created.get("name").asString()).isEqualTo("Arrays");
-        assertThat(created.get("difficulty_level").asString()).isEqualTo("EASY");
-        assertThat(db.queryForObject("SELECT difficulty_level FROM skill_topics WHERE skill_topic_id = ?",
-                Integer.class, topicId)).isEqualTo(1);
+            // PENDING, INACTIVE, and non-member students are denied read with 403 CLASS_ACCESS_DENIED
+            var pendingResp = http("GET", "/classes/" + classId + "/skill-topics", null, signToken(pendingStudentId));
+            assertThat(pendingResp.statusCode()).isEqualTo(403);
+            assertThat(readJson(pendingResp).get("code").asString()).isEqualTo("CLASS_ACCESS_DENIED");
 
-        // Duplicate name in same class rejected with 409 SKILL_TOPIC_NAME_DUPLICATE
-        var dupResp = http("POST", "/classes/" + classId + "/skill-topics",
-                "{\"name\":\"Arrays\",\"difficulty_level\":\"HARD\"}", ownerToken);
-        assertThat(dupResp.statusCode()).isEqualTo(409);
-        assertThat(readJson(dupResp).get("code").asString()).isEqualTo("SKILL_TOPIC_NAME_DUPLICATE");
+            var inactiveResp = http("GET", "/classes/" + classId + "/skill-topics", null, signToken(inactiveStudentId));
+            assertThat(inactiveResp.statusCode()).isEqualTo(403);
+            assertThat(readJson(inactiveResp).get("code").asString()).isEqualTo("CLASS_ACCESS_DENIED");
 
-        // Partial PATCH updates difficulty and clears description to null while keeping name
-        var patchResp = http("PATCH", "/skill-topics/" + topicId,
-                "{\"description\":null,\"difficulty_level\":\"HARD\"}", ownerToken);
-        assertThat(patchResp.statusCode()).isEqualTo(200);
-        JsonNode patched = readJson(patchResp);
-        assertThat(patched.get("name").asString()).isEqualTo("Arrays");
-        assertThat(patched.get("description").isNull()).isTrue();
-        assertThat(patched.get("difficulty_level").asString()).isEqualTo("HARD");
-        assertThat(db.queryForObject("SELECT difficulty_level FROM skill_topics WHERE skill_topic_id = ?",
-                Integer.class, topicId)).isEqualTo(5);
+            var nonMemberResp = http("GET", "/classes/" + classId + "/skill-topics", null, signToken(nonMemberStudentId));
+            assertThat(nonMemberResp.statusCode()).isEqualTo(403);
+            assertThat(readJson(nonMemberResp).get("code").asString()).isEqualTo("CLASS_ACCESS_DENIED");
 
-        // Archived class permits GET but blocks write with 409 RESOURCE_STATE_CONFLICT
-        db.update("UPDATE class SET status = 'ARCHIVED' WHERE class_id = ?", classId);
-        assertThat(http("GET", "/skill-topics/" + topicId, null, ownerToken).statusCode()).isEqualTo(200);
-        var archivedPatch = http("PATCH", "/skill-topics/" + topicId,
-                "{\"name\":\"Blocked\"}", ownerToken);
-        assertThat(archivedPatch.statusCode()).isEqualTo(409);
-        assertThat(readJson(archivedPatch).get("code").asString()).isEqualTo("RESOURCE_STATE_CONFLICT");
-        db.update("UPDATE class SET status = 'ACTIVE' WHERE class_id = ?", classId);
+            // Non-owning tutor is denied read and write with 403 CLASS_ACCESS_DENIED
+            var otherTutorRead = http("GET", "/classes/" + classId + "/skill-topics", null, otherTutorToken);
+            assertThat(otherTutorRead.statusCode()).isEqualTo(403);
+            assertThat(readJson(otherTutorRead).get("code").asString()).isEqualTo("CLASS_ACCESS_DENIED");
 
-        // Unreferenced topic deletes cleanly with 204
-        var delResp = http("DELETE", "/skill-topics/" + topicId, null, ownerToken);
-        assertThat(delResp.statusCode()).isEqualTo(204);
-        assertThat(http("GET", "/skill-topics/" + topicId, null, ownerToken).statusCode()).isEqualTo(404);
+            var otherTutorResp = http("POST", "/classes/" + classId + "/skill-topics",
+                    "{\"name\":\"Arrays\",\"difficulty_level\":\"EASY\"}", otherTutorToken);
+            assertThat(otherTutorResp.statusCode()).isEqualTo(403);
+            assertThat(readJson(otherTutorResp).get("code").asString()).isEqualTo("CLASS_ACCESS_DENIED");
+
+            // Owning tutor creates topic (stores difficulty 1 in DB, returns EASY)
+            var createResp = http("POST", "/classes/" + classId + "/skill-topics",
+                    "{\"name\":\"  Arrays  \",\"description\":\"Linear structures\",\"difficulty_level\":\"EASY\"}",
+                    ownerToken);
+            assertThat(createResp.statusCode()).isEqualTo(201);
+            JsonNode created = readJson(createResp);
+            UUID topicId = UUID.fromString(created.get("skill_topic_id").asString());
+            assertThat(created.get("name").asString()).isEqualTo("Arrays");
+            assertThat(created.get("difficulty_level").asString()).isEqualTo("EASY");
+            assertThat(db.queryForObject("SELECT difficulty_level FROM skill_topics WHERE skill_topic_id = ?",
+                    Integer.class, topicId)).isEqualTo(1);
+
+            // Duplicate name in same class rejected with 409 SKILL_TOPIC_NAME_DUPLICATE
+            var dupResp = http("POST", "/classes/" + classId + "/skill-topics",
+                    "{\"name\":\"Arrays\",\"difficulty_level\":\"HARD\"}", ownerToken);
+            assertThat(dupResp.statusCode()).isEqualTo(409);
+            assertThat(readJson(dupResp).get("code").asString()).isEqualTo("SKILL_TOPIC_NAME_DUPLICATE");
+
+            // Partial PATCH updates difficulty and clears description to null while keeping name
+            var patchResp = http("PATCH", "/skill-topics/" + topicId,
+                    "{\"description\":null,\"difficulty_level\":\"HARD\"}", ownerToken);
+            assertThat(patchResp.statusCode()).isEqualTo(200);
+            JsonNode patched = readJson(patchResp);
+            assertThat(patched.get("name").asString()).isEqualTo("Arrays");
+            assertThat(patched.get("description").isNull()).isTrue();
+            assertThat(patched.get("difficulty_level").asString()).isEqualTo("HARD");
+            assertThat(db.queryForObject("SELECT difficulty_level FROM skill_topics WHERE skill_topic_id = ?",
+                    Integer.class, topicId)).isEqualTo(5);
+
+            // Archived class permits GET for owning tutor and ACTIVE student, blocks PENDING/INACTIVE/non-member, and blocks write with 409 RESOURCE_STATE_CONFLICT
+            db.update("UPDATE class SET status = 'ARCHIVED' WHERE class_id = ?", classId);
+            assertThat(http("GET", "/skill-topics/" + topicId, null, ownerToken).statusCode()).isEqualTo(200);
+            assertThat(http("GET", "/skill-topics/" + topicId, null, studentToken).statusCode()).isEqualTo(200);
+            assertThat(http("GET", "/skill-topics/" + topicId, null, signToken(pendingStudentId)).statusCode()).isEqualTo(403);
+            var archivedPatch = http("PATCH", "/skill-topics/" + topicId,
+                    "{\"name\":\"Blocked\"}", ownerToken);
+            assertThat(archivedPatch.statusCode()).isEqualTo(409);
+            assertThat(readJson(archivedPatch).get("code").asString()).isEqualTo("RESOURCE_STATE_CONFLICT");
+            db.update("UPDATE class SET status = 'ACTIVE' WHERE class_id = ?", classId);
+
+            // Unreferenced topic deletes cleanly with 204
+            var delResp = http("DELETE", "/skill-topics/" + topicId, null, ownerToken);
+            assertThat(delResp.statusCode()).isEqualTo(204);
+            assertThat(http("GET", "/skill-topics/" + topicId, null, ownerToken).statusCode()).isEqualTo(404);
+        } finally {
+            db.update("DELETE FROM class_member WHERE student_id IN (?, ?, ?)",
+                    pendingStudentId, inactiveStudentId, nonMemberStudentId);
+            db.update("DELETE FROM lms_user_access WHERE user_id IN (?, ?, ?)",
+                    pendingStudentId, inactiveStudentId, nonMemberStudentId);
+        }
     }
 
     @Test

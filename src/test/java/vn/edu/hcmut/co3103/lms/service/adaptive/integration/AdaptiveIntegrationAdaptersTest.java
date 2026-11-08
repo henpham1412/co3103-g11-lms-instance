@@ -13,6 +13,7 @@ import vn.edu.hcmut.co3103.lms.domain.LmsUserAccess;
 import vn.edu.hcmut.co3103.lms.entity.Activity;
 import vn.edu.hcmut.co3103.lms.entity.Chapter;
 import vn.edu.hcmut.co3103.lms.entity.Class;
+import vn.edu.hcmut.co3103.lms.entity.ClassMember;
 import vn.edu.hcmut.co3103.lms.entity.Lesson;
 import vn.edu.hcmut.co3103.lms.entity.Question;
 import vn.edu.hcmut.co3103.lms.entity.Quiz;
@@ -21,6 +22,7 @@ import vn.edu.hcmut.co3103.lms.exception.ErrorCode;
 import vn.edu.hcmut.co3103.lms.repository.LmsUserAccessRepository;
 import vn.edu.hcmut.co3103.lms.repository.assessment.QuestionRepository;
 import vn.edu.hcmut.co3103.lms.repository.assessment.QuizRepository;
+import vn.edu.hcmut.co3103.lms.repository.classmanagement.ClassMemberRepository;
 import vn.edu.hcmut.co3103.lms.repository.classmanagement.ClassRepository;
 import vn.edu.hcmut.co3103.lms.repository.learningcontent.ActivityRepository;
 import vn.edu.hcmut.co3103.lms.repository.learningcontent.ChapterRepository;
@@ -48,8 +50,13 @@ class AdaptiveIntegrationAdaptersTest {
     private static final UUID QUESTION_ID = UUID.randomUUID();
     private static final UUID OWNER_ID = UUID.randomUUID();
     private static final UUID OTHER_USER_ID = UUID.randomUUID();
+    private static final UUID ACTIVE_STUDENT_ID = UUID.randomUUID();
+    private static final UUID PENDING_STUDENT_ID = UUID.randomUUID();
+    private static final UUID INACTIVE_STUDENT_ID = UUID.randomUUID();
+    private static final UUID NON_MEMBER_STUDENT_ID = UUID.randomUUID();
 
     private ClassRepository classRepository;
+    private ClassMemberRepository classMemberRepository;
     private LmsUserAccessRepository userAccessRepository;
     private LessonRepository lessonRepository;
     private ChapterRepository chapterRepository;
@@ -63,6 +70,7 @@ class AdaptiveIntegrationAdaptersTest {
     @BeforeEach
     void setUp() {
         classRepository = mock(ClassRepository.class);
+        classMemberRepository = mock(ClassMemberRepository.class);
         userAccessRepository = mock(LmsUserAccessRepository.class);
         lessonRepository = mock(LessonRepository.class);
         chapterRepository = mock(ChapterRepository.class);
@@ -70,7 +78,7 @@ class AdaptiveIntegrationAdaptersTest {
         quizRepository = mock(QuizRepository.class);
         questionRepository = mock(QuestionRepository.class);
 
-        classAccess = new ClassAccessAdapter(classRepository, userAccessRepository);
+        classAccess = new ClassAccessAdapter(classRepository, classMemberRepository, userAccessRepository);
         resourceScope = new LearningResourceScopeAdapter(
                 lessonRepository, chapterRepository, activityRepository, quizRepository, questionRepository);
     }
@@ -96,6 +104,61 @@ class AdaptiveIntegrationAdaptersTest {
     }
 
     @Test
+    void classAccessPermitsActiveStudentReadAndRejectsPendingInactiveAndNonMemberStudents() {
+        when(classRepository.findById(CLASS_ID))
+                .thenReturn(Optional.of(course(OWNER_ID, Class.ClassStatus.ACTIVE)));
+
+        // ACTIVE student is permitted on ACTIVE and ARCHIVED class for read-only access
+        authenticateJwt(ACTIVE_STUDENT_ID);
+        when(userAccessRepository.findById(ACTIVE_STUDENT_ID))
+                .thenReturn(Optional.of(user(ACTIVE_STUDENT_ID, LmsRole.STUDENT, AccessStatus.ACTIVE)));
+        when(classMemberRepository.existsByClassIdAndStudentIdAndStatus(
+                CLASS_ID, ACTIVE_STUDENT_ID, ClassMember.MembershipStatus.ACTIVE))
+                .thenReturn(true);
+        assertDoesNotThrow(() -> classAccess.requireReadAccess(CLASS_ID));
+
+        when(classRepository.findById(CLASS_ID))
+                .thenReturn(Optional.of(course(OWNER_ID, Class.ClassStatus.ARCHIVED)));
+        assertDoesNotThrow(() -> classAccess.requireReadAccess(CLASS_ID));
+
+        // ACTIVE student is still denied write access
+        when(classRepository.findByIdForUpdate(CLASS_ID))
+                .thenReturn(Optional.of(course(OWNER_ID, Class.ClassStatus.ACTIVE)));
+        assertEquals(ErrorCode.CLASS_ACCESS_DENIED,
+                assertThrows(AppException.class, () -> classAccess.lockForWrite(CLASS_ID)).getErrorCode());
+
+        // PENDING student is denied read access
+        authenticateJwt(PENDING_STUDENT_ID);
+        when(userAccessRepository.findById(PENDING_STUDENT_ID))
+                .thenReturn(Optional.of(user(PENDING_STUDENT_ID, LmsRole.STUDENT, AccessStatus.ACTIVE)));
+        when(classMemberRepository.existsByClassIdAndStudentIdAndStatus(
+                CLASS_ID, PENDING_STUDENT_ID, ClassMember.MembershipStatus.ACTIVE))
+                .thenReturn(false);
+        assertEquals(ErrorCode.CLASS_ACCESS_DENIED,
+                assertThrows(AppException.class, () -> classAccess.requireReadAccess(CLASS_ID)).getErrorCode());
+
+        // INACTIVE student is denied read access
+        authenticateJwt(INACTIVE_STUDENT_ID);
+        when(userAccessRepository.findById(INACTIVE_STUDENT_ID))
+                .thenReturn(Optional.of(user(INACTIVE_STUDENT_ID, LmsRole.STUDENT, AccessStatus.ACTIVE)));
+        when(classMemberRepository.existsByClassIdAndStudentIdAndStatus(
+                CLASS_ID, INACTIVE_STUDENT_ID, ClassMember.MembershipStatus.ACTIVE))
+                .thenReturn(false);
+        assertEquals(ErrorCode.CLASS_ACCESS_DENIED,
+                assertThrows(AppException.class, () -> classAccess.requireReadAccess(CLASS_ID)).getErrorCode());
+
+        // Non-member student is denied read access
+        authenticateJwt(NON_MEMBER_STUDENT_ID);
+        when(userAccessRepository.findById(NON_MEMBER_STUDENT_ID))
+                .thenReturn(Optional.of(user(NON_MEMBER_STUDENT_ID, LmsRole.STUDENT, AccessStatus.ACTIVE)));
+        when(classMemberRepository.existsByClassIdAndStudentIdAndStatus(
+                CLASS_ID, NON_MEMBER_STUDENT_ID, ClassMember.MembershipStatus.ACTIVE))
+                .thenReturn(false);
+        assertEquals(ErrorCode.CLASS_ACCESS_DENIED,
+                assertThrows(AppException.class, () -> classAccess.requireReadAccess(CLASS_ID)).getErrorCode());
+    }
+
+    @Test
     void classAccessLockForWriteLocksActiveClassAndRejectsArchivedClass() {
         authenticateJwt(OWNER_ID);
         when(userAccessRepository.findById(OWNER_ID))
@@ -113,7 +176,7 @@ class AdaptiveIntegrationAdaptersTest {
     }
 
     @Test
-    void classAccessRejectsMissingClassNonOwnerStudentAndSuspendedTutor() {
+    void classAccessRejectsMissingClassNonOwnerTutorAndSuspendedTutor() {
         authenticateJwt(OWNER_ID);
         when(classRepository.findById(CLASS_ID)).thenReturn(Optional.empty());
         assertEquals(ErrorCode.CLASS_NOT_FOUND,
@@ -124,11 +187,6 @@ class AdaptiveIntegrationAdaptersTest {
         authenticateJwt(OTHER_USER_ID);
         when(userAccessRepository.findById(OTHER_USER_ID))
                 .thenReturn(Optional.of(user(OTHER_USER_ID, LmsRole.TUTOR, AccessStatus.ACTIVE)));
-        assertEquals(ErrorCode.CLASS_ACCESS_DENIED,
-                assertThrows(AppException.class, () -> classAccess.requireReadAccess(CLASS_ID)).getErrorCode());
-
-        when(userAccessRepository.findById(OTHER_USER_ID))
-                .thenReturn(Optional.of(user(OTHER_USER_ID, LmsRole.STUDENT, AccessStatus.ACTIVE)));
         assertEquals(ErrorCode.CLASS_ACCESS_DENIED,
                 assertThrows(AppException.class, () -> classAccess.requireReadAccess(CLASS_ID)).getErrorCode());
 

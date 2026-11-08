@@ -9,12 +9,13 @@ This document describes the **actual implemented API contracts** for **LMS-8** (
 All LMS-8 endpoints require a valid RS256 Bearer access token (`Authorization: Bearer <access_token>`) issued by Central Identity (`sub` = user UUID) and an active local `lms_user_access` record.
 
 ### Access Control Policy (`DOC-05` §4.5.3)
-- **Role Requirement:** Caller must have `access_status = ACTIVE` and `lms_role = TUTOR` in `lms_user_access`.
-- **Ownership Requirement:** Caller must be the **owning Tutor** (`class.tutor_id == jwt.sub`) of the class that owns the target `SkillTopic`, `Lesson`, `Activity`, or `Question`.
+- **Active Local Account Requirement:** Caller must have `access_status = ACTIVE` in `lms_user_access`.
 - **Read Operations (`GET`):**
-  - Permitted when the owning Tutor accesses an `ACTIVE` or `ARCHIVED` class.
-  - Non-owner Tutor, Student, Administrator, or suspended user receives `403 Forbidden` (`CLASS_ACCESS_DENIED`).
+  - Permitted for the **owning Tutor** (`lms_role = TUTOR` and `class.tutor_id == jwt.sub`) on both `ACTIVE` and `ARCHIVED` classes.
+  - Permitted for **enrolled Students with `ACTIVE` membership** (`lms_role = STUDENT` and `class_member.status = ACTIVE`) on both `ACTIVE` and `ARCHIVED` classes.
+  - Non-owner Tutor, Student with `PENDING` / `INACTIVE` / `REJECTED` / no membership, Administrator, or suspended user receives `403 Forbidden` (`CLASS_ACCESS_DENIED`).
 - **Write Operations (`POST`, `PATCH`, `DELETE`, `PUT`):**
+  - Restricted strictly to the **owning Tutor** (`lms_role = TUTOR` and `class.tutor_id == jwt.sub`).
   - Acquire a pessimistic write lock (`SELECT ... FOR UPDATE`) on the owning `class` row for the duration of the transaction.
   - Permitted **only** when `class.status == ACTIVE`.
   - If `class.status == ARCHIVED`, write operations return `409 Conflict` (`RESOURCE_STATE_CONFLICT`).

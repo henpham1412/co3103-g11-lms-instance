@@ -1,5 +1,6 @@
 package vn.edu.hcmut.co3103.lms.service.adaptive.integration;
 
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.security.core.Authentication;
 import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.security.oauth2.jwt.Jwt;
@@ -8,17 +9,19 @@ import vn.edu.hcmut.co3103.lms.domain.AccessStatus;
 import vn.edu.hcmut.co3103.lms.domain.LmsRole;
 import vn.edu.hcmut.co3103.lms.domain.LmsUserAccess;
 import vn.edu.hcmut.co3103.lms.entity.Class;
+import vn.edu.hcmut.co3103.lms.entity.ClassMember;
 import vn.edu.hcmut.co3103.lms.exception.AppException;
 import vn.edu.hcmut.co3103.lms.exception.ErrorCode;
 import vn.edu.hcmut.co3103.lms.repository.LmsUserAccessRepository;
+import vn.edu.hcmut.co3103.lms.repository.classmanagement.ClassMemberRepository;
 import vn.edu.hcmut.co3103.lms.repository.classmanagement.ClassRepository;
 
 import java.util.UUID;
 import java.util.function.Supplier;
 
 /**
- * LMS-2/LMS-3 adapter enforcing owning-Tutor class access and pessimistic write locking
- * for LMS-8 SkillTopic, prerequisite graph, and learning resource association operations.
+ * LMS-2/LMS-3 adapter enforcing owning-Tutor and active-Student class read access,
+ * and owning-Tutor pessimistic write locking on ACTIVE classes for LMS-8 operations.
  */
 @Component
 public class ClassAccessAdapter implements ClassAccess {
@@ -26,11 +29,20 @@ public class ClassAccessAdapter implements ClassAccess {
     private static final ThreadLocal<UUID> ACTOR_OVERRIDE = new ThreadLocal<>();
 
     private final ClassRepository classRepository;
+    private final ClassMemberRepository classMemberRepository;
     private final LmsUserAccessRepository userAccessRepository;
 
     public ClassAccessAdapter(ClassRepository classRepository,
                               LmsUserAccessRepository userAccessRepository) {
+        this(classRepository, null, userAccessRepository);
+    }
+
+    @Autowired
+    public ClassAccessAdapter(ClassRepository classRepository,
+                              ClassMemberRepository classMemberRepository,
+                              LmsUserAccessRepository userAccessRepository) {
         this.classRepository = classRepository;
+        this.classMemberRepository = classMemberRepository;
         this.userAccessRepository = userAccessRepository;
     }
 
@@ -66,7 +78,26 @@ public class ClassAccessAdapter implements ClassAccess {
         }
         Class targetClass = classRepository.findById(classId)
                 .orElseThrow(() -> new AppException(ErrorCode.CLASS_NOT_FOUND));
-        requireOwningActiveTutor(targetClass);
+        LmsUserAccess actor = requireActiveUser();
+        if (actor.getLmsRole() == LmsRole.TUTOR) {
+            if (!targetClass.getTutorId().equals(actor.getUserId())) {
+                throw new AppException(ErrorCode.CLASS_ACCESS_DENIED);
+            }
+            return;
+        }
+        if (actor.getLmsRole() == LmsRole.STUDENT) {
+            boolean activeMember = classMemberRepository != null
+                    && classMemberRepository.existsByClassIdAndStudentIdAndStatus(
+                            classId,
+                            actor.getUserId(),
+                            ClassMember.MembershipStatus.ACTIVE
+                    );
+            if (!activeMember) {
+                throw new AppException(ErrorCode.CLASS_ACCESS_DENIED);
+            }
+            return;
+        }
+        throw new AppException(ErrorCode.CLASS_ACCESS_DENIED);
     }
 
     @Override
@@ -83,13 +114,17 @@ public class ClassAccessAdapter implements ClassAccess {
     }
 
     private void requireOwningActiveTutor(Class targetClass) {
-        UUID actorId = currentActorId();
-        LmsUserAccess actor = userAccessRepository.findById(actorId)
-                .filter(user -> user.getAccessStatus() == AccessStatus.ACTIVE)
-                .orElseThrow(() -> new AppException(ErrorCode.CLASS_ACCESS_DENIED));
-        if (actor.getLmsRole() != LmsRole.TUTOR || !targetClass.getTutorId().equals(actorId)) {
+        LmsUserAccess actor = requireActiveUser();
+        if (actor.getLmsRole() != LmsRole.TUTOR || !targetClass.getTutorId().equals(actor.getUserId())) {
             throw new AppException(ErrorCode.CLASS_ACCESS_DENIED);
         }
+    }
+
+    private LmsUserAccess requireActiveUser() {
+        UUID actorId = currentActorId();
+        return userAccessRepository.findById(actorId)
+                .filter(user -> user.getAccessStatus() == AccessStatus.ACTIVE)
+                .orElseThrow(() -> new AppException(ErrorCode.CLASS_ACCESS_DENIED));
     }
 
     private UUID currentActorId() {
