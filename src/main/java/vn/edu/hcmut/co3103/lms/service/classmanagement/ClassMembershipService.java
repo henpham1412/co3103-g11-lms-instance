@@ -198,9 +198,9 @@ public class ClassMembershipService {
                 tutor == null ? null : tutor.getFullName(),
                 tutor == null ? null : tutor.getEmail()
         );
-        StudentClassPageResponse.Progress progress = membership.getStatus() == MembershipStatus.PENDING
-                ? null
-                : calculateProgress(membership);
+        StudentClassPageResponse.Progress progress = membership.getStatus() == MembershipStatus.ACTIVE
+                ? calculateProgress(membership)
+                : null;
         return new StudentClassPageResponse.Item(
                 targetClass.getClassId(),
                 targetClass.getClassCode(),
@@ -230,7 +230,7 @@ public class ClassMembershipService {
                 .distinct()
                 .count();
         int eligible = eligibleLessons.size();
-        int percentage = eligible == 0 ? 100 : (int) Math.round(completed * 100.0 / eligible);
+        int percentage = eligible == 0 ? 0 : (int) Math.round(completed * 100.0 / eligible);
         String status = eligible > 0 && completed == eligible ? "COMPLETED" : "IN_PROGRESS";
         return new StudentClassPageResponse.Progress((int) completed, eligible, percentage, status);
     }

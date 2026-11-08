@@ -135,7 +135,7 @@ class Lms7ProgressEndpointsTest {
         TutorProgressService service = mock(TutorProgressService.class);
         TutorProgressController controller = new TutorProgressController(service);
         UUID memberId = UUID.randomUUID();
-        var response = new TutorMemberProgressResponse(classId, memberId, studentId, "INACTIVE",
+        var response = new TutorMemberProgressResponse(classId, memberId, studentId, "ACTIVE",
                 1, 1, 100, "COMPLETED", List.of(), List.of(), List.of());
         when(service.getMemberProgress(classId, memberId, studentId)).thenReturn(response);
 

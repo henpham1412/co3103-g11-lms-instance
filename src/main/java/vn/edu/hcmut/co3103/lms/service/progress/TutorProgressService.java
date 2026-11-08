@@ -1,5 +1,6 @@
 package vn.edu.hcmut.co3103.lms.service.progress;
 
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -14,16 +15,21 @@ import vn.edu.hcmut.co3103.lms.entity.Class;
 import vn.edu.hcmut.co3103.lms.entity.ClassMember;
 import vn.edu.hcmut.co3103.lms.entity.CompletionMark;
 import vn.edu.hcmut.co3103.lms.entity.Lesson;
+import vn.edu.hcmut.co3103.lms.entity.QuizAttempt;
 import vn.edu.hcmut.co3103.lms.repository.LmsUserAccessRepository;
 import vn.edu.hcmut.co3103.lms.repository.assessment.QuizAttemptRepository;
 import vn.edu.hcmut.co3103.lms.repository.classmanagement.ClassMemberRepository;
 import vn.edu.hcmut.co3103.lms.repository.classmanagement.ClassRepository;
+import vn.edu.hcmut.co3103.lms.repository.learningcontent.ActivityRepository;
 import vn.edu.hcmut.co3103.lms.repository.learningcontent.ChapterRepository;
 import vn.edu.hcmut.co3103.lms.repository.learningcontent.CompletionMarkRepository;
 import vn.edu.hcmut.co3103.lms.repository.learningcontent.LessonRepository;
 
+import java.time.OffsetDateTime;
 import java.util.ArrayList;
+import java.util.Comparator;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
 import java.util.stream.Collectors;
@@ -35,20 +41,42 @@ public class TutorProgressService {
     private final LmsUserAccessRepository userAccessRepository;
     private final ChapterRepository chapterRepository;
     private final LessonRepository lessonRepository;
+    private final ActivityRepository activityRepository;
     private final CompletionMarkRepository completionMarkRepository;
     private final QuizAttemptRepository quizAttemptRepository;
 
-    public TutorProgressService(ClassRepository classRepository, ClassMemberRepository classMemberRepository,
-            LmsUserAccessRepository userAccessRepository, ChapterRepository chapterRepository,
-            LessonRepository lessonRepository, CompletionMarkRepository completionMarkRepository,
-            QuizAttemptRepository quizAttemptRepository) {
+    @Autowired
+    public TutorProgressService(
+            ClassRepository classRepository,
+            ClassMemberRepository classMemberRepository,
+            LmsUserAccessRepository userAccessRepository,
+            ChapterRepository chapterRepository,
+            LessonRepository lessonRepository,
+            ActivityRepository activityRepository,
+            CompletionMarkRepository completionMarkRepository,
+            QuizAttemptRepository quizAttemptRepository
+    ) {
         this.classRepository = classRepository;
         this.classMemberRepository = classMemberRepository;
         this.userAccessRepository = userAccessRepository;
         this.chapterRepository = chapterRepository;
         this.lessonRepository = lessonRepository;
+        this.activityRepository = activityRepository;
         this.completionMarkRepository = completionMarkRepository;
         this.quizAttemptRepository = quizAttemptRepository;
+    }
+
+    public TutorProgressService(
+            ClassRepository classRepository,
+            ClassMemberRepository classMemberRepository,
+            LmsUserAccessRepository userAccessRepository,
+            ChapterRepository chapterRepository,
+            LessonRepository lessonRepository,
+            CompletionMarkRepository completionMarkRepository,
+            QuizAttemptRepository quizAttemptRepository
+    ) {
+        this(classRepository, classMemberRepository, userAccessRepository, chapterRepository,
+                lessonRepository, null, completionMarkRepository, quizAttemptRepository);
     }
 
     @Transactional(readOnly = true)
@@ -71,30 +99,45 @@ public class TutorProgressService {
     public TutorMemberProgressResponse getMemberProgress(UUID classId, UUID classMemberId, UUID tutorId) {
         requireOwnedClass(classId, tutorId);
         ClassMember member = classMemberRepository.findByClassMemberIdAndClassId(classMemberId, classId)
-                .filter(candidate -> candidate.getStatus() == ClassMember.MembershipStatus.ACTIVE
-                        || candidate.getStatus() == ClassMember.MembershipStatus.INACTIVE)
+                .filter(candidate -> candidate.getStatus() == ClassMember.MembershipStatus.ACTIVE)
                 .orElseThrow(() -> notFound("CLASS_OR_MEMBER_NOT_FOUND"));
+        OffsetDateTime now = OffsetDateTime.now();
         ProgressCounts counts = counts(member);
         var marksByLesson = completionMarkRepository.findByClassMemberId(member.getClassMemberId()).stream()
                 .collect(Collectors.toMap(CompletionMark::getLessonId, mark -> mark, (left, right) -> left));
+        List<QuizAttempt> memberAttempts = quizAttemptRepository
+                .findByClassMember_ClassMemberId(member.getClassMemberId());
+        Map<UUID, List<QuizAttempt>> attemptsByActivity = StudentProgressService
+                .groupAttemptsByActivity(memberAttempts);
+
         List<ClassProgressResponse.ChapterProgress> chapters = new ArrayList<>();
         for (Chapter chapter : chapterRepository.findByClassIdAndStatusOrderBySequenceOrderAsc(
                 classId, Chapter.VisibilityStatus.PUBLISHED)) {
             List<Lesson> lessons = lessonRepository.findByChapterIdAndStatusOrderBySequenceOrderAsc(
                     chapter.getChapterId(), Chapter.VisibilityStatus.PUBLISHED);
             List<ClassProgressResponse.LessonProgress> lessonItems = lessons.stream().map(lesson ->
-                    new ClassProgressResponse.LessonProgress(lesson.getLessonId(), lesson.getTitle(),
-                            lesson.getSequenceOrder(), marksByLesson.containsKey(lesson.getLessonId()),
+                    new ClassProgressResponse.LessonProgress(
+                            lesson.getLessonId(),
+                            lesson.getTitle(),
+                            lesson.getSequenceOrder(),
+                            marksByLesson.containsKey(lesson.getLessonId()),
                             marksByLesson.containsKey(lesson.getLessonId())
-                                    ? marksByLesson.get(lesson.getLessonId()).getMarkedAt() : null, List.of()))
-                    .toList();
-            int completed = (int) lessons.stream().filter(lesson -> marksByLesson.containsKey(lesson.getLessonId())).count();
+                                    ? marksByLesson.get(lesson.getLessonId()).getMarkedAt() : null,
+                            StudentProgressService.buildLessonAssessmentStatuses(
+                                    activityRepository, lesson.getLessonId(), attemptsByActivity, now
+                            )
+                    )).toList();
+            int completed = (int) lessons.stream()
+                    .filter(lesson -> marksByLesson.containsKey(lesson.getLessonId()))
+                    .count();
             chapters.add(new ClassProgressResponse.ChapterProgress(chapter.getChapterId(), chapter.getTitle(),
                     completed, lessons.size(), percentage(completed, lessons.size()), lessonItems));
         }
-        List<AssessmentHistoryItem> assessments = quizAttemptRepository
-                .findByClassMember_ClassMemberId(member.getClassMemberId()).stream()
-                .map(AssessmentHistoryItem::from).toList();
+        List<AssessmentHistoryItem> assessments = memberAttempts.stream()
+                .sorted(Comparator.comparing(QuizAttempt::getStartedAt, Comparator.nullsLast(Comparator.reverseOrder()))
+                        .thenComparing(QuizAttempt::getId, Comparator.nullsLast(Comparator.reverseOrder())))
+                .map(AssessmentHistoryItem::from)
+                .toList();
         return new TutorMemberProgressResponse(classId, member.getClassMemberId(), member.getStudentId(),
                 member.getStatus().name(), counts.completed(), counts.eligible(),
                 percentage(counts.completed(), counts.eligible()), progressStatus(counts.completed(), counts.eligible()),
@@ -118,7 +161,7 @@ public class TutorProgressService {
     }
 
     private int percentage(int completed, int eligible) {
-        return eligible == 0 ? 100 : (int) Math.round(completed * 100.0 / eligible);
+        return eligible == 0 ? 0 : (int) Math.round(completed * 100.0 / eligible);
     }
 
     private String progressStatus(int completed, int eligible) {

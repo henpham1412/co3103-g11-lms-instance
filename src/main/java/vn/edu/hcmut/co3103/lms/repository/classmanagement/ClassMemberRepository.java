@@ -91,7 +91,7 @@ public interface ClassMemberRepository
             FROM class_member cm
             JOIN class c ON c.class_id = cm.class_id
             WHERE cm.student_id = :studentId
-              AND cm.status IN ('ACTIVE', 'PENDING', 'INACTIVE')
+              AND cm.status IN ('ACTIVE', 'PENDING')
               AND (:classStatus IS NULL OR c.status = :classStatus)
             ORDER BY c.created_at DESC, cm.requested_at DESC NULLS LAST, cm.class_member_id
             """,
@@ -100,7 +100,7 @@ public interface ClassMemberRepository
                     FROM class_member cm
                     JOIN class c ON c.class_id = cm.class_id
                     WHERE cm.student_id = :studentId
-                      AND cm.status IN ('ACTIVE', 'PENDING', 'INACTIVE')
+                      AND cm.status IN ('ACTIVE', 'PENDING')
                       AND (:classStatus IS NULL OR c.status = :classStatus)
                     """,
             nativeQuery = true

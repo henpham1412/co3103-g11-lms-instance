@@ -29,10 +29,13 @@ class MigrationPolicyTest {
             "V3__create_lms_setup_state.sql", 1480030657,
             "V4__create_classes_and_memberships.sql", -1197899662,
             "V5__create_learning_content_tables.sql", 1741533483,
-            "V6__create_assessments.sql", -1763291091);
+            "V6__create_assessments.sql", -1763291091,
+            "V7__create_completion_marks.sql", -1834607830,
+            "V8__create_last_visit.sql", -1912735881,
+            "V9__restrict_completion_mark_lesson_delete.sql", 1456857671);
 
     @Test
-    void keepsTheMigrationSetDownToTheSixApprovedFiles() throws IOException {
+    void keepsTheMigrationSetDownToTheApprovedFiles() throws IOException {
         assertThat(migrations()).extracting(MigrationFile::fileName)
                 .containsExactlyInAnyOrderElementsOf(APPROVED_CHECKSUMS.keySet());
     }

@@ -46,12 +46,17 @@ public class LessonCompletionService {
         ClassMember membership = requireWritableMembership(classId, studentId);
         requireAccessibleLesson(classId, lessonId);
 
-        Instant markedAt = Instant.now();
-        CompletionMark mark = completionMarkRepository
+        return completionMarkRepository
                 .findByClassMemberIdAndLessonId(membership.getClassMemberId(), lessonId)
-                .orElseGet(() -> new CompletionMark(membership.getClassMemberId(), lessonId, markedAt));
-        mark.setMarkedAt(markedAt);
-        return CompletionMarkResponse.from(completionMarkRepository.save(mark));
+                .map(CompletionMarkResponse::from)
+                .orElseGet(() -> {
+                    CompletionMark created = new CompletionMark(
+                            membership.getClassMemberId(),
+                            lessonId,
+                            Instant.now()
+                    );
+                    return CompletionMarkResponse.from(completionMarkRepository.save(created));
+                });
     }
 
     @Transactional
