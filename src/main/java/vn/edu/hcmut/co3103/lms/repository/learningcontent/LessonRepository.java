@@ -15,6 +15,9 @@ public interface LessonRepository extends JpaRepository<Lesson, UUID> {
     Optional<Lesson> findByLessonIdAndChapterId(UUID lessonId, UUID chapterId);
     boolean existsByChapterIdAndLessonId(UUID chapterId, UUID lessonId);
 
+    @Query("select c.classId from Lesson l, Chapter c where l.lessonId = :lessonId and l.chapterId = c.chapterId")
+    Optional<UUID> findClassIdByLessonId(@Param("lessonId") UUID lessonId);
+
     @Query("select l from Lesson l, Chapter c where l.chapterId = c.chapterId "
             + "and c.classId = :classId and c.status = :published and l.status = :published "
             + "order by c.sequenceOrder, l.sequenceOrder")

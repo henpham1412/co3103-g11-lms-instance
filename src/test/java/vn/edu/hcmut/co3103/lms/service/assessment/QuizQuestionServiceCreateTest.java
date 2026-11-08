@@ -45,7 +45,7 @@ class QuizQuestionServiceCreateTest {
                 new QuestionCreateRequest.Option("Correct", true, 0),
                 new QuestionCreateRequest.Option("Incorrect", false, 1)), null);
 
-        QuestionResponse response = new QuizQuestionService(quizRepository, questionRepository, optionRepository,
+        QuestionResponse response = new QuizQuestionService(mock(AssessmentLocks.class), quizRepository, questionRepository, optionRepository,
                 attemptRepository, accessService, gradingService).addQuestion(activityId, userId, request);
 
         assertEquals(BigDecimal.ZERO, response.pointsDeducted());

@@ -24,6 +24,7 @@ import java.util.stream.Collectors;
 @Service
 @RequiredArgsConstructor
 public class QuizQuestionService {
+    private final AssessmentLocks locks;
     private final QuizRepository quizRepository;
     private final QuestionRepository questionRepository;
     private final QuestionOptionRepository optionRepository;
@@ -33,6 +34,7 @@ public class QuizQuestionService {
 
     @Transactional
     public QuestionResponse addQuestion(UUID activityId, UUID userId, QuestionCreateRequest request) {
+        locks.lockActivity(activityId);
         Quiz quiz = quizRepository.findLockedByActivity_ActivityId(activityId)
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "QUIZ_NOT_FOUND"));
         accessService.requireOwningTutor(quiz.getActivity(), userId);
@@ -73,10 +75,13 @@ public class QuizQuestionService {
 
     @Transactional
     public QuestionResponse updateQuestion(UUID questionId, UUID userId, QuestionUpdateRequest request) {
+        UUID quizId = questionRepository.findQuizIdByQuestionId(questionId)
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "QUESTION_NOT_FOUND"));
+        locks.lockQuiz(quizId);
+        Quiz quiz = quizRepository.findLockedById(quizId)
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "QUIZ_NOT_FOUND"));
         Question question = questionRepository.findById(questionId)
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "QUESTION_NOT_FOUND"));
-        Quiz quiz = quizRepository.findLockedById(question.getQuiz().getId())
-                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "QUIZ_NOT_FOUND"));
         accessService.requireOwningTutor(quiz.getActivity(), userId);
         if (request == null || !hasAnyField(request)) throw invalidQuestion();
 
@@ -130,15 +135,22 @@ public class QuizQuestionService {
     // note: no regrade happens if a question is deleted; it cannot happen had any attempts been submitted.
     @Transactional
     public void deleteQuestion(UUID questionId, UUID userId) {
+        UUID quizId = questionRepository.findQuizIdByQuestionId(questionId)
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "QUESTION_NOT_FOUND"));
+        locks.lockQuiz(quizId);
+        Quiz quiz = quizRepository.findLockedById(quizId)
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "QUIZ_NOT_FOUND"));
         Question question = questionRepository.findById(questionId)
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "QUESTION_NOT_FOUND"));
-        Quiz quiz = quizRepository.findLockedById(question.getQuiz().getId())
-                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "QUIZ_NOT_FOUND"));
         accessService.requireOwningTutor(quiz.getActivity(), userId);
         if (attemptRepository.existsByQuiz_Id(quiz.getId())) {
             throw lockedQuestion();
         }
 
+        if (quiz.getActivity().getStatus() == vn.edu.hcmut.co3103.lms.entity.Chapter.VisibilityStatus.PUBLISHED
+                && questionRepository.findByQuiz_IdOrderByOrderIndex(quiz.getId()).size() <= 1) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT, "ASSESSMENT_CONFIGURATION_MISMATCH");
+        }
         optionRepository.deleteByQuestion_Id(questionId);
         optionRepository.flush();
         questionRepository.delete(question);
@@ -206,12 +218,22 @@ public class QuizQuestionService {
                         option.getIsCorrect(), option.getOrderIndex())).toList());
     }
 
+    private static boolean representablePoints(BigDecimal value) {
+        return value != null && value.signum() >= 0 && value.stripTrailingZeros().scale() <= 2
+                && value.compareTo(new BigDecimal("99999999.99")) <= 0;
+    }
+
     private ResponseStatusException invalidQuestion() {
         return new ResponseStatusException(HttpStatus.BAD_REQUEST, "INVALID_QUESTION");
     }
 
     private ResponseStatusException lockedQuestion() {
         return new ResponseStatusException(HttpStatus.CONFLICT, "QUESTION_EDIT_LOCKED");
+    }
+
+    void validateInitialQuestion(QuestionCreateRequest request) {
+        validateQuestion(request, request == null || request.pointsDeducted() == null
+                ? BigDecimal.ZERO : request.pointsDeducted());
     }
 
     private void validateQuestion(QuestionCreateRequest request, BigDecimal pointsDeducted) {
@@ -232,8 +254,8 @@ public class QuizQuestionService {
                                   UUID questionId, UUID quizId) {
         if (type == null || !Set.of("MCQ_SINGLE", "MCQ_MULTIPLE", "TRUE_FALSE").contains(type)
                 || content == null || content.isBlank()
-                || pointsAwarded == null || pointsAwarded.compareTo(BigDecimal.ZERO) < 0
-                || pointsDeducted == null || pointsDeducted.compareTo(BigDecimal.ZERO) < 0
+                || !representablePoints(pointsAwarded)
+                || !representablePoints(pointsDeducted)
                 || orderIndex == null || orderIndex < 0 || options == null || options.isEmpty()
                 || (type.startsWith("MCQ_") && options.size() < 2)
                 || ("TRUE_FALSE".equals(type) && options.size() != 2)
