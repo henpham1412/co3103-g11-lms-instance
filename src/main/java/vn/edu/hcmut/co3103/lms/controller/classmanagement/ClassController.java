@@ -31,9 +31,9 @@ import vn.edu.hcmut.co3103.lms.dto.response.ClassCreationResponse;
 import vn.edu.hcmut.co3103.lms.dto.response.ClassDetailResponse;
 import vn.edu.hcmut.co3103.lms.dto.response.ClassMemberResponse;
 import vn.edu.hcmut.co3103.lms.dto.response.ClassThumbnailResponse;
-import vn.edu.hcmut.co3103.lms.dto.response.CurrentMembershipResponse;
 import vn.edu.hcmut.co3103.lms.dto.response.MembershipActionResponse;
 import vn.edu.hcmut.co3103.lms.dto.response.PageResponse;
+import vn.edu.hcmut.co3103.lms.dto.response.StudentClassPageResponse;
 import vn.edu.hcmut.co3103.lms.entity.Class;
 import vn.edu.hcmut.co3103.lms.entity.ClassMember;
 import vn.edu.hcmut.co3103.lms.mapper.ClassMapper;
@@ -115,12 +115,22 @@ public class ClassController {
 
     @GetMapping("/me/classes")
     @PreAuthorize("hasRole('STUDENT')")
-    public List<CurrentMembershipResponse> listCurrentStudentMemberships(
-            @AuthenticationPrincipal Jwt jwt
+    public StudentClassPageResponse listCurrentStudentMemberships(
+            @AuthenticationPrincipal Jwt jwt,
+            @RequestParam(name = "status", required = false) Class.ClassStatus classStatus,
+            @RequestParam(defaultValue = "1") int page,
+            @RequestParam(defaultValue = "20") int size
     ) {
-        return membershipService.listCurrentStudentMemberships(userId(jwt)).stream()
-                .map(CurrentMembershipResponse::from)
-                .toList();
+        if (page < 1 || size < 1 || size > 100) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "INVALID_QUERY_PARAMETER");
+        }
+        Page<StudentClassPageResponse.Item> result = membershipService.listStudentClasses(
+                userId(jwt), classStatus, PageRequest.of(page - 1, size)
+        );
+        return new StudentClassPageResponse(
+                result.getContent(), result.getNumber() + 1, result.getSize(),
+                result.getTotalElements(), result.getTotalPages()
+        );
     }
 
     @GetMapping("/tutor/classes")

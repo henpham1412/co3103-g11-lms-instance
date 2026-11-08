@@ -22,6 +22,7 @@ import vn.edu.hcmut.co3103.lms.dto.request.ClassUpdateRequest;
 import vn.edu.hcmut.co3103.lms.dto.response.ClassCatalogResponse;
 import vn.edu.hcmut.co3103.lms.dto.response.ClassCreationResponse;
 import vn.edu.hcmut.co3103.lms.dto.response.ClassDetailResponse;
+import vn.edu.hcmut.co3103.lms.dto.response.StudentClassPageResponse;
 import vn.edu.hcmut.co3103.lms.exception.GlobalExceptionHandler;
 import vn.edu.hcmut.co3103.lms.exception.ClassCodeAlreadyExistsException;
 import vn.edu.hcmut.co3103.lms.entity.Class;
@@ -92,6 +93,30 @@ class ClassControllerApiTest {
         assertEquals(1, pageable.getValue().getPageNumber());
         assertEquals(5, pageable.getValue().getPageSize());
         assertEquals("title", pageable.getValue().getSort().getOrderFor("title").getProperty());
+    }
+
+    @Test
+    void myClassesEndpointFiltersByClassStatusAndUsesDefaultPageSize() throws Exception {
+        var item = new StudentClassPageResponse.Item(classId, "CS101", "Intro", "Description",
+                null, null, "OPEN", "ACTIVE", "ACTIVE",
+                new StudentClassPageResponse.Tutor(tutorId, "Tutor", "tutor@example.test"),
+                new StudentClassPageResponse.Progress(1, 2, 50, "IN_PROGRESS"));
+        when(membershipService.listStudentClasses(any(), eq(Class.ClassStatus.ACTIVE), any()))
+                .thenReturn(new org.springframework.data.domain.PageImpl<>(
+                        List.of(item), org.springframework.data.domain.PageRequest.of(0, 20), 1));
+
+        mvc.perform(get("/api/v1/me/classes").with(jwtAs("STUDENT")).param("status", "ACTIVE"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.items[0].class_status").value("ACTIVE"))
+                .andExpect(jsonPath("$.items[0].membership_status").value("ACTIVE"))
+                .andExpect(jsonPath("$.items[0].progress.progress_percentage").value(50))
+                .andExpect(jsonPath("$.page").value(1))
+                .andExpect(jsonPath("$.size").value(20));
+
+        var pageable = org.mockito.ArgumentCaptor.forClass(org.springframework.data.domain.Pageable.class);
+        verify(membershipService).listStudentClasses(any(), eq(Class.ClassStatus.ACTIVE), pageable.capture());
+        assertEquals(0, pageable.getValue().getPageNumber());
+        assertEquals(20, pageable.getValue().getPageSize());
     }
 
     @Test
