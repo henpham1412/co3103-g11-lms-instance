@@ -1,6 +1,7 @@
 package vn.edu.hcmut.co3103.lms.service.adaptive;
 
 import jakarta.validation.Validator;
+import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import vn.edu.hcmut.co3103.lms.entity.SkillTopic;
 import vn.edu.hcmut.co3103.lms.exception.AppException;
@@ -19,6 +20,7 @@ import java.util.Objects;
 import java.util.UUID;
 
 /** Register as a transactional Spring bean only with a real ClassAccess adapter. */
+@Service
 @Transactional(readOnly = true)
 public class SkillTopicService {
 

@@ -1,4 +1,18 @@
+server:
+  port: ${SERVER_PORT:8081}
+  error:
+    # Error dispatches are public; never expose exception details, even via query parameters.
+    include-exception: false
+    include-message: never
+    include-stacktrace: never
+    include-binding-errors: never
+    include-path: always
+
 spring:
+  servlet:
+    multipart:
+      max-file-size: 200MB
+      max-request-size: 201MB
   application:
     name: co3103-g11-lms-instance
   datasource:
@@ -20,3 +34,13 @@ spring:
         jwt:
           issuer-uri: ${CENTRAL_IDENTITY_ISSUER_URI:http://localhost:8080}
           jwk-set-uri: ${CENTRAL_IDENTITY_JWKS_URI:http://localhost:8080/.well-known/jwks.json}
+
+lms:
+  allowed-origins: ${LMS_ALLOWED_ORIGINS:http://localhost:3000,http://localhost:5173}
+  storage:
+    ffprobe-executable: ${LMS_FFPROBE_EXECUTABLE:ffprobe}
+    local:
+      directory: ${LMS_STORAGE_LOCAL_DIRECTORY:./var/lms-files}
+    class-thumbnails:
+      directory: ${LMS_CLASS_THUMBNAIL_DIRECTORY:./var/class-thumbnails}
+      public-base-url: ${LMS_PUBLIC_BASE_URL:http://localhost:8081}

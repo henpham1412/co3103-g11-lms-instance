@@ -1,5 +1,6 @@
 package vn.edu.hcmut.co3103.lms.service.adaptive;
 
+import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import vn.edu.hcmut.co3103.lms.exception.ErrorCode;
 import vn.edu.hcmut.co3103.lms.entity.SkillPrerequisite;
@@ -18,6 +19,7 @@ import java.util.UUID;
 import java.util.stream.Collectors;
 
 /** Register as a transactional Spring bean only with a real ClassAccess adapter. */
+@Service
 @Transactional(readOnly = true)
 public class SkillPrerequisiteService {
 

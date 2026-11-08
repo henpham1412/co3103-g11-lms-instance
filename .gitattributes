@@ -1,3 +1,8 @@
 /mvnw text eol=lf
 *.cmd text eol=crlf
 *.jar binary
+# Migration files must be byte-identical on every checkout, whatever core.autocrlf is set to.
+*.sql text eol=lf
+
+# Preserve PDF fixture bytes, including the cross-reference table's fixed-width lines.
+src/test/resources/learningcontent/*.pdf binary

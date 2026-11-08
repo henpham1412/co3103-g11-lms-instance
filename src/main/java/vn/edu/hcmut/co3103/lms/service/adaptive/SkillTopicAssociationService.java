@@ -1,5 +1,6 @@
 package vn.edu.hcmut.co3103.lms.service.adaptive;
 
+import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
 import vn.edu.hcmut.co3103.lms.exception.AppException;
@@ -29,6 +30,7 @@ import java.util.stream.Collectors;
  * Association writes only, never Question CRUD or grading. Register as a
  * transactional Spring bean only after real hierarchy/access adapters exist.
  */
+@Service
 @Transactional(readOnly = true)
 public class SkillTopicAssociationService {
 
