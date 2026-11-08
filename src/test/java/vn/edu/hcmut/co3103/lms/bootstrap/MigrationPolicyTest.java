@@ -24,21 +24,28 @@ import static org.assertj.core.api.Assertions.assertThat;
  */
 class MigrationPolicyTest {
 
-    private static final Map<String, Integer> APPROVED_CHECKSUMS = Map.of(
-            "V1__create_lms_user_access.sql", 15260926,
-            "V2__align_lms_user_access_column_lengths.sql", -231189632,
-            "V3__create_lms_setup_state.sql", 1480030657,
-            "V4__create_classes_and_memberships.sql", -1197899662,
-            "V5__create_learning_content_tables.sql", 1741533483,
-            "V6__create_assessments.sql", -1763291091,
-            "V7__index_lms_user_access_default_sort.sql", 354517154,
-            "V8__add_identity_sync_watermarks.sql", 1240703539,
-            "V9__create_audit_logs.sql", 67085040);
+    private static final Map<String, Integer> APPROVED_CHECKSUMS = Map.ofEntries(
+            Map.entry("V1__create_lms_user_access.sql", 15260926),
+            Map.entry("V2__align_lms_user_access_column_lengths.sql", -231189632),
+            Map.entry("V3__create_lms_setup_state.sql", 1480030657),
+            Map.entry("V4__create_classes_and_memberships.sql", -1197899662),
+            Map.entry("V5__create_learning_content_tables.sql", 1741533483),
+            Map.entry("V6__create_assessments.sql", -1763291091),
+            Map.entry("V7__create_completion_marks.sql", -1834607830),
+            Map.entry("V8__create_last_visit.sql", -1912735881),
+            Map.entry("V9__restrict_completion_mark_lesson_delete.sql", 1456857671),
+            Map.entry("V10__create_skill_topics_and_prerequisites.sql", -1708516214),
+            Map.entry("V11__create_lesson_skill_topics.sql", 261484167),
+            Map.entry("V12__create_activity_skill_topics.sql", -1627510611),
+            Map.entry("V13__create_question_skill_topics.sql", -415992144),
+            Map.entry("V14__index_lms_user_access_default_sort.sql", 354517154),
+            Map.entry("V15__add_identity_sync_watermarks.sql", 1240703539),
+            Map.entry("V16__create_audit_logs.sql", 67085040));
 
     @Test
-    void keepsExactlyTheNineApprovedMigrations() throws IOException {
+    void keepsExactlyTheSixteenApprovedMigrations() throws IOException {
         List<MigrationFile> migrations = migrations();
-        assertThat(migrations).hasSize(9);
+        assertThat(migrations).hasSize(16);
         assertThat(migrations).extracting(MigrationFile::fileName)
                 .containsExactlyInAnyOrderElementsOf(APPROVED_CHECKSUMS.keySet());
     }
@@ -47,7 +54,9 @@ class MigrationPolicyTest {
     void migrationVersionsAreUniqueRegardlessOfDescription() throws IOException {
         assertThat(migrations()).extracting(migration -> MigrationVersion.fromVersion(
                 migration.fileName().substring(1, migration.fileName().indexOf("__"))))
-                .doesNotHaveDuplicates();
+                .doesNotHaveDuplicates()
+                .containsExactlyInAnyOrderElementsOf(java.util.stream.IntStream.rangeClosed(1, 16)
+                        .mapToObj(version -> MigrationVersion.fromVersion(Integer.toString(version))).toList());
     }
 
     @Test

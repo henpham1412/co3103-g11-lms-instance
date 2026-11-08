@@ -1,6 +1,7 @@
 package vn.edu.hcmut.co3103.lms.repository.assessment;
 
 import jakarta.persistence.LockModeType;
+import org.springframework.data.jpa.repository.EntityGraph;
 import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
@@ -18,7 +19,29 @@ public interface QuizAttemptRepository extends JpaRepository<QuizAttempt, UUID> 
     boolean existsByQuiz_Id(UUID quizId);
     List<QuizAttempt> findByQuiz_IdAndStatus(UUID quizId, String status);
     List<QuizAttempt> findByQuiz_IdAndClassMember_ClassMemberIdOrderByAttemptNumber(UUID quizId, UUID classMemberId);
+
+    @EntityGraph(attributePaths = {"classMember", "quiz", "quiz.activity"})
+    List<QuizAttempt> findByClassMember_ClassMemberId(UUID classMemberId);
+
     Page<QuizAttempt> findByQuiz_Id(UUID quizId, Pageable pageable);
+
+    @Query(value = """
+            select attempt from QuizAttempt attempt
+            join fetch attempt.classMember member
+            join fetch attempt.quiz quiz
+            join fetch quiz.activity activity
+            where member.studentId = :studentId
+              and (:classId is null or member.classId = :classId)
+            """,
+            countQuery = """
+                    select count(attempt) from QuizAttempt attempt
+                    join attempt.classMember member
+                    where member.studentId = :studentId
+                      and (:classId is null or member.classId = :classId)
+                    """)
+    Page<QuizAttempt> findStudentHistory(@Param("studentId") UUID studentId,
+                                        @Param("classId") UUID classId,
+                                        Pageable pageable);
 
     @Query("select attempt.quiz.id from QuizAttempt attempt where attempt.id = :attemptId")
     Optional<UUID> findQuizIdByAttemptId(@Param("attemptId") UUID attemptId);

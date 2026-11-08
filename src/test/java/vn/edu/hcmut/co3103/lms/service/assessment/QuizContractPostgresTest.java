@@ -62,8 +62,10 @@ class QuizContractPostgresTest {
         db.update("delete from attempt_answer_option where answer_id in (select answer_id from attempt_answer where attempt_id in (select attempt_id from quiz_attempt where quiz_id=?))",quiz);
         db.update("delete from attempt_answer where attempt_id in (select attempt_id from quiz_attempt where quiz_id=?)",quiz);
         db.update("delete from quiz_attempt where quiz_id=?",quiz);
+        db.update("delete from question_skill_topics where question_id in (select question_id from question where quiz_id=?)",quiz);
         db.update("delete from question_option where question_id in (select question_id from question where quiz_id=?)",quiz);
         db.update("delete from question where quiz_id=?",quiz);db.update("delete from quiz where quiz_id=?",quiz);
+        db.update("delete from activity_skill_topics where activity_id in (select activity_id from activity where lesson_id=?)",lesson);
         db.update("delete from activity where lesson_id=?",lesson);db.update("delete from lesson where lesson_id=?",lesson);db.update("delete from chapter where chapter_id=?",chapter);db.update("delete from class_member where class_id=?",course);db.update("delete from class where class_id=?",course);
         db.update("delete from lms_user_access where user_id in (?,?)",owner,student);
     }
