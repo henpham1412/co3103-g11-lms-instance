@@ -13,6 +13,7 @@ import org.springframework.context.annotation.Import;
 import org.springframework.context.annotation.Primary;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.jdbc.core.JdbcTemplate;
+import org.springframework.jdbc.core.namedparam.NamedParameterJdbcTemplate;
 import org.springframework.test.context.DynamicPropertyRegistry;
 import org.springframework.test.context.DynamicPropertySource;
 import org.springframework.transaction.PlatformTransactionManager;
@@ -23,9 +24,14 @@ import vn.edu.hcmut.co3103.lms.dto.request.QuestionCreateRequest;
 import vn.edu.hcmut.co3103.lms.entity.Activity;
 import vn.edu.hcmut.co3103.lms.entity.Chapter;
 import vn.edu.hcmut.co3103.lms.repository.learningcontent.ActivityRepository;
+import vn.edu.hcmut.co3103.lms.repository.assessment.QuizAttemptRepository;
 import vn.edu.hcmut.co3103.lms.security.jwt.JwtTestSupport;
+import vn.edu.hcmut.co3103.lms.service.adaptive.MasteryCalculator;
+import vn.edu.hcmut.co3103.lms.service.adaptive.TopicQuizEvidenceReader;
 import vn.edu.hcmut.co3103.lms.service.assessment.QuizCreation;
 import vn.edu.hcmut.co3103.lms.service.assessment.QuizCreationService;
+import vn.edu.hcmut.co3103.lms.service.assessment.QuizAttemptSubmissionService;
+import vn.edu.hcmut.co3103.lms.service.assessment.QuizGradingService;
 
 import java.math.BigDecimal;
 import java.net.URI;
@@ -93,6 +99,15 @@ class Lms8AdaptivePostgresHttpTest {
 
     @Autowired
     private QuizCreationService quizCreationService;
+
+    @Autowired
+    private QuizAttemptSubmissionService submissionService;
+
+    @Autowired
+    private QuizGradingService gradingService;
+
+    @Autowired
+    private QuizAttemptRepository attemptRepository;
 
     @Autowired
     private vn.edu.hcmut.co3103.lms.service.adaptive.SkillTopicAssociationService associationService;
@@ -187,6 +202,9 @@ class Lms8AdaptivePostgresHttpTest {
 
     @AfterEach
     void cleanup() {
+        db.update("DELETE FROM attempt_answer_option WHERE answer_id IN (SELECT answer_id FROM attempt_answer WHERE attempt_id IN (SELECT attempt_id FROM quiz_attempt WHERE quiz_id = ?))", quizId);
+        db.update("DELETE FROM attempt_answer WHERE attempt_id IN (SELECT attempt_id FROM quiz_attempt WHERE quiz_id = ?)", quizId);
+        db.update("DELETE FROM quiz_attempt WHERE quiz_id = ?", quizId);
         db.update("DELETE FROM question_skill_topics WHERE question_id IN (SELECT question_id FROM question WHERE quiz_id = ?)", quizId);
         db.update("DELETE FROM activity_skill_topics WHERE activity_id IN (SELECT activity_id FROM activity WHERE lesson_id = ?)", lessonId);
         db.update("DELETE FROM lesson_skill_topics WHERE lesson_id = ?", lessonId);
@@ -459,6 +477,95 @@ class Lms8AdaptivePostgresHttpTest {
                 VALUES (?, ?, 'Invalid Diff', 2)
                 """, UUID.randomUUID(), classId))
                 .isInstanceOf(DataIntegrityViolationException.class);
+    }
+
+    @Test
+    void canonicalSubmissionGradingAndRegradingPreserveEvidenceSubmissionOrder() throws Exception {
+        UUID topic = createTopic(classId, ownerToken, "Regrading topic", "EASY");
+        assertThat(http("PATCH", "/questions/" + initialQuestionId,
+                "{\"skill_topic_ids\":[\"" + topic + "\"]}", ownerToken).statusCode()).isEqualTo(200);
+        assertThat(http("PATCH", "/activities/" + quizActivityId,
+                "{\"status\":\"PUBLISHED\"}", ownerToken).statusCode()).isEqualTo(200);
+        UUID initiallyCorrect = db.queryForObject(
+                "SELECT option_id FROM question_option WHERE question_id=? AND is_correct", UUID.class, initialQuestionId);
+        UUID initiallyWrong = db.queryForObject(
+                "SELECT option_id FROM question_option WHERE question_id=? AND NOT is_correct", UUID.class, initialQuestionId);
+
+        var firstStart = http("POST", "/quizzes/" + quizId + "/attempts", null, studentToken);
+        assertThat(firstStart.statusCode()).isEqualTo(201);
+        UUID older = UUID.fromString(readJson(firstStart).get("attempt_id").asString());
+        assertThat(db.queryForObject("SELECT submitted_at FROM quiz_attempt WHERE attempt_id=?",
+                OffsetDateTime.class, older)).isNull();
+        assertThat(http("PUT", "/quiz-attempts/" + older + "/answers/" + initialQuestionId,
+                "{\"selected_option_ids\":[\"" + initiallyWrong + "\"]}", studentToken).statusCode()).isEqualTo(204);
+
+        OffsetDateTime beforeSubmission = OffsetDateTime.now();
+        submissionService.submit(older, studentId);
+        OffsetDateTime olderSubmitted = db.queryForObject("SELECT submitted_at FROM quiz_attempt WHERE attempt_id=?",
+                OffsetDateTime.class, older);
+        assertThat(olderSubmitted).isBetween(beforeSubmission, OffsetDateTime.now());
+        assertThat(db.queryForObject("SELECT status FROM quiz_attempt WHERE attempt_id=?", String.class, older))
+                .isEqualTo("SUBMITTED");
+        assertThat(db.queryForObject("SELECT score FROM quiz_attempt WHERE attempt_id=?", BigDecimal.class, older)).isNull();
+        assertThat(db.queryForObject("SELECT graded_at FROM quiz_attempt WHERE attempt_id=?", OffsetDateTime.class, older)).isNull();
+
+        // Real submission-service transaction invokes the canonical QuizGradingService.
+        assertThat(submissionService.gradeIfPending(older).orElseThrow().score()).isEqualByComparingTo("0.00");
+        OffsetDateTime olderFirstGrade = db.queryForObject("SELECT graded_at FROM quiz_attempt WHERE attempt_id=?",
+                OffsetDateTime.class, older);
+        assertThat(olderFirstGrade).isNotNull();
+        assertThat(db.queryForObject("SELECT submitted_at FROM quiz_attempt WHERE attempt_id=?",
+                OffsetDateTime.class, older)).isEqualTo(olderSubmitted);
+
+        var secondStart = http("POST", "/quizzes/" + quizId + "/attempts", null, studentToken);
+        assertThat(secondStart.statusCode()).isEqualTo(201);
+        UUID newer = UUID.fromString(readJson(secondStart).get("attempt_id").asString());
+        assertThat(http("PUT", "/quiz-attempts/" + newer + "/answers/" + initialQuestionId,
+                "{\"selected_option_ids\":[\"" + initiallyCorrect + "\"]}", studentToken).statusCode()).isEqualTo(204);
+        submissionService.submit(newer, studentId);
+        OffsetDateTime newerSubmitted = db.queryForObject("SELECT submitted_at FROM quiz_attempt WHERE attempt_id=?",
+                OffsetDateTime.class, newer);
+        assertThat(newerSubmitted).isAfter(olderSubmitted);
+        assertThat(submissionService.gradeIfPending(newer).orElseThrow().score()).isEqualByComparingTo("100.00");
+        OffsetDateTime newerFirstGrade = db.queryForObject("SELECT graded_at FROM quiz_attempt WHERE attempt_id=?",
+                OffsetDateTime.class, newer);
+
+        // Canonical Question update -> recalculateSubmittedAttempts -> gradeAttempt;
+        // no direct SQL updates of answers, scores or timestamps.
+        var changeKey = http("PATCH", "/questions/" + initialQuestionId, """
+                {"options":[
+                  {"option_id":"%s","content":"Opt A","is_correct":false,"order_index":0},
+                  {"option_id":"%s","content":"Opt B","is_correct":true,"order_index":1}
+                ]}
+                """.formatted(initiallyCorrect, initiallyWrong), ownerToken);
+        assertThat(changeKey.statusCode()).isEqualTo(200);
+        assertThat(db.queryForObject("SELECT score FROM quiz_attempt WHERE attempt_id=?", BigDecimal.class, older))
+                .isEqualByComparingTo("100.00");
+        assertThat(db.queryForObject("SELECT score FROM quiz_attempt WHERE attempt_id=?", BigDecimal.class, newer))
+                .isEqualByComparingTo("0.00");
+        assertThat(db.queryForObject("SELECT graded_at FROM quiz_attempt WHERE attempt_id=?", OffsetDateTime.class, older))
+                .isAfter(olderFirstGrade);
+        assertThat(db.queryForObject("SELECT graded_at FROM quiz_attempt WHERE attempt_id=?", OffsetDateTime.class, newer))
+                .isAfter(newerFirstGrade);
+
+        // Grade the older attempt last so grading-time ordering would be observably wrong.
+        tx().executeWithoutResult(status -> gradingService.gradeAttempt(attemptRepository.findById(older).orElseThrow()));
+        assertThat(db.queryForObject("SELECT graded_at FROM quiz_attempt WHERE attempt_id=?", OffsetDateTime.class, older))
+                .isAfter(db.queryForObject("SELECT graded_at FROM quiz_attempt WHERE attempt_id=?", OffsetDateTime.class, newer));
+        assertThat(db.queryForObject("SELECT submitted_at FROM quiz_attempt WHERE attempt_id=?", OffsetDateTime.class, older))
+                .isEqualTo(olderSubmitted);
+        assertThat(db.queryForObject("SELECT submitted_at FROM quiz_attempt WHERE attempt_id=?", OffsetDateTime.class, newer))
+                .isEqualTo(newerSubmitted);
+
+        UUID member = db.queryForObject("SELECT class_member_id FROM class_member WHERE class_id=? AND student_id=?",
+                UUID.class, classId, studentId);
+        var reader = new TopicQuizEvidenceReader(new NamedParameterJdbcTemplate(db), new MasteryCalculator());
+        var evidence = reader.readLatestGradedCandidates(classId, member, topic);
+        assertThat(evidence).extracting(TopicQuizEvidenceReader.TopicQuizEvidence::attemptId).containsExactly(newer, older);
+        assertThat(evidence).extracting(TopicQuizEvidenceReader.TopicQuizEvidence::submittedAt)
+                .containsExactly(newerSubmitted, olderSubmitted);
+        assertThat(evidence).extracting(TopicQuizEvidenceReader.TopicQuizEvidence::topicScore)
+                .containsExactly(new BigDecimal("0.00"), new BigDecimal("100.00"));
     }
 
     private UUID createTopic(UUID targetClassId, String token, String name, String difficulty) throws Exception {
