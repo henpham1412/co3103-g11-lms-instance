@@ -260,6 +260,9 @@ public class GlobalExceptionHandler extends ResponseEntityExceptionHandler {
         if (hasConstraint(exception, "uq_skill_topics_class_name")) {
             return response(ErrorCode.SKILL_TOPIC_NAME_DUPLICATE);
         }
+        if (hasConstraint(exception, "uq_content_report_reporter_target")) {
+            return response(ErrorCode.DUPLICATE_CONTENT_REPORT);
+        }
         if (isAdaptiveOrProbeRequest(request)) {
             return response(ErrorCode.DATA_CONFLICT);
         }
