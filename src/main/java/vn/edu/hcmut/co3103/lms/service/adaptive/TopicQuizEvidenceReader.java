@@ -10,12 +10,14 @@ import java.util.Objects;
 import java.util.UUID;
 
 /**
- * Internal core reader of canonically graded Quiz candidates, not a finalized
- * historical-eligibility policy or an authorization boundary. Intentionally not
- * registered as a Spring bean or wired into application workflows.
+ * Internal historical Quiz reader under the coordinator-authorized D-08 working
+ * policy; this is not a claim of formal whole-group approval or an authorization
+ * boundary. Intentionally not a Spring bean or wired into application workflows.
  *
- * D-08 visibility/archive/inactive-membership and invalidation policies remain
- * unresolved. Before production integration, apply approved eligibility rules
+ * Complete graded evidence survives later content hiding, class archival and
+ * current membership/local-access changes. Current access must be enforced
+ * independently by future callers. The canonical model has no invalidation or
+ * cancellation flag; do not invent one. All source-validity predicates must run
  * BEFORE this query's LIMIT, not as a filter on its three returned candidates.
  * Submission time is canonical; UUID DESC is a provisional D-02 tie-break.
  */
@@ -61,7 +63,7 @@ public final class TopicQuizEvidenceReader {
 
     /**
      * One statement snapshot, at most one result per requested member/topic/attempt.
-     * Empty means no core candidate in this scope. Callers must supply trusted
+     * Empty means no eligible historical evidence in this scope. Callers must supply trusted
      * scope IDs; this method does not establish permission to view learner data.
      * Missing answers are zero; stored points (including deductions) are not regraded.
      */

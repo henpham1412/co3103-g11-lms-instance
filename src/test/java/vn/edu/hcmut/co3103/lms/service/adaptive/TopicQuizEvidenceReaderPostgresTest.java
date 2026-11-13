@@ -25,8 +25,8 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /**
  * Real PostgreSQL, canonical Flyway schema, per-test rollback; no H2 or repository mocks.
- * D-08 historical visibility/archive/inactive-member policy tests are DEFERRED,
- * not implicitly approved by this core-candidate reader's lack of policy filters.
+ * Exercises the coordinator-authorized D-08 historical-evidence working policy,
+ * without implying formal whole-group approval or current access permission.
  */
 class TopicQuizEvidenceReaderPostgresTest {
 
@@ -182,6 +182,63 @@ class TopicQuizEvidenceReaderPostgresTest {
             }
         }
         assertThat(read()).extracting(TopicQuizEvidenceReader.TopicQuizEvidence::attemptId).containsExactly(eligible);
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {"IN_PROGRESS", "NO_SCORE", "NO_GRADE_TIME", "NO_SUBMIT_TIME"})
+    void newestIneligibleAttemptCannotDisplaceTheThirdEligibleResult(String missing) {
+        scoredQuiz(EVENT, "10", "1");
+        UUID second = scoredQuiz(EVENT.plusMinutes(1), "10", "2");
+        UUID third = scoredQuiz(EVENT.plusMinutes(2), "10", "3");
+        UUID fourth = scoredQuiz(EVENT.plusMinutes(3), "10", "4");
+        UUID newest = scoredQuiz(EVENT.plusMinutes(4), "10", "5");
+        switch (missing) {
+            case "IN_PROGRESS" -> db.update("UPDATE quiz_attempt SET status='IN_PROGRESS' WHERE attempt_id=?", newest);
+            case "NO_SCORE" -> db.update("UPDATE quiz_attempt SET score=NULL WHERE attempt_id=?", newest);
+            case "NO_GRADE_TIME" -> db.update("UPDATE quiz_attempt SET graded_at=NULL WHERE attempt_id=?", newest);
+            case "NO_SUBMIT_TIME" -> db.update("UPDATE quiz_attempt SET submitted_at=NULL WHERE attempt_id=?", newest);
+            default -> throw new AssertionError(missing);
+        }
+        assertThat(read()).extracting(TopicQuizEvidenceReader.TopicQuizEvidence::attemptId)
+                .containsExactly(fourth, third, second);
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {"ACTIVITY_HIDDEN", "LESSON_HIDDEN", "CHAPTER_HIDDEN", "CLASS_ARCHIVED",
+            "MEMBER_INACTIVE", "MEMBER_PENDING", "MEMBER_REJECTED", "LOCAL_ACCESS_SUSPENDED"})
+    void laterLifecycleChangesDoNotInvalidateValidHistoricalEvidence(String change) {
+        UUID original = scoredQuiz(EVENT, "10", "8");
+        var before = read();
+        assertThat(before).hasSize(1);
+        switch (change) {
+            case "ACTIVITY_HIDDEN" -> db.update("UPDATE activity SET status='HIDDEN' WHERE activity_id=(SELECT q.activity_id FROM quiz q JOIN quiz_attempt a ON a.quiz_id=q.quiz_id WHERE a.attempt_id=?)", original);
+            case "LESSON_HIDDEN" -> db.update("UPDATE lesson SET status='HIDDEN' WHERE lesson_id=?", lessonId);
+            case "CHAPTER_HIDDEN" -> db.update("UPDATE chapter SET status='HIDDEN' WHERE chapter_id=(SELECT chapter_id FROM lesson WHERE lesson_id=?)", lessonId);
+            case "CLASS_ARCHIVED" -> db.update("UPDATE class SET status='ARCHIVED' WHERE class_id=?", classId);
+            case "MEMBER_INACTIVE" -> db.update("UPDATE class_member SET status='INACTIVE' WHERE class_member_id=?", memberId);
+            case "MEMBER_PENDING" -> db.update("UPDATE class_member SET status='PENDING' WHERE class_member_id=?", memberId);
+            case "MEMBER_REJECTED" -> db.update("UPDATE class_member SET status='REJECTED' WHERE class_member_id=?", memberId);
+            case "LOCAL_ACCESS_SUSPENDED" -> db.update("UPDATE lms_user_access SET access_status='SUSPENDED' WHERE user_id=(SELECT student_id FROM class_member WHERE class_member_id=?)", memberId);
+            default -> throw new AssertionError(change);
+        }
+        assertThat(read()).containsExactlyElementsOf(before);
+        assertThat(read().getFirst().topicScore()).isEqualByComparingTo("80.00");
+    }
+
+    @Test
+    void physicallyDeletedAttemptDisappearsAndPromotesTheFourthLatestResult() {
+        UUID oldest = scoredQuiz(EVENT, "10", "1");
+        UUID second = scoredQuiz(EVENT.plusMinutes(1), "10", "2");
+        UUID third = scoredQuiz(EVENT.plusMinutes(2), "10", "3");
+        UUID newest = scoredQuiz(EVENT.plusMinutes(3), "10", "4");
+        assertThat(read()).extracting(TopicQuizEvidenceReader.TopicQuizEvidence::attemptId)
+                .containsExactly(newest, third, second);
+        // Storage-level deletion, not an invented cancellation/deletion API.
+        // The canonical FK requires removing dependent answers before the attempt.
+        db.update("DELETE FROM attempt_answer WHERE attempt_id=?", newest);
+        db.update("DELETE FROM quiz_attempt WHERE attempt_id=?", newest);
+        assertThat(read()).extracting(TopicQuizEvidenceReader.TopicQuizEvidence::attemptId)
+                .containsExactly(third, second, oldest);
     }
 
     @Test

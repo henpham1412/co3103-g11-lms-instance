@@ -4,6 +4,8 @@ import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.test.context.TestConfiguration;
@@ -566,6 +568,52 @@ class Lms8AdaptivePostgresHttpTest {
                 .containsExactly(newerSubmitted, olderSubmitted);
         assertThat(evidence).extracting(TopicQuizEvidenceReader.TopicQuizEvidence::topicScore)
                 .containsExactly(new BigDecimal("0.00"), new BigDecimal("100.00"));
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {"ACTIVITY_HIDDEN", "LESSON_HIDDEN", "CHAPTER_HIDDEN", "CLASS_ARCHIVED",
+            "MEMBER_REMOVED", "LOCAL_ACCESS_SUSPENDED"})
+    void historicalEvidenceSurvivesLifecycleChangesWhileCurrentStudentAccessIsDenied(String change) throws Exception {
+        UUID topic = createTopic(classId, ownerToken, "Historical evidence", "EASY");
+        assertThat(http("PATCH", "/questions/" + initialQuestionId,
+                "{\"skill_topic_ids\":[\"" + topic + "\"]}", ownerToken).statusCode()).isEqualTo(200);
+        assertThat(http("PATCH", "/activities/" + quizActivityId,
+                "{\"status\":\"PUBLISHED\"}", ownerToken).statusCode()).isEqualTo(200);
+        UUID correctOption = db.queryForObject("SELECT option_id FROM question_option WHERE question_id=? AND is_correct",
+                UUID.class, initialQuestionId);
+        var started = http("POST", "/quizzes/" + quizId + "/attempts", null, studentToken);
+        assertThat(started.statusCode()).isEqualTo(201);
+        UUID attempt = UUID.fromString(readJson(started).get("attempt_id").asString());
+        assertThat(http("PUT", "/quiz-attempts/" + attempt + "/answers/" + initialQuestionId,
+                "{\"selected_option_ids\":[\"" + correctOption + "\"]}", studentToken).statusCode()).isEqualTo(204);
+        var submitted = http("POST", "/quiz-attempts/" + attempt + "/submit", null, studentToken);
+        assertThat(submitted.statusCode()).isEqualTo(200);
+        assertThat(readJson(submitted).get("score").decimalValue()).isEqualByComparingTo("100.00");
+        UUID member = db.queryForObject("SELECT class_member_id FROM class_member WHERE class_id=? AND student_id=?",
+                UUID.class, classId, studentId);
+        var reader = new TopicQuizEvidenceReader(new NamedParameterJdbcTemplate(db), new MasteryCalculator());
+        var before = reader.readLatestGradedCandidates(classId, member, topic);
+        assertThat(before).hasSize(1);
+
+        switch (change) {
+            case "ACTIVITY_HIDDEN" -> assertThat(http("PATCH", "/activities/" + quizActivityId,
+                    "{\"status\":\"HIDDEN\"}", ownerToken).statusCode()).isEqualTo(200);
+            case "LESSON_HIDDEN" -> assertThat(http("PATCH", "/lessons/" + lessonId,
+                    "{\"status\":\"HIDDEN\"}", ownerToken).statusCode()).isEqualTo(200);
+            case "CHAPTER_HIDDEN" -> assertThat(http("PATCH", "/chapters/" + chapterId,
+                    "{\"status\":\"HIDDEN\"}", ownerToken).statusCode()).isEqualTo(200);
+            case "CLASS_ARCHIVED" -> assertThat(http("PATCH", "/classes/" + classId,
+                    "{\"status\":\"ARCHIVED\"}", ownerToken).statusCode()).isEqualTo(200);
+            case "MEMBER_REMOVED" -> assertThat(http("DELETE", "/classes/" + classId + "/members/" + member,
+                    null, ownerToken).statusCode()).isEqualTo(204);
+            // No canonical Administration API is merged into this baseline; use its real local-access column.
+            case "LOCAL_ACCESS_SUSPENDED" -> db.update("UPDATE lms_user_access SET access_status='SUSPENDED' WHERE user_id=?", studentId);
+            default -> throw new AssertionError(change);
+        }
+        int expectedDenial = change.equals("MEMBER_REMOVED") || change.equals("LOCAL_ACCESS_SUSPENDED") ? 403 : 409;
+        assertThat(http("GET", "/quiz-attempts/" + attempt + "/result", null, studentToken).statusCode())
+                .isEqualTo(expectedDenial);
+        assertThat(reader.readLatestGradedCandidates(classId, member, topic)).containsExactlyElementsOf(before);
     }
 
     private UUID createTopic(UUID targetClassId, String token, String name, String difficulty) throws Exception {
