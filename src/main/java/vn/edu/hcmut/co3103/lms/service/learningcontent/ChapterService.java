@@ -16,6 +16,7 @@ import vn.edu.hcmut.co3103.lms.entity.Activity;
 import vn.edu.hcmut.co3103.lms.entity.Chapter;
 import vn.edu.hcmut.co3103.lms.entity.Class;
 import vn.edu.hcmut.co3103.lms.entity.ClassMember;
+import vn.edu.hcmut.co3103.lms.entity.ContentReport;
 import vn.edu.hcmut.co3103.lms.entity.Lesson;
 import vn.edu.hcmut.co3103.lms.entity.Material;
 import vn.edu.hcmut.co3103.lms.repository.classmanagement.ClassMemberRepository;
@@ -24,6 +25,7 @@ import vn.edu.hcmut.co3103.lms.repository.learningcontent.ActivityRepository;
 import vn.edu.hcmut.co3103.lms.repository.learningcontent.ChapterRepository;
 import vn.edu.hcmut.co3103.lms.repository.learningcontent.LessonRepository;
 import vn.edu.hcmut.co3103.lms.repository.learningcontent.MaterialRepository;
+import vn.edu.hcmut.co3103.lms.repository.moderation.ContentReportRepository;
 
 import java.net.URI;
 import java.nio.file.Files;
@@ -54,12 +56,14 @@ public class ChapterService {
     private final MaterialRepository materialRepository;
     private final ActivityRepository activityRepository;
     private final LocalMaterialStorageService materialStorage;
+    private final ContentReportRepository contentReportRepository;
 
     @Autowired
     public ChapterService(ClassRepository classRepository, ClassMemberRepository classMemberRepository,
                           ChapterRepository chapterRepository, LessonRepository lessonRepository,
                           MaterialRepository materialRepository, ActivityRepository activityRepository,
-                          LocalMaterialStorageService materialStorage) {
+                          LocalMaterialStorageService materialStorage,
+                          ContentReportRepository contentReportRepository) {
         this.classRepository = classRepository;
         this.classMemberRepository = classMemberRepository;
         this.chapterRepository = chapterRepository;
@@ -67,6 +71,7 @@ public class ChapterService {
         this.materialRepository = materialRepository;
         this.activityRepository = activityRepository;
         this.materialStorage = materialStorage;
+        this.contentReportRepository = contentReportRepository;
     }
 
     @Transactional(readOnly = true)
@@ -342,6 +347,11 @@ public class ChapterService {
     @Transactional
     public void deleteMaterial(UUID materialId, UUID tutorId) {
         Material material = requireWritableMaterial(materialId, tutorId);
+        // DOC-05 section 3.2.5: a report dependency blocks deletion; the Tutor hides the Material instead.
+        if (contentReportRepository.existsByContentTypeAndContentIdAndStatusIn(
+                ContentReport.ContentType.MATERIAL, materialId, ContentReport.UNRESOLVED_STATUSES)) {
+            throw conflict("CONTENT_HAS_DEPENDENT_LEARNING_DATA");
+        }
         String fileUrl = material.getFileUrl();
         String fileKey = localFileKey(fileUrl);
         try {

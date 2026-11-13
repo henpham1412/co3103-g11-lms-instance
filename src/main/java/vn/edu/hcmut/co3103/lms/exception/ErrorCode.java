@@ -9,7 +9,7 @@ public enum ErrorCode {
     CLASS_ACCESS_DENIED("Access to this class is denied", HttpStatus.FORBIDDEN),
     SKILL_TOPIC_NAME_DUPLICATE("A topic with this name already exists in the class", HttpStatus.CONFLICT),
     INVALID_SKILL_TOPIC("Skill topic data is invalid", HttpStatus.BAD_REQUEST),
-    VALIDATION_ERROR("SkillTopic update is invalid", HttpStatus.BAD_REQUEST),
+    VALIDATION_ERROR("The request contains invalid or unsupported values.", HttpStatus.BAD_REQUEST),
     SKILL_TOPIC_REFERENCED("Cannot delete a referenced skill topic", HttpStatus.CONFLICT),
     PREREQUISITE_SELF_REFERENCE("A topic cannot be its own prerequisite", HttpStatus.BAD_REQUEST),
     PREREQUISITE_CLASS_MISMATCH("Prerequisite topics must belong to the same class", HttpStatus.BAD_REQUEST),
@@ -25,6 +25,16 @@ public enum ErrorCode {
     NOT_ACCEPTABLE("Requested response media type is not supported", HttpStatus.NOT_ACCEPTABLE),
     UNSUPPORTED_MEDIA_TYPE("Request media type is not supported", HttpStatus.UNSUPPORTED_MEDIA_TYPE),
     DATA_CONFLICT("Operation conflicts with stored data", HttpStatus.CONFLICT),
+    FORBIDDEN("Access to this resource is denied", HttpStatus.FORBIDDEN),
+    CLASS_ARCHIVED("The class is archived and no longer accepts new activity.", HttpStatus.CONFLICT),
+    DISCUSSION_NOT_FOUND("Discussion not found", HttpStatus.NOT_FOUND),
+    DISCUSSION_HAS_REPLIES("Cannot delete a discussion that still has replies", HttpStatus.CONFLICT),
+    DISCUSSION_HAS_UNRESOLVED_REPORT("Cannot delete a discussion with an unresolved content report", HttpStatus.CONFLICT),
+    REPORTED_CONTENT_NOT_FOUND("Reported content not found", HttpStatus.NOT_FOUND),
+    DUPLICATE_CONTENT_REPORT("This content has already been reported by you", HttpStatus.CONFLICT),
+    CONTENT_REPORT_NOT_FOUND("Content report not found", HttpStatus.NOT_FOUND),
+    INVALID_REPORT_STATUS("The report status is invalid or unsupported", HttpStatus.BAD_REQUEST),
+    REPORT_ALREADY_UPDATED("The report has already been reviewed", HttpStatus.CONFLICT),
     INTERNAL_ERROR("An unexpected error occurred", HttpStatus.INTERNAL_SERVER_ERROR);
 
     private final String message;

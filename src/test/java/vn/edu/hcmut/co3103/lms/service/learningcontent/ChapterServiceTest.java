@@ -12,6 +12,7 @@ import vn.edu.hcmut.co3103.lms.entity.Chapter;
 import vn.edu.hcmut.co3103.lms.entity.Activity;
 import vn.edu.hcmut.co3103.lms.entity.Class;
 import vn.edu.hcmut.co3103.lms.entity.ClassMember;
+import vn.edu.hcmut.co3103.lms.entity.ContentReport;
 import vn.edu.hcmut.co3103.lms.entity.Lesson;
 import vn.edu.hcmut.co3103.lms.entity.Material;
 import vn.edu.hcmut.co3103.lms.dto.request.ActivityRequest;
@@ -24,6 +25,7 @@ import vn.edu.hcmut.co3103.lms.repository.learningcontent.ActivityRepository;
 import vn.edu.hcmut.co3103.lms.repository.learningcontent.ChapterRepository;
 import vn.edu.hcmut.co3103.lms.repository.learningcontent.LessonRepository;
 import vn.edu.hcmut.co3103.lms.repository.learningcontent.MaterialRepository;
+import vn.edu.hcmut.co3103.lms.repository.moderation.ContentReportRepository;
 
 import java.util.List;
 import java.util.Optional;
@@ -46,8 +48,10 @@ class ChapterServiceTest {
     private final MaterialRepository materialRepository = mock(MaterialRepository.class);
     private final ActivityRepository activityRepository = mock(ActivityRepository.class);
     private final LocalMaterialStorageService materialStorage = mock(LocalMaterialStorageService.class);
+    private final ContentReportRepository contentReportRepository = mock(ContentReportRepository.class);
     private final ChapterService service = new ChapterService(classRepository, memberRepository,
-            chapterRepository, lessonRepository, materialRepository, activityRepository, materialStorage);
+            chapterRepository, lessonRepository, materialRepository, activityRepository, materialStorage,
+            contentReportRepository);
 
     private final UUID classId = UUID.randomUUID();
     private final UUID tutorId = UUID.randomUUID();
@@ -657,6 +661,37 @@ class ChapterServiceTest {
         when(materialRepository.existsByFileUrlAndMaterialIdNot(storedUrl, materialId)).thenReturn(false);
         service.deleteMaterial(materialId, tutorId);
         verify(materialStorage).delete("2d8f5627-6550-47db-aae0-3b262cc8e34c.pdf");
+    }
+
+    @Test
+    void anUnresolvedReportBlocksMaterialDeletionUntilTheOutcomeIsFinal() {
+        Lesson lesson = new Lesson(chapterId, "Lesson", null, 30, 0, null);
+        ReflectionTestUtils.setField(lesson, "lessonId", lessonId);
+        Chapter chapter = new Chapter(classId, "Chapter", null, 0, null);
+        ReflectionTestUtils.setField(chapter, "chapterId", chapterId);
+        Material material = new Material(lessonId, "Notes", Material.MaterialType.TEXT, null,
+                "body", 0, Chapter.VisibilityStatus.PUBLISHED);
+        UUID materialId = UUID.randomUUID();
+        ReflectionTestUtils.setField(material, "materialId", materialId);
+        when(lessonRepository.findById(lessonId)).thenReturn(Optional.of(lesson));
+        when(chapterRepository.findById(chapterId)).thenReturn(Optional.of(chapter));
+        when(materialRepository.findById(materialId)).thenReturn(Optional.of(material));
+        when(contentReportRepository.existsByContentTypeAndContentIdAndStatusIn(
+                ContentReport.ContentType.MATERIAL, materialId, ContentReport.UNRESOLVED_STATUSES))
+                .thenReturn(true);
+
+        ResponseStatusException blocked = assertThrows(ResponseStatusException.class,
+                () -> service.deleteMaterial(materialId, tutorId));
+
+        assertEquals(HttpStatus.CONFLICT, blocked.getStatusCode());
+        assertEquals("CONTENT_HAS_DEPENDENT_LEARNING_DATA", blocked.getReason());
+        verify(materialRepository, never()).delete(any(Material.class));
+
+        when(contentReportRepository.existsByContentTypeAndContentIdAndStatusIn(
+                ContentReport.ContentType.MATERIAL, materialId, ContentReport.UNRESOLVED_STATUSES))
+                .thenReturn(false);
+        service.deleteMaterial(materialId, tutorId);
+        verify(materialRepository).delete(material);
     }
 
     @Test
