@@ -24,6 +24,7 @@ import vn.edu.hcmut.co3103.lms.repository.learningcontent.ActivityRepository;
 import vn.edu.hcmut.co3103.lms.repository.learningcontent.ChapterRepository;
 import vn.edu.hcmut.co3103.lms.repository.learningcontent.CompletionMarkRepository;
 import vn.edu.hcmut.co3103.lms.repository.learningcontent.LessonRepository;
+import vn.edu.hcmut.co3103.lms.service.adaptive.MasteryReadService;
 
 import java.time.OffsetDateTime;
 import java.util.ArrayList;
@@ -44,6 +45,7 @@ public class TutorProgressService {
     private final ActivityRepository activityRepository;
     private final CompletionMarkRepository completionMarkRepository;
     private final QuizAttemptRepository quizAttemptRepository;
+    private final MasteryReadService mastery;
 
     @Autowired
     public TutorProgressService(
@@ -54,7 +56,8 @@ public class TutorProgressService {
             LessonRepository lessonRepository,
             ActivityRepository activityRepository,
             CompletionMarkRepository completionMarkRepository,
-            QuizAttemptRepository quizAttemptRepository
+            QuizAttemptRepository quizAttemptRepository,
+            MasteryReadService mastery
     ) {
         this.classRepository = classRepository;
         this.classMemberRepository = classMemberRepository;
@@ -64,19 +67,7 @@ public class TutorProgressService {
         this.activityRepository = activityRepository;
         this.completionMarkRepository = completionMarkRepository;
         this.quizAttemptRepository = quizAttemptRepository;
-    }
-
-    public TutorProgressService(
-            ClassRepository classRepository,
-            ClassMemberRepository classMemberRepository,
-            LmsUserAccessRepository userAccessRepository,
-            ChapterRepository chapterRepository,
-            LessonRepository lessonRepository,
-            CompletionMarkRepository completionMarkRepository,
-            QuizAttemptRepository quizAttemptRepository
-    ) {
-        this(classRepository, classMemberRepository, userAccessRepository, chapterRepository,
-                lessonRepository, null, completionMarkRepository, quizAttemptRepository);
+        this.mastery = mastery;
     }
 
     @Transactional(readOnly = true)
@@ -141,7 +132,9 @@ public class TutorProgressService {
         return new TutorMemberProgressResponse(classId, member.getClassMemberId(), member.getStudentId(),
                 member.getStatus().name(), counts.completed(), counts.eligible(),
                 percentage(counts.completed(), counts.eligible()), progressStatus(counts.completed(), counts.eligible()),
-                chapters, assessments, List.of());
+                chapters, assessments, mastery.readForTutor(classId, classMemberId, tutorId).stream()
+                        .map(t -> new TutorMemberProgressResponse.SkillMastery(t.skillTopicId(), t.name(),
+                                t.level() == null ? null : t.level().name())).toList());
     }
 
     private ProgressCounts counts(ClassMember member) {
