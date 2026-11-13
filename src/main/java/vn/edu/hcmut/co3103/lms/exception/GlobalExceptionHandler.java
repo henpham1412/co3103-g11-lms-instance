@@ -100,6 +100,9 @@ public class GlobalExceptionHandler extends ResponseEntityExceptionHandler {
         if (isAdaptiveOrProbeRequest(request)) {
             return response(inputErrorCode(request));
         }
+        if (isDiscussionRequest(request)) {
+            return response(ErrorCode.VALIDATION_ERROR);
+        }
         return response(HttpStatus.BAD_REQUEST, "INVALID_QUERY_PARAMETER",
                 "A query parameter is invalid or unsupported.", List.of());
     }
@@ -306,8 +309,19 @@ public class GlobalExceptionHandler extends ResponseEntityExceptionHandler {
             if ("PATCH".equals(http.getMethod()) && path != null && path.matches("/api/v1/skill-topics/[^/]+")) {
                 return ErrorCode.VALIDATION_ERROR;
             }
+            // DOC-05 section 3.3 documents 400 VALIDATION_ERROR on every discussion endpoint,
+            // including a malformed body, which the other MVC endpoints report as INVALID_REQUEST.
+            if (isDiscussionRequest(request)) {
+                return ErrorCode.VALIDATION_ERROR;
+            }
         }
         return ErrorCode.INVALID_REQUEST;
+    }
+
+    private boolean isDiscussionRequest(WebRequest request) {
+        String path = requestPath(request);
+        return path != null
+                && path.matches("/api/v1/(classes/[^/]+/discussions|discussions/[^/]+(/replies)?)");
     }
 
     private String requestPath(WebRequest request) {
