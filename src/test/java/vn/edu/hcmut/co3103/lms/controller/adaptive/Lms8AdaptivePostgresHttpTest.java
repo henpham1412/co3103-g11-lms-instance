@@ -568,6 +568,14 @@ class Lms8AdaptivePostgresHttpTest {
                 .containsExactly(newerSubmitted, olderSubmitted);
         assertThat(evidence).extracting(TopicQuizEvidenceReader.TopicQuizEvidence::topicScore)
                 .containsExactly(new BigDecimal("0.00"), new BigDecimal("100.00"));
+        assertThat(db.queryForObject("SELECT count(*) FROM learning_signal WHERE class_member_id=? AND signal_type='QUIZ_RESULT'", Integer.class, member))
+                .isEqualTo(2);
+        assertThat(db.queryForObject("SELECT recorded_at FROM learning_signal WHERE class_member_id=? AND source_id=?", OffsetDateTime.class, member, older))
+                .isEqualTo(olderSubmitted);
+        assertThat(db.queryForObject("SELECT signal_value FROM learning_signal WHERE class_member_id=? AND source_id=?", BigDecimal.class, member, older))
+                .isEqualByComparingTo("100.00");
+        assertThat(db.queryForObject("SELECT mastery_score FROM learner_mastery WHERE class_member_id=? AND skill_topic_id=?", BigDecimal.class, member, topic))
+                .isEqualByComparingTo("50.00");
     }
 
     @ParameterizedTest

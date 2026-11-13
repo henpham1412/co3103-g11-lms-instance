@@ -7,10 +7,11 @@ DOC-01 through DOC-07 remain the requirements source of truth and are unchanged.
 
 `TopicQuizEvidenceReader.readLatestGradedCandidates(classId, classMemberId, skillTopicId)`
 returns at most three internal evidence values containing the attempt, member,
-topic, original submission timestamp and calculated topic score. It is not a
-Spring bean and has no application callers, API, persistence writes, recalculation
-hooks or recommendation integration. It is not an authorization boundary: future
-callers must establish permission separately and supply trusted scope IDs.
+topic, original submission timestamp and calculated topic score. Phase 3 now
+registers it as an internal bean used by transactional evidence synchronization;
+it has no API or recommendation integration. It is not an authorization boundary:
+callers must establish permission separately and supply trusted scope IDs. See
+[Phase 3 persistence](lms9-mastery-persistence.md) for the source integration.
 
 ## Core query contract
 
@@ -47,8 +48,8 @@ These are historical-evidence rules, not current access grants. The reader has n
 membership-status, publication-status, archive-status or local-access filter.
 Existing protected learning operations continue enforcing their own authorization
 and lifecycle restrictions. Future recommendation selection must independently
-exclude unavailable Activities. The reader remains internal and unwired; this
-task adds no API, persistence, synchronization or recalculation integration.
+exclude unavailable Activities. The reader remains internal. The D-08 task added
+no API or persistence; subsequent Phase 3 integration preserves this policy.
 
 All grading eligibility, scope, mapping and denominator checks run BEFORE
 `ORDER BY submitted_at DESC, attempt_id DESC LIMIT 3`. Thus an ungraded newest
@@ -88,8 +89,8 @@ window when introducing any later source-validity rule.
   outside this task. No migration version or next-phase implementation is approved
   by this document update.
 
-Mapping changes are tested as fresh reads of canonical current mappings; no
-historical mapping snapshot or mastery recalculation is introduced.
+Mappings remain canonical current mappings, not historical snapshots. Phase 3
+synchronizes persisted signals and mastery after the final source transaction state.
 
 ## Verification and performance
 

@@ -36,7 +36,8 @@ class MigrationPolicyTest {
             Map.entry("V10__create_skill_topics_and_prerequisites.sql", -1708516214),
             Map.entry("V11__create_lesson_skill_topics.sql", 261484167),
             Map.entry("V12__create_activity_skill_topics.sql", -1627510611),
-            Map.entry("V13__create_question_skill_topics.sql", -415992144));
+            Map.entry("V13__create_question_skill_topics.sql", -415992144),
+            Map.entry("V17__create_learning_signals_and_learner_mastery.sql", 970127172));
 
     @Test
     void keepsTheMigrationSetDownToTheApprovedFiles() throws IOException {

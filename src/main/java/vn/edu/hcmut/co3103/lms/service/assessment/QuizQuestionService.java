@@ -168,13 +168,21 @@ public class QuizQuestionService {
         question.setPointsDeducted(newPointsDeducted);
         question.setOrderIndex(newOrderIndex);
 
+        Set<UUID> changedTopics = new HashSet<>();
         if (request.skillTopicIdsProvided() && skillTopicAssociationService != null) {
             questionRepository.flush();
-            ClassAccessAdapter.withActor(userId, () ->
+            var change = ClassAccessAdapter.withActor(userId, () ->
                     skillTopicAssociationService.replaceQuestionTopics(questionId, request.skillTopicIds()));
+            changedTopics.addAll(change.previousTopicIds());
+            changedTopics.addAll(change.currentTopicIds());
         }
 
-        if (hasAttempts && gradingChanged) gradingService.recalculateSubmittedAttempts(quiz);
+        if (hasAttempts && gradingChanged) {
+            if (changedTopics.isEmpty()) gradingService.recalculateSubmittedAttempts(quiz);
+            else gradingService.recalculateSubmittedAttempts(quiz, changedTopics);
+        } else if (request.skillTopicIdsProvided() && skillTopicAssociationService != null) {
+            gradingService.synchronizeMastery(quiz, changedTopics);
+        }
         return toResponse(question, optionRepository.findByQuestion_IdOrderByOrderIndex(questionId));
     }
 

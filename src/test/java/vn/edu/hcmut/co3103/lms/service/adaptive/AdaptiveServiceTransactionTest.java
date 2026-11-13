@@ -121,7 +121,8 @@ class AdaptiveServiceTransactionTest {
         when(scope.questionIdsForQuizActivity(ACTIVITY_ID)).thenReturn(Set.of(QUESTION_ID));
         return proxy(new SkillTopicAssociationService(mock(SkillTopicRepository.class),
                 mock(LessonSkillTopicRepository.class), activities,
-                mock(QuestionSkillTopicRepository.class), mock(ClassAccess.class), scope), transactions);
+                mock(QuestionSkillTopicRepository.class), mock(ClassAccess.class), scope,
+                mock(MasteryRecalculationService.class)), transactions);
     }
 
     @SuppressWarnings("unchecked")

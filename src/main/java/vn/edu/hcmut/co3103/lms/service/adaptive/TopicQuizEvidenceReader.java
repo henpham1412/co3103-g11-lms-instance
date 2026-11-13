@@ -12,7 +12,7 @@ import java.util.UUID;
 /**
  * Internal historical Quiz reader under the coordinator-authorized D-08 working
  * policy; this is not a claim of formal whole-group approval or an authorization
- * boundary. Intentionally not a Spring bean or wired into application workflows.
+ * boundary. Used internally by transactional evidence synchronization, never as an API.
  *
  * Complete graded evidence survives later content hiding, class archival and
  * current membership/local-access changes. Current access must be enforced
@@ -23,7 +23,7 @@ import java.util.UUID;
  */
 public final class TopicQuizEvidenceReader {
 
-    static final String LATEST_TOPIC_POINTS = """
+    private static final String ALL_TOPIC_POINTS = """
             SELECT qa.attempt_id, qa.class_member_id, st.skill_topic_id, qa.submitted_at,
                    SUM(COALESCE(aa.points_earned, 0)) AS earned_points,
                    SUM(q.points_awarded) AS possible_points
@@ -50,8 +50,9 @@ public final class TopicQuizEvidenceReader {
             GROUP BY qa.attempt_id, qa.class_member_id, st.skill_topic_id, qa.submitted_at
             HAVING SUM(q.points_awarded) > 0
             ORDER BY qa.submitted_at DESC, qa.attempt_id DESC
-            LIMIT 3
             """;
+
+    static final String LATEST_TOPIC_POINTS = ALL_TOPIC_POINTS + "LIMIT 3\n";
 
     private final NamedParameterJdbcOperations jdbc;
     private final MasteryCalculator calculator;
@@ -69,12 +70,21 @@ public final class TopicQuizEvidenceReader {
      */
     public List<TopicQuizEvidence> readLatestGradedCandidates(UUID classId, UUID classMemberId,
                                                             UUID skillTopicId) {
+        return read(LATEST_TOPIC_POINTS, classId, classMemberId, skillTopicId);
+    }
+
+    /** All eligible source records are synchronized; only the latest three affect mastery. */
+    public List<TopicQuizEvidence> readAllGradedCandidates(UUID classId, UUID classMemberId, UUID skillTopicId) {
+        return read(ALL_TOPIC_POINTS, classId, classMemberId, skillTopicId);
+    }
+
+    private List<TopicQuizEvidence> read(String query, UUID classId, UUID classMemberId, UUID skillTopicId) {
         Objects.requireNonNull(classId, "classId");
         Objects.requireNonNull(classMemberId, "classMemberId");
         Objects.requireNonNull(skillTopicId, "skillTopicId");
         var parameters = Map.of("classId", classId, "classMemberId", classMemberId,
                 "skillTopicId", skillTopicId);
-        return List.copyOf(jdbc.query(LATEST_TOPIC_POINTS, parameters, (row, index) -> {
+        return List.copyOf(jdbc.query(query, parameters, (row, index) -> {
             BigDecimal score = calculator.calculateTopicScore(row.getBigDecimal("earned_points"),
                     row.getBigDecimal("possible_points")).orElseThrow();
             return new TopicQuizEvidence(row.getObject("attempt_id", UUID.class),

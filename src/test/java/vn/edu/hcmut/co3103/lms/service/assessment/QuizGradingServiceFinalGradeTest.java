@@ -57,7 +57,10 @@ class QuizGradingServiceFinalGradeTest {
         QuizAttempt ungradedAttempt = submittedAttempt(quiz, member, null);
         QuizGradingService service = new QuizGradingService(attemptRepository,
                 mock(QuestionRepository.class), mock(QuestionOptionRepository.class),
-                mock(AttemptAnswerRepository.class), mock(AttemptAnswerOptionRepository.class));
+                mock(AttemptAnswerRepository.class), mock(AttemptAnswerOptionRepository.class),
+                mock(vn.edu.hcmut.co3103.lms.service.adaptive.MasteryRecalculationService.class),
+                mock(AssessmentLocks.class), mock(vn.edu.hcmut.co3103.lms.repository.assessment.QuizRepository.class),
+                mock(jakarta.persistence.EntityManager.class));
         when(attemptRepository.findByQuiz_IdAndClassMember_ClassMemberIdOrderByAttemptNumber(
                 quiz.getId(), member.getClassMemberId())).thenReturn(List.of(gradedAttempt, ungradedAttempt));
 
