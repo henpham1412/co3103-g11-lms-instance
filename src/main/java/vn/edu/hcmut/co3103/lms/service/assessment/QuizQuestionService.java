@@ -287,11 +287,6 @@ public class QuizQuestionService {
                         option.getIsCorrect(), option.getOrderIndex())).toList());
     }
 
-    private static boolean representablePoints(BigDecimal value) {
-        return value != null && value.signum() >= 0 && value.stripTrailingZeros().scale() <= 2
-                && value.compareTo(new BigDecimal("99999999.99")) <= 0;
-    }
-
     private ResponseStatusException invalidQuestion() {
         return new ResponseStatusException(HttpStatus.BAD_REQUEST, "INVALID_QUESTION");
     }
@@ -317,13 +312,7 @@ public class QuizQuestionService {
                                   BigDecimal pointsDeducted, Integer orderIndex,
                                   List<QuestionUpdateRequest.Option> options,
                                   UUID questionId, UUID quizId) {
-        if (type == null || !Set.of("MCQ_SINGLE", "MCQ_MULTIPLE", "TRUE_FALSE").contains(type)
-                || content == null || content.isBlank()
-                || !representablePoints(pointsAwarded)
-                || !representablePoints(pointsDeducted)
-                || orderIndex == null || orderIndex < 0 || options == null || options.isEmpty()
-                || (type.startsWith("MCQ_") && options.size() < 2)
-                || ("TRUE_FALSE".equals(type) && options.size() != 2)
+        if (orderIndex == null || orderIndex < 0 || options == null || options.isEmpty()
                 || (quizId != null && (questionId == null
                 ? questionRepository.existsByQuiz_IdAndOrderIndex(quizId, orderIndex)
                 : questionRepository.existsByQuiz_IdAndOrderIndexAndIdNot(quizId, orderIndex, questionId)))) {
@@ -342,8 +331,8 @@ public class QuizQuestionService {
             }
             if (option.isCorrect()) correctCount++;
         }
-        if (correctCount == 0 || (("MCQ_SINGLE".equals(type)
-                || "TRUE_FALSE".equals(type)) && correctCount != 1)) {
+        if (!QuizQuestionRules.validDefinition(type, content, pointsAwarded, pointsDeducted,
+                options.size(), correctCount)) {
             throw invalidQuestion();
         }
     }
