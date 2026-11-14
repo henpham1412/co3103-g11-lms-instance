@@ -204,6 +204,14 @@ For `DOCUMENT` and uploaded `VIDEO` materials, send multipart form data to `POST
 
 This local-storage implementation does not persist extra checksum/MIME/size metadata columns. The current database schema stores the generated file URL only. External `URL` and HTTPS video links are still submitted as JSON.
 
+File Assignment creation is atomic through `POST /api/v1/lessons/{lessonId}/activities`
+with `activity_type: ASSIGNMENT` and an embedded `assignment` configuration.
+Update settings through `PATCH /api/v1/activities/{activityId}/assignment`; omitted
+fields are preserved. Separate POST/PUT configuration creation is not supported.
+**PR #35 remains blocked from merge by the V14 collision with PR #31.** See
+[the re-review record](docs/lms6-re-review.md) for access, byte validation, tests and
+required forward-only migration coordination.
+
 File assignments use the assessment storage directory `lms.storage.assignments.directory`
 (environment variable `LMS_STORAGE_ASSIGNMENTS_DIRECTORY` when configured by deployment) and
 persist generated storage keys together with the detected MIME type and size. Assignment

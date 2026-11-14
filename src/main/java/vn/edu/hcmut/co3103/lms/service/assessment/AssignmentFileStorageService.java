@@ -7,21 +7,27 @@ import org.springframework.web.multipart.MultipartFile;
 import org.springframework.web.server.ResponseStatusException;
 
 import java.io.IOException;
-import java.io.InputStream;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.StandardCopyOption;
 import java.util.zip.ZipFile;
+import javax.imageio.ImageIO;
+import java.nio.charset.StandardCharsets;
+import java.nio.charset.CodingErrorAction;
+import vn.edu.hcmut.co3103.lms.service.learningcontent.MaterialContentValidator;
 import java.util.Locale;
 import java.util.UUID;
 
 @Service
 public class AssignmentFileStorageService {
     private final Path root;
+    private final MaterialContentValidator documents;
 
     public AssignmentFileStorageService(
-            @Value("${lms.storage.assignments.directory:./var/assignment-files}") String directory) {
+            @Value("${lms.storage.assignments.directory:./var/assignment-files}") String directory,
+            MaterialContentValidator documents) {
         this.root = Path.of(directory).toAbsolutePath().normalize();
+        this.documents = documents;
     }
 
     public StoredFile store(MultipartFile file, String allowedTypes, Integer maxSizeMb) {
@@ -37,18 +43,20 @@ public class AssignmentFileStorageService {
             Files.createDirectories(root);
             temporary = Files.createTempFile(root, ".assignment-", ".part");
             file.transferTo(temporary);
-            String mimeType = detect(temporary, file.getContentType());
-            if ("application/octet-stream".equals(mimeType)) {
-                throw error(HttpStatus.UNSUPPORTED_MEDIA_TYPE, "UNSUPPORTED_MEDIA_TYPE");
-            }
-            if (!isAllowed(mimeType, file.getOriginalFilename(), allowedTypes)) {
-                throw error(HttpStatus.UNSUPPORTED_MEDIA_TYPE, "UNSUPPORTED_MEDIA_TYPE");
-            }
-            String key = UUID.randomUUID() + extension(mimeType, file.getOriginalFilename());
+            String mimeType = detect(temporary);
+            String extension;
+            try {
+                extension = AssignmentFileTypes.extension(file.getOriginalFilename());
+                if (!mimeType.equals(AssignmentFileTypes.mime(extension)) || !AssignmentFileTypes.allowed(allowedTypes).contains(mimeType))
+                    throw error(HttpStatus.UNSUPPORTED_MEDIA_TYPE, "UNSUPPORTED_MEDIA_TYPE");
+            } catch (IllegalArgumentException invalidType) { throw error(HttpStatus.UNSUPPORTED_MEDIA_TYPE, "UNSUPPORTED_MEDIA_TYPE"); }
+            String safeName = safeName(file.getOriginalFilename());
+            long size = Files.size(temporary);
+            String key = UUID.randomUUID() + "." + extension;
             Path destination = root.resolve(key).normalize();
             Files.move(temporary, destination, StandardCopyOption.REPLACE_EXISTING);
             temporary = null;
-            return new StoredFile(key, mimeType, Files.size(destination), safeName(file.getOriginalFilename()));
+            return new StoredFile(key, mimeType, size, safeName);
         } catch (ResponseStatusException exception) {
             throw exception;
         } catch (IOException exception) {
@@ -76,110 +84,53 @@ public class AssignmentFileStorageService {
         }
     }
 
-    private String detect(Path file, String declared) throws IOException {
-        byte[] header = new byte[8192];
-        int length;
-        try (InputStream input = Files.newInputStream(file)) {
-            length = input.read(header);
+    private String detect(Path file) throws IOException {
+        // Reuse the repository's PDFBox/POI validation, not a filename/client MIME or header-only detector.
+        try { return documents.documentType(file); }
+        catch (ResponseStatusException unsupportedDocument) {
+            if (unsupportedDocument.getStatusCode().value() != 415) throw unsupportedDocument;
         }
-        if (length < 0) length = 0;
-        if (length == 0) throw error(HttpStatus.UNSUPPORTED_MEDIA_TYPE, "UNSUPPORTED_MEDIA_TYPE");
-        if (startsWith(header, length, "%PDF-")) return "application/pdf";
-        if (startsWith(header, length, "PK")) return officeMime(file);
-        if (startsWithBytes(header, length, new byte[]{(byte) 0x89, 'P', 'N', 'G'})) {
-            return "image/png";
-        }
-        if (startsWithBytes(header, length, new byte[]{(byte) 0xff, (byte) 0xd8, (byte) 0xff})) {
-            return "image/jpeg";
-        }
-        if (isText(header, length)) return "text/plain";
-        return "application/octet-stream";
+        try (var input = ImageIO.createImageInputStream(file.toFile())) {
+            var readers = ImageIO.getImageReaders(input);
+            if (readers.hasNext()) {
+                var reader = readers.next();
+                try {
+                    reader.setInput(input);
+                    String format = reader.getFormatName().toLowerCase(Locale.ROOT);
+                    if (!format.equals("png") && !format.equals("jpeg") && !format.equals("jpg")) throw unsupported();
+                    if (reader.read(0) == null) throw unsupported();
+                    return format.equals("png") ? "image/png" : "image/jpeg";
+                } finally { reader.dispose(); }
+            }
+        } catch (javax.imageio.IIOException invalidImage) { throw unsupported(); }
+        try (var zip = new ZipFile(file.toFile())) {
+            // A malformed Office package must not be relabelled as an ordinary ZIP.
+            if (zip.getEntry("[Content_Types].xml") != null || zip.getEntry("word/document.xml") != null
+                    || zip.getEntry("ppt/presentation.xml") != null) throw unsupported();
+            return "application/zip";
+        } catch (java.util.zip.ZipException notZip) { /* Try strictly decoded text last. */ }
+        var decoder = StandardCharsets.UTF_8.newDecoder().onMalformedInput(CodingErrorAction.REPORT)
+                .onUnmappableCharacter(CodingErrorAction.REPORT);
+        try (var reader = new java.io.InputStreamReader(Files.newInputStream(file), decoder)) {
+            char[] buffer = new char[4096];
+            int length;
+            while ((length = reader.read(buffer)) != -1) {
+                for (int i = 0; i < length; i++) {
+                    char ch = buffer[i];
+                    if (Character.isISOControl(ch) && ch != '\n' && ch != '\r' && ch != '\t' && ch != '\f') throw unsupported();
+                }
+            }
+            return "text/plain";
+        } catch (java.nio.charset.CharacterCodingException binary) { throw unsupported(); }
     }
 
-    private String officeMime(Path file) throws IOException {
-        try (ZipFile zip = new ZipFile(file.toFile())) {
-            if (zip.getEntry("word/document.xml") != null
-                    && zip.getEntry("[Content_Types].xml") != null) {
-                return "application/vnd.openxmlformats-officedocument.wordprocessingml.document";
-            }
-            if (zip.getEntry("ppt/presentation.xml") != null
-                    && zip.getEntry("[Content_Types].xml") != null) {
-                return "application/vnd.openxmlformats-officedocument.presentationml.presentation";
-            }
-        } catch (java.util.zip.ZipException exception) {
-            return "application/octet-stream";
-        }
-        return "application/zip";
-    }
-
-    private boolean isAllowed(String mime, String fileName, String allowedTypes) {
-        if (allowedTypes == null || allowedTypes.isBlank()) return true;
-        String extension = "";
-        if (fileName != null && fileName.lastIndexOf('.') >= 0) {
-            extension = fileName.substring(fileName.lastIndexOf('.') + 1).toLowerCase(Locale.ROOT);
-        }
-        for (String token : allowedTypes.split(",")) {
-            String normalized = token.trim().toLowerCase(Locale.ROOT);
-            boolean officeTypeMatch = (mime.endsWith("wordprocessingml.document")
-                    && (normalized.equals("docx") || normalized.equals(".docx")))
-                    || (mime.endsWith("presentationml.presentation")
-                    && (normalized.equals("pptx") || normalized.equals(".pptx")));
-            boolean extensionMatch = !"application/zip".equals(mime)
-                    && !mime.endsWith("wordprocessingml.document")
-                    && !mime.endsWith("presentationml.presentation")
-                    && (normalized.equals(extension) || normalized.equals("." + extension));
-            if (normalized.equals(mime.toLowerCase(Locale.ROOT))
-                    || officeTypeMatch
-                    || extensionMatch
-                    || (normalized.endsWith("/*") && mime.startsWith(normalized.substring(0, normalized.length() - 1)))) {
-                return true;
-            }
-        }
-        return false;
-    }
-
-    private String extension(String mime, String name) {
-        String lower = mime.toLowerCase(Locale.ROOT);
-        if (lower.equals("application/pdf")) return ".pdf";
-        if (lower.equals("text/plain")) return ".txt";
-        if (lower.contains("wordprocessingml")) return ".docx";
-        if (lower.contains("presentationml")) return ".pptx";
-        if (name != null && name.lastIndexOf('.') >= 0) {
-            String ext = name.substring(name.lastIndexOf('.')).toLowerCase(Locale.ROOT);
-            if (ext.matches("\\.[a-z0-9]{1,10}")) return ext;
-        }
-        return ".bin";
-    }
+    private ResponseStatusException unsupported() { return error(HttpStatus.UNSUPPORTED_MEDIA_TYPE, "UNSUPPORTED_MEDIA_TYPE"); }
 
     private String safeName(String name) {
         if (name == null || name.isBlank()) return "submission";
         String baseName = Path.of(name).getFileName().toString();
         String sanitized = baseName.replaceAll("[\\p{Cntrl}\"\\\\]", "_").trim();
         return sanitized.isBlank() ? "submission" : sanitized;
-    }
-
-    private boolean startsWith(byte[] bytes, int length, String value) {
-        byte[] prefix = value.getBytes(java.nio.charset.StandardCharsets.US_ASCII);
-        if (length < prefix.length) return false;
-        for (int i = 0; i < prefix.length; i++) if (bytes[i] != prefix[i]) return false;
-        return true;
-    }
-
-    private boolean startsWithBytes(byte[] bytes, int length, byte[] prefix) {
-        if (length < prefix.length) return false;
-        for (int i = 0; i < prefix.length; i++) if (bytes[i] != prefix[i]) return false;
-        return true;
-    }
-
-    private boolean isText(byte[] bytes, int length) {
-        int controls = 0;
-        for (int i = 0; i < length; i++) {
-            byte value = bytes[i];
-            int unsigned = value & 0xff;
-            if (unsigned == 0) return false;
-            if (unsigned < 9 || (unsigned > 13 && unsigned < 32)) controls++;
-        }
-        return controls < Math.max(1, length / 100);
     }
 
     private ResponseStatusException error(HttpStatus status, String code) {

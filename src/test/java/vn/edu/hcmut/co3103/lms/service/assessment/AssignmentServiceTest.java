@@ -44,7 +44,8 @@ class AssignmentServiceTest {
     @BeforeEach
     void setUp() {
         service = new AssignmentService(assignments, attachments, submissions, activities,
-                classes, members, storage);
+                members, storage, mock(vn.edu.hcmut.co3103.lms.service.learningcontent.ChapterService.class),
+                mock(AssignmentConfigurationService.class));
         Activity activity = new Activity(UUID.randomUUID(), "Assignment", null,
                 Activity.ActivityType.ASSIGNMENT, 0, null);
         when(activities.findById(activityId)).thenReturn(Optional.of(activity));
@@ -53,6 +54,8 @@ class AssignmentServiceTest {
                 false, "text/plain", 5);
         assignment.setAssignmentId(assignmentId);
         when(assignments.findById(assignmentId)).thenReturn(Optional.of(assignment));
+        when(assignments.findActivityIdByAssignmentId(assignmentId)).thenReturn(Optional.of(activityId));
+        when(assignments.findLockedByAssignmentId(assignmentId)).thenReturn(Optional.of(assignment));
         when(members.findByClassIdAndStudentId(classId, studentId)).thenReturn(Optional.of(
                 new ClassMember(classId, studentId, ClassMember.MembershipStatus.ACTIVE, null, null)));
     }
@@ -63,6 +66,8 @@ class AssignmentServiceTest {
                 false, "text/plain", 5);
         assignment.setAssignmentId(assignmentId);
         when(assignments.findById(assignmentId)).thenReturn(Optional.of(assignment));
+        when(assignments.findActivityIdByAssignmentId(assignmentId)).thenReturn(Optional.of(activityId));
+        when(assignments.findLockedByAssignmentId(assignmentId)).thenReturn(Optional.of(assignment));
 
         ResponseStatusException exception = assertThrows(ResponseStatusException.class,
                 () -> service.submit(assignmentId, studentId,

@@ -7,6 +7,7 @@ import org.springframework.transaction.annotation.Transactional;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.web.server.ResponseStatusException;
 import vn.edu.hcmut.co3103.lms.dto.request.ActivityRequest;
+import vn.edu.hcmut.co3103.lms.service.assessment.AssignmentConfigurationService;
 import vn.edu.hcmut.co3103.lms.dto.request.ChapterRequest;
 import vn.edu.hcmut.co3103.lms.dto.request.LessonRequest;
 import vn.edu.hcmut.co3103.lms.dto.request.MaterialRequest;
@@ -54,12 +55,14 @@ public class ChapterService {
     private final MaterialRepository materialRepository;
     private final ActivityRepository activityRepository;
     private final LocalMaterialStorageService materialStorage;
+    private final AssignmentConfigurationService assignmentConfiguration;
 
     @Autowired
     public ChapterService(ClassRepository classRepository, ClassMemberRepository classMemberRepository,
                           ChapterRepository chapterRepository, LessonRepository lessonRepository,
                           MaterialRepository materialRepository, ActivityRepository activityRepository,
-                          LocalMaterialStorageService materialStorage) {
+                          LocalMaterialStorageService materialStorage,
+                          AssignmentConfigurationService assignmentConfiguration) {
         this.classRepository = classRepository;
         this.classMemberRepository = classMemberRepository;
         this.chapterRepository = chapterRepository;
@@ -67,6 +70,7 @@ public class ChapterService {
         this.materialRepository = materialRepository;
         this.activityRepository = activityRepository;
         this.materialStorage = materialStorage;
+        this.assignmentConfiguration = assignmentConfiguration;
     }
 
     @Transactional(readOnly = true)
@@ -363,15 +367,18 @@ public class ChapterService {
         Lesson lesson = requireLesson(lessonId);
         Chapter chapter = requireChapter(lesson.getChapterId());
         requireWritableClass(chapter.getClassId(), tutorId);
-        if (request.carriesAssessmentConfiguration()) {
+        boolean assignment = request.activity_type() == Activity.ActivityType.ASSIGNMENT;
+        if (assignment ? !request.extraFields().keySet().equals(Set.of("assignment")) : request.carriesAssessmentConfiguration()) {
             throw conflict("ASSESSMENT_CONFIGURATION_MISMATCH");
         }
-        if (!request.extraFields().isEmpty()) throw badRequest();
+        if (!assignment && !request.extraFields().isEmpty()) throw badRequest();
         validateContentTitle(request.title());
-        return activityRepository.save(new Activity(lessonId, request.title().trim(), request.description(),
+        Activity activity = activityRepository.save(new Activity(lessonId, request.title().trim(), request.description(),
                 request.activity_type(),
                 resolveOrder(request.sequence_order(), () -> activityRepository.nextSequenceOrderForLesson(lessonId)),
                 request.status()));
+        if (assignment) assignmentConfiguration.create(activity, request.extraFields().get("assignment"));
+        return activity;
     }
 
     @Transactional(readOnly = true)
@@ -497,10 +504,22 @@ public class ChapterService {
         return requireMaterial(materialId);
     }
 
-    private Activity requireWritableActivity(UUID activityId, UUID tutorId) {
+    @Transactional
+    public Activity requireWritableActivity(UUID activityId, UUID tutorId) {
         UUID classId = activityRepository.findClassIdByActivityId(activityId)
                 .orElseThrow(() -> notFound("ACTIVITY_NOT_FOUND"));
         requireWritableClass(classId, tutorId);
+        return requireActivity(activityId);
+    }
+
+    /** Serializes new assessment work with canonical archive/content changes, then reuses the read guard. */
+    @Transactional
+    public Activity requireStudentWritableActivity(UUID activityId, UUID studentId) {
+        UUID classId = activityRepository.findClassIdByActivityId(activityId)
+                .orElseThrow(() -> notFound("ACTIVITY_NOT_FOUND"));
+        Class target = classRepository.findByIdForUpdate(classId).orElseThrow(() -> notFound("CLASS_NOT_FOUND"));
+        getActivity(activityId, studentId, false);
+        ensureClassEditable(target);
         return requireActivity(activityId);
     }
 

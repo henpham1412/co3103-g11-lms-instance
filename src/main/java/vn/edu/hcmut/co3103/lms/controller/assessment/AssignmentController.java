@@ -25,7 +25,7 @@ import org.springframework.web.bind.annotation.RequestPart;
 import org.springframework.web.bind.annotation.RestController;
 import org.springframework.web.multipart.MultipartFile;
 import org.springframework.web.server.ResponseStatusException;
-import vn.edu.hcmut.co3103.lms.dto.request.AssignmentConfigurationRequest;
+import java.util.Map;
 import vn.edu.hcmut.co3103.lms.dto.request.GradeSubmissionRequest;
 import vn.edu.hcmut.co3103.lms.dto.response.AssignmentConfigurationResponse;
 import vn.edu.hcmut.co3103.lms.dto.response.SubmissionResponse;
@@ -44,23 +44,11 @@ public class AssignmentController {
         this.assignmentService = assignmentService;
     }
 
-    @PostMapping("/activities/{activityId}/assignment")
+    @PatchMapping("/activities/{activityId}/assignment")
     @PreAuthorize("hasRole('TUTOR')")
-    public ResponseEntity<AssignmentConfigurationResponse> createAssignment(
-            @AuthenticationPrincipal Jwt jwt,
-            @PathVariable UUID activityId,
-            @Valid @RequestBody AssignmentConfigurationRequest request) {
-        return ResponseEntity.status(HttpStatus.CREATED)
-                .body(assignmentService.createOrUpdate(activityId, userId(jwt), request));
-    }
-
-    @PutMapping("/activities/{activityId}/assignment")
-    @PreAuthorize("hasRole('TUTOR')")
-    public AssignmentConfigurationResponse updateAssignment(
-            @AuthenticationPrincipal Jwt jwt,
-            @PathVariable UUID activityId,
-            @Valid @RequestBody AssignmentConfigurationRequest request) {
-        return assignmentService.createOrUpdate(activityId, userId(jwt), request);
+    public AssignmentConfigurationResponse updateAssignment(@AuthenticationPrincipal Jwt jwt,
+            @PathVariable UUID activityId, @RequestBody Map<String, Object> patch) {
+        return assignmentService.patch(activityId, userId(jwt), patch);
     }
 
     @GetMapping("/activities/{activityId}/assignment")
@@ -69,9 +57,7 @@ public class AssignmentController {
             @AuthenticationPrincipal Jwt jwt,
             Authentication authentication,
             @PathVariable UUID activityId) {
-        boolean tutor = authentication.getAuthorities().stream()
-                .anyMatch(authority -> "ROLE_TUTOR".equals(authority.getAuthority()));
-        return assignmentService.getConfiguration(activityId, userId(jwt), tutor);
+        return assignmentService.getConfiguration(activityId, userId(jwt), isTutor(authentication));
     }
 
     @PostMapping(path = "/assignments/{assignmentId}/attachments",
@@ -110,8 +96,8 @@ public class AssignmentController {
     public ResponseEntity<Resource> downloadAttachment(
             @AuthenticationPrincipal Jwt jwt,
             @PathVariable UUID assignmentId,
-            @PathVariable UUID attachmentId) {
-        var file = assignmentService.downloadAttachment(assignmentId, attachmentId, userId(jwt));
+            @PathVariable UUID attachmentId, Authentication authentication) {
+        var file = assignmentService.downloadAttachment(assignmentId, attachmentId, userId(jwt), isTutor(authentication));
         return ResponseEntity.ok()
                 .contentType(MediaType.parseMediaType(file.contentType()))
                 .header("Content-Disposition", ContentDisposition.attachment()
@@ -138,16 +124,16 @@ public class AssignmentController {
     @PreAuthorize("hasAnyRole('STUDENT', 'TUTOR')")
     public SubmissionResponse getSubmission(
             @AuthenticationPrincipal Jwt jwt,
-            @PathVariable UUID submissionId) {
-        return assignmentService.getSubmission(submissionId, userId(jwt));
+            @PathVariable UUID submissionId, Authentication authentication) {
+        return assignmentService.getSubmission(submissionId, userId(jwt), isTutor(authentication));
     }
 
     @GetMapping("/submissions/{submissionId}/file")
     @PreAuthorize("hasAnyRole('STUDENT', 'TUTOR')")
     public ResponseEntity<Resource> downloadSubmission(
             @AuthenticationPrincipal Jwt jwt,
-            @PathVariable UUID submissionId) {
-        var file = assignmentService.download(submissionId, userId(jwt));
+            @PathVariable UUID submissionId, Authentication authentication) {
+        var file = assignmentService.download(submissionId, userId(jwt), isTutor(authentication));
         return ResponseEntity.ok()
                 .contentType(MediaType.parseMediaType(file.contentType()))
                 .header("Content-Disposition", ContentDisposition.attachment()
@@ -162,6 +148,10 @@ public class AssignmentController {
             @PathVariable UUID submissionId,
             @Valid @RequestBody GradeSubmissionRequest request) {
         return assignmentService.grade(submissionId, userId(jwt), request);
+    }
+
+    private boolean isTutor(Authentication authentication) {
+        return authentication.getAuthorities().stream().anyMatch(a -> "ROLE_TUTOR".equals(a.getAuthority()));
     }
 
     private UUID userId(Jwt jwt) {

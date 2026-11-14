@@ -10,27 +10,25 @@ import org.springframework.transaction.support.TransactionSynchronization;
 import org.springframework.transaction.support.TransactionSynchronizationManager;
 import org.springframework.web.multipart.MultipartFile;
 import org.springframework.web.server.ResponseStatusException;
-import vn.edu.hcmut.co3103.lms.dto.request.AssignmentConfigurationRequest;
+import vn.edu.hcmut.co3103.lms.service.learningcontent.ChapterService;
 import vn.edu.hcmut.co3103.lms.dto.request.GradeSubmissionRequest;
 import vn.edu.hcmut.co3103.lms.dto.response.AssignmentConfigurationResponse;
 import vn.edu.hcmut.co3103.lms.dto.response.SubmissionResponse;
-import vn.edu.hcmut.co3103.lms.entity.Activity;
 import vn.edu.hcmut.co3103.lms.entity.Assignment;
 import vn.edu.hcmut.co3103.lms.entity.AssignmentAttachment;
-import vn.edu.hcmut.co3103.lms.entity.Class;
 import vn.edu.hcmut.co3103.lms.entity.ClassMember;
 import vn.edu.hcmut.co3103.lms.entity.Submission;
 import vn.edu.hcmut.co3103.lms.repository.assessment.AssignmentAttachmentRepository;
 import vn.edu.hcmut.co3103.lms.repository.assessment.AssignmentRepository;
 import vn.edu.hcmut.co3103.lms.repository.assessment.SubmissionRepository;
 import vn.edu.hcmut.co3103.lms.repository.classmanagement.ClassMemberRepository;
-import vn.edu.hcmut.co3103.lms.repository.classmanagement.ClassRepository;
 import vn.edu.hcmut.co3103.lms.repository.learningcontent.ActivityRepository;
 
 import java.math.BigDecimal;
 import java.time.OffsetDateTime;
 import java.nio.file.Path;
 import java.util.List;
+import java.util.Map;
 import java.util.UUID;
 
 @Service
@@ -39,7 +37,8 @@ public class AssignmentService {
     private final AssignmentAttachmentRepository attachmentRepository;
     private final SubmissionRepository submissionRepository;
     private final ActivityRepository activityRepository;
-    private final ClassRepository classRepository;
+    private final ChapterService content;
+    private final AssignmentConfigurationService configuration;
     private final ClassMemberRepository memberRepository;
     private final AssignmentFileStorageService storage;
 
@@ -47,61 +46,40 @@ public class AssignmentService {
                              AssignmentAttachmentRepository attachmentRepository,
                              SubmissionRepository submissionRepository,
                              ActivityRepository activityRepository,
-                             ClassRepository classRepository,
                              ClassMemberRepository memberRepository,
-                             AssignmentFileStorageService storage) {
+                             AssignmentFileStorageService storage, ChapterService content,
+                             AssignmentConfigurationService configuration) {
         this.assignmentRepository = assignmentRepository;
         this.attachmentRepository = attachmentRepository;
         this.submissionRepository = submissionRepository;
         this.activityRepository = activityRepository;
-        this.classRepository = classRepository;
+        this.content = content;
+        this.configuration = configuration;
         this.memberRepository = memberRepository;
         this.storage = storage;
     }
 
     @Transactional
-    public AssignmentConfigurationResponse createOrUpdate(UUID activityId, UUID tutorId,
-                                                          AssignmentConfigurationRequest request) {
-        Activity activity = requireActivity(activityId);
-        if (activity.getActivityType() != Activity.ActivityType.ASSIGNMENT) {
-            throw conflict("ACTIVITY_TYPE_MISMATCH");
-        }
-        requireTutorOwnsActivity(activity, tutorId);
-        validateConfiguration(request);
-        Assignment assignment = assignmentRepository.findByActivityId(activityId).orElse(null);
-        if (assignment == null) {
-            assignment = new Assignment(activityId, request.openingTime(), request.deadline(),
-                    Boolean.TRUE.equals(request.allowLate()), joinTypes(request.allowedFileTypes()),
-                    request.maxFileSizeMb());
-        } else {
-            assignment.setOpeningTime(request.openingTime());
-            assignment.setDeadline(request.deadline());
-            assignment.setAllowLate(Boolean.TRUE.equals(request.allowLate()));
-            assignment.setAllowedFileTypes(joinTypes(request.allowedFileTypes()));
-            assignment.setMaxFileSizeMb(request.maxFileSizeMb());
-        }
-        return toConfiguration(assignmentRepository.save(assignment));
+    public AssignmentConfigurationResponse patch(UUID activityId, UUID tutorId, Map<String, Object> patch) {
+        content.requireWritableActivity(activityId, tutorId);
+        Assignment assignment = assignmentRepository.findLockedByActivityId(activityId)
+                .orElseThrow(() -> notFound("ASSIGNMENT_NOT_FOUND"));
+        configuration.patch(assignment, patch);
+        return toConfiguration(assignmentRepository.saveAndFlush(assignment));
     }
 
     @Transactional(readOnly = true)
     public AssignmentConfigurationResponse getConfiguration(UUID activityId, UUID userId, boolean tutor) {
+        content.getActivity(activityId, userId, tutor);
         Assignment assignment = requireAssignmentByActivity(activityId);
-        Activity activity = requireActivity(activityId);
-        UUID classId = requireClassId(activityId);
-        if (tutor) requireTutorOwnsClass(classId, userId);
-        else {
-            if (activity.getStatus() != vn.edu.hcmut.co3103.lms.entity.Chapter.VisibilityStatus.PUBLISHED) {
-                throw notFound("ASSIGNMENT_NOT_FOUND");
-            }
-            requireActiveMember(classId, userId);
-        }
         return toConfiguration(assignment);
     }
 
     @Transactional
     public AssignmentConfigurationResponse addAttachment(UUID assignmentId, UUID tutorId, MultipartFile file) {
-        Assignment assignment = requireAssignment(assignmentId);
-        requireTutorOwnsActivity(requireActivity(assignment.getActivityId()), tutorId);
+        UUID activityId = activityIdForAssignment(assignmentId);
+        content.requireWritableActivity(activityId, tutorId);
+        Assignment assignment = assignmentRepository.findLockedByAssignmentId(assignmentId).orElseThrow(() -> notFound("ASSIGNMENT_NOT_FOUND"));
         AssignmentFileStorageService.StoredFile stored =
                 storage.store(file, null, assignment.getMaxFileSizeMb());
         deleteOnRollback(stored.storagePath());
@@ -112,13 +90,11 @@ public class AssignmentService {
 
     @Transactional
     public SubmissionResponse submit(UUID assignmentId, UUID studentId, MultipartFile file) {
-        Assignment assignment = requireAssignment(assignmentId);
-        Activity activity = requireActivity(assignment.getActivityId());
-        UUID classId = requireClassId(assignment.getActivityId());
-        ClassMember member = requireActiveMember(classId, studentId);
-        if (activity.getStatus() != vn.edu.hcmut.co3103.lms.entity.Chapter.VisibilityStatus.PUBLISHED) {
-            throw notFound("ASSIGNMENT_NOT_FOUND");
-        }
+        UUID activityId = activityIdForAssignment(assignmentId);
+        content.requireStudentWritableActivity(activityId, studentId);
+        Assignment assignment = assignmentRepository.findLockedByAssignmentId(assignmentId)
+                .orElseThrow(() -> notFound("ASSIGNMENT_NOT_FOUND"));
+        ClassMember member = requireActiveMember(requireClassId(activityId), studentId);
         OffsetDateTime startedAt = OffsetDateTime.now();
         if (assignment.getOpeningTime() != null && startedAt.isBefore(assignment.getOpeningTime())) {
             throw conflict("SUBMISSION_NOT_ALLOWED");
@@ -156,6 +132,7 @@ public class AssignmentService {
     @Transactional(readOnly = true)
     public SubmissionResponse getMine(UUID assignmentId, UUID studentId) {
         Assignment assignment = requireAssignment(assignmentId);
+        content.getActivity(assignment.getActivityId(), studentId, false);
         ClassMember member = requireActiveMember(requireClassId(assignment.getActivityId()), studentId);
         Submission submission = submissionRepository.findByAssignmentIdAndClassMemberId(
                 assignmentId, member.getClassMemberId()).orElse(null);
@@ -166,6 +143,7 @@ public class AssignmentService {
     @Transactional(readOnly = true)
     public boolean hasSubmission(UUID assignmentId, UUID studentId) {
         Assignment assignment = requireAssignment(assignmentId);
+        content.getActivity(assignment.getActivityId(), studentId, false);
         ClassMember member = requireActiveMember(requireClassId(assignment.getActivityId()), studentId);
         return submissionRepository.findByAssignmentIdAndClassMemberId(
                 assignmentId, member.getClassMemberId()).isPresent();
@@ -175,7 +153,7 @@ public class AssignmentService {
     public Page<SubmissionResponse> list(UUID assignmentId, UUID tutorId, Submission.Status status,
                                          Pageable pageable) {
         Assignment assignment = requireAssignment(assignmentId);
-        requireTutorOwnsActivity(requireActivity(assignment.getActivityId()), tutorId);
+        content.getActivity(assignment.getActivityId(), tutorId, true);
         return submissionRepository.findByAssignmentIdAndStatus(assignmentId, status, pageable)
                 .map(submission -> {
                     ClassMember member = memberRepository.findById(submission.getClassMemberId()).orElse(null);
@@ -184,60 +162,37 @@ public class AssignmentService {
     }
 
     @Transactional(readOnly = true)
-    public SubmissionResponse getSubmission(UUID submissionId, UUID userId) {
-        Submission submission = submissionRepository.findById(submissionId)
-                .orElseThrow(() -> notFound("SUBMISSION_NOT_FOUND"));
-        Assignment assignment = requireAssignment(submission.getAssignmentId());
-        UUID classId = requireClassId(assignment.getActivityId());
-        Class targetClass = classRepository.findById(classId)
-                .orElseThrow(() -> notFound("CLASS_NOT_FOUND"));
-        ClassMember member = memberRepository.findById(submission.getClassMemberId())
-                .orElseThrow(() -> notFound("SUBMISSION_NOT_FOUND"));
-        if (!targetClass.getTutorId().equals(userId)
-                && !(member.getStudentId().equals(userId)
-                && member.getStatus() == ClassMember.MembershipStatus.ACTIVE)) {
-            throw forbidden("FORBIDDEN");
-        }
+    public SubmissionResponse getSubmission(UUID submissionId, UUID userId, boolean tutor) {
+        Submission submission = requireReadableSubmission(submissionId, userId, tutor);
+        ClassMember member = memberRepository.findById(submission.getClassMemberId()).orElseThrow(() -> notFound("SUBMISSION_NOT_FOUND"));
         return toResponse(submission, member.getStudentId());
     }
 
     @Transactional(readOnly = true)
-    public DownloadableSubmission download(UUID submissionId, UUID userId) {
-        Submission submission = submissionRepository.findById(submissionId)
-                .orElseThrow(() -> notFound("SUBMISSION_NOT_FOUND"));
+    public DownloadableSubmission download(UUID submissionId, UUID userId, boolean tutor) {
+        Submission submission = requireReadableSubmission(submissionId, userId, tutor);
+        return new DownloadableSubmission(storage.resolve(submission.getStoragePath()), submission.getMimeType(), submission.getFileName());
+    }
+
+    private Submission requireReadableSubmission(UUID submissionId, UUID userId, boolean tutor) {
+        Submission submission = submissionRepository.findById(submissionId).orElseThrow(() -> notFound("SUBMISSION_NOT_FOUND"));
         Assignment assignment = requireAssignment(submission.getAssignmentId());
         UUID classId = requireClassId(assignment.getActivityId());
-        Class targetClass = classRepository.findById(classId)
-                .orElseThrow(() -> notFound("CLASS_NOT_FOUND"));
-        ClassMember member = memberRepository.findById(submission.getClassMemberId())
-                .orElseThrow(() -> notFound("SUBMISSION_NOT_FOUND"));
-        if (!targetClass.getTutorId().equals(userId)
-                && !(member.getStudentId().equals(userId)
-                && member.getStatus() == ClassMember.MembershipStatus.ACTIVE)) {
-            throw forbidden("FORBIDDEN");
-        }
-        return new DownloadableSubmission(storage.resolve(submission.getStoragePath()),
-                submission.getMimeType(), submission.getFileName());
+        content.getActivity(assignment.getActivityId(), userId, tutor);
+        ClassMember member = memberRepository.findById(submission.getClassMemberId()).orElseThrow(() -> notFound("SUBMISSION_NOT_FOUND"));
+        if (!classId.equals(member.getClassId())) throw notFound("SUBMISSION_NOT_FOUND");
+        if (!tutor && (!member.getStudentId().equals(userId) || member.getStatus() != ClassMember.MembershipStatus.ACTIVE)) throw forbidden("FORBIDDEN");
+        return submission;
     }
 
     @Transactional(readOnly = true)
-    public DownloadableAttachment downloadAttachment(UUID assignmentId, UUID attachmentId, UUID userId) {
+    public DownloadableAttachment downloadAttachment(UUID assignmentId, UUID attachmentId, UUID userId, boolean tutor) {
         Assignment assignment = requireAssignment(assignmentId);
-        Activity activity = requireActivity(assignment.getActivityId());
-        UUID classId = requireClassId(assignment.getActivityId());
-        Class targetClass = classRepository.findById(classId)
-                .orElseThrow(() -> notFound("CLASS_NOT_FOUND"));
-        if (!targetClass.getTutorId().equals(userId)) {
-            if (activity.getStatus() != vn.edu.hcmut.co3103.lms.entity.Chapter.VisibilityStatus.PUBLISHED) {
-                throw notFound("ASSIGNMENT_NOT_FOUND");
-            }
-            requireActiveMember(classId, userId);
-        }
+        content.getActivity(assignment.getActivityId(), userId, tutor);
         AssignmentAttachment attachment = attachmentRepository.findById(attachmentId)
                 .filter(candidate -> assignmentId.equals(candidate.getAssignmentId()))
                 .orElseThrow(() -> notFound("ATTACHMENT_NOT_FOUND"));
-        return new DownloadableAttachment(storage.resolve(attachment.getStoragePath()),
-                attachment.getMimeType(), attachment.getFileName());
+        return new DownloadableAttachment(storage.resolve(attachment.getStoragePath()), attachment.getMimeType(), attachment.getFileName());
     }
 
     private void deleteOnRollback(String storagePath) {
@@ -262,11 +217,11 @@ public class AssignmentService {
 
     @Transactional
     public SubmissionResponse grade(UUID submissionId, UUID tutorId, GradeSubmissionRequest request) {
+        UUID activityId = submissionRepository.findActivityIdBySubmissionId(submissionId)
+                .orElseThrow(() -> notFound("SUBMISSION_NOT_FOUND"));
+        content.requireWritableActivity(activityId, tutorId);
         Submission submission = submissionRepository.findLockedBySubmissionId(submissionId)
                 .orElseThrow(() -> notFound("SUBMISSION_NOT_FOUND"));
-        Assignment assignment = requireAssignment(submission.getAssignmentId());
-        UUID classId = requireClassId(assignment.getActivityId());
-        requireTutorOwnsClass(classId, tutorId);
         if (request == null || request.score() == null
                 || request.score().compareTo(BigDecimal.ZERO) < 0
                 || request.score().compareTo(BigDecimal.valueOf(100)) > 0) {
@@ -277,7 +232,7 @@ public class AssignmentService {
         }
         submission.grade(request.score(), request.feedback(), tutorId, OffsetDateTime.now());
         ClassMember member = memberRepository.findById(submission.getClassMemberId()).orElse(null);
-        return toResponse(submissionRepository.save(submission), member == null ? null : member.getStudentId());
+        return toResponse(submissionRepository.saveAndFlush(submission), member == null ? null : member.getStudentId());
     }
 
     private Assignment requireAssignmentByActivity(UUID activityId) {
@@ -290,9 +245,8 @@ public class AssignmentService {
                 .orElseThrow(() -> notFound("ASSIGNMENT_NOT_FOUND"));
     }
 
-    private Activity requireActivity(UUID activityId) {
-        return activityRepository.findById(activityId)
-                .orElseThrow(() -> notFound("ACTIVITY_NOT_FOUND"));
+    private UUID activityIdForAssignment(UUID assignmentId) {
+        return assignmentRepository.findActivityIdByAssignmentId(assignmentId).orElseThrow(() -> notFound("ASSIGNMENT_NOT_FOUND"));
     }
 
     private UUID requireClassId(UUID activityId) {
@@ -304,32 +258,6 @@ public class AssignmentService {
         return memberRepository.findByClassIdAndStudentId(classId, studentId)
                 .filter(member -> member.getStatus() == ClassMember.MembershipStatus.ACTIVE)
                 .orElseThrow(() -> forbidden("MEMBERSHIP_REQUIRED"));
-    }
-
-    private void requireTutorOwnsActivity(Activity activity, UUID tutorId) {
-        requireTutorOwnsClass(requireClassId(activity.getActivityId()), tutorId);
-    }
-
-    private void requireTutorOwnsClass(UUID classId, UUID tutorId) {
-        Class target = classRepository.findById(classId).orElseThrow(() -> notFound("CLASS_NOT_FOUND"));
-        if (!target.getTutorId().equals(tutorId)) throw forbidden("FORBIDDEN");
-    }
-
-    private void validateConfiguration(AssignmentConfigurationRequest request) {
-        if (request == null || request.deadline() == null
-                || !request.deadline().isAfter(OffsetDateTime.now())
-                || (request.openingTime() != null && !request.openingTime().isBefore(request.deadline()))
-                || (request.maxFileSizeMb() != null && request.maxFileSizeMb() <= 0)) {
-            throw badRequest("VALIDATION_ERROR");
-        }
-        if (request.allowedFileTypes() != null
-                && request.allowedFileTypes().stream().anyMatch(type -> type == null || type.isBlank())) {
-            throw badRequest("VALIDATION_ERROR");
-        }
-    }
-
-    private String joinTypes(List<String> types) {
-        return types == null || types.isEmpty() ? null : String.join(",", types);
     }
 
     private AssignmentConfigurationResponse toConfiguration(Assignment assignment) {

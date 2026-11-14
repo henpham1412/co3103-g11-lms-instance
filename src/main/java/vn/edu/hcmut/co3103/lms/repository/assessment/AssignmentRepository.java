@@ -13,6 +13,9 @@ import java.util.UUID;
 public interface AssignmentRepository extends JpaRepository<Assignment, UUID> {
     Optional<Assignment> findByActivityId(UUID activityId);
 
+    @Query("select a.activityId from Assignment a where a.assignmentId=:assignmentId")
+    Optional<UUID> findActivityIdByAssignmentId(@Param("assignmentId") UUID assignmentId);
+
     @Lock(LockModeType.PESSIMISTIC_WRITE)
     @Query("select a from Assignment a where a.assignmentId = :assignmentId")
     Optional<Assignment> findLockedByAssignmentId(@Param("assignmentId") UUID assignmentId);
