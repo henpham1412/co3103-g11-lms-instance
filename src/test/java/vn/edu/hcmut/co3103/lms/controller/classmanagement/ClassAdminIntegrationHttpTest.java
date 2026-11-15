@@ -32,6 +32,7 @@ import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
 import java.time.Clock;
+import java.util.Arrays;
 import java.util.List;
 import java.util.Locale;
 import java.util.UUID;
@@ -135,8 +136,12 @@ class ClassAdminIntegrationHttpTest {
         assertThat(adminMethod.headers().firstValue("Allow").orElseThrow()).isEqualTo("GET, HEAD, PATCH, OPTIONS");
         var classMethod = request("PUT", classPath(), tutorToken, "{}", "application/json");
         assertError(classMethod, 405, "METHOD_NOT_ALLOWED");
-        // Non-admin methods retain current main's Allow header; only admin-users formatting is normalized.
-        assertThat(classMethod.headers().firstValue("Allow").orElseThrow()).isEqualTo("GET, PATCH");
+        // Allow advertises an unordered method list. Retain main's exact methods without requiring
+        // the JVM-dependent order in which Spring discovers the GET and PATCH mappings.
+        var classAllowedMethods = classMethod.headers().allValues("Allow").stream()
+                .flatMap(value -> Arrays.stream(value.split(",")))
+                .map(String::strip).toList();
+        assertThat(classAllowedMethods).containsExactlyInAnyOrder("GET", "PATCH");
         for (String type : List.of("text/plain", "application/json;charset=unsupported-charset")) {
             assertError(request("PATCH", adminPath + "/" + student, adminToken, "{}", type),
                     415, "UNSUPPORTED_MEDIA_TYPE");

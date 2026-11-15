@@ -334,9 +334,47 @@ Earlier integration runs exposed old migration-count/version expectations, stand
 to global advice, and admin formatting expectations on non-admin probes. Tests now exercise the proper
 scoped advice and exact current-main non-admin contracts; no security/audit assertions were removed.
 The first full run had two failures because a Class test expected the admin-normalized Allow header.
-Its non-admin assertion now preserves main's `GET, PATCH`; admin users retain `GET, HEAD, PATCH, OPTIONS`.
+Its non-admin assertion preserves main's exact method set `{GET, PATCH}` (wire order is unspecified); admin users retain the explicitly normalized `GET, HEAD, PATCH, OPTIONS`.
 The final full run above passes. No production LMS-6/LMS-9 implementation was changed.
 
 External deployment histories remain unverified. Inspect them before deploying; stop if older feature
 migration versions were applied persistently. No Flyway repair/reset, validation bypass, shared-history
 edit or production reconciliation was performed.
+
+## CI follow-up: unordered Allow methods
+
+Run `43672774497` tested head `49068ea18a9d741ee69dde455be9773dcb079969` with
+Temurin 25.0.5+8 and PostgreSQL 18.6. Its Maven step ran all 1,878 tests and failed
+only the two aliases of `ClassAdminIntegrationHttpTest.methodMediaAndNegotiationErrorsStayJsonWithoutAdminMutation`.
+At line 139, the assertion expected the literal `GET, PATCH`; the response was `PATCH, GET`.
+The `Allow` method list has no ordering contract. Spring's discovered-method collection can iterate
+in a different order across JVM executions. The earlier local pass was therefore accidental, not
+proof of deterministic serialization. An unchanged focused run reproduced the same two failures
+locally on Oracle JDK 25.0.5.0.3 and an isolated PostgreSQL 18.6 database.
+
+The existing HTTP regression now parses all Allow header values and asserts exactly GET and PATCH
+with `containsExactlyInAnyOrder`. Missing, additional and duplicate method entries still fail. The
+explicitly normalized admin-users header assertion, error/status checks and no-mutation assertions
+are unchanged. No production code, migration, timeout or workflow was changed, and no tests were skipped.
+
+Verification executed for this correction:
+
+```bash
+# Unchanged test: 8 run, 2 failures, 0 errors/skips. After correction: 8 passed.
+DB_URL=jdbc:postgresql://localhost:55436/lms13_ci_repro DB_USERNAME=postgres DB_PASSWORD='' \
+/workspace/.setup/mvn --batch-mode --no-transfer-progress -Dtest=ClassAdminIntegrationHttpTest test
+
+# Exact CI Maven command; local settings/cache are supplied through MAVEN_ARGS.
+source /workspace/.setup/java-env.sh
+export MAVEN_ARGS='-s /workspace/.setup/maven-settings.xml -Dmaven.repo.local=/workspace/.setup/m2-lms'
+chmod u+x mvnw
+DB_URL=jdbc:postgresql://localhost:55436/lms13_ci_fix_verify DB_USERNAME=postgres DB_PASSWORD='' \
+./mvnw --batch-mode --no-transfer-progress clean verify
+```
+
+The final local execution completed at 03:51:49 UTC: **1,878 passed, zero failures/errors/skips,
+BUILD SUCCESS**, including JAR packaging. The original local wrapper permission was restored afterward.
+Local/CI use the same Maven 3.9.12 wrapper and PostgreSQL 18.6; their JDK distributions, database names,
+ports, dependency-cache settings and host paths differ. The failure reproduced locally without changing
+those settings, confirming that none requires an application/workflow change. Migration validation and
+upgrade tests passed. The separate PostgreSQL diagnostic privacy step also passed in the failed CI run.
