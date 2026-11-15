@@ -77,6 +77,14 @@ public class ClassMembershipService {
         }
     }
 
+    /** Read-only ownership boundary shared with learner mastery; archived history is permitted. */
+    @Transactional(readOnly = true)
+    public void requireOwningTutorRead(UUID classId, UUID tutorId) {
+        Class target = classRepository.findById(classId)
+                .orElseThrow(() -> notFound("CLASS_OR_MEMBER_NOT_FOUND"));
+        ensureTutorOwnsClass(target, tutorId);
+    }
+
     @Transactional
     public MembershipResult requestToJoin(UUID classId, UUID studentId) {
         Class targetClass = requireClassForUpdate(classId);

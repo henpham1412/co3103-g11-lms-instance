@@ -15,6 +15,7 @@ import vn.edu.hcmut.co3103.lms.repository.classmanagement.ClassRepository;
 import vn.edu.hcmut.co3103.lms.repository.learningcontent.ChapterRepository;
 import vn.edu.hcmut.co3103.lms.repository.learningcontent.CompletionMarkRepository;
 import vn.edu.hcmut.co3103.lms.repository.learningcontent.LessonRepository;
+import vn.edu.hcmut.co3103.lms.service.adaptive.MasteryRecalculationService;
 
 import java.time.Instant;
 import java.time.temporal.ChronoUnit;
@@ -27,19 +28,22 @@ public class LessonCompletionService {
     private final ChapterRepository chapterRepository;
     private final LessonRepository lessonRepository;
     private final CompletionMarkRepository completionMarkRepository;
+    private final MasteryRecalculationService mastery;
 
     public LessonCompletionService(
             ClassRepository classRepository,
             ClassMemberRepository classMemberRepository,
             ChapterRepository chapterRepository,
             LessonRepository lessonRepository,
-            CompletionMarkRepository completionMarkRepository
+            CompletionMarkRepository completionMarkRepository,
+            MasteryRecalculationService mastery
     ) {
         this.classRepository = classRepository;
         this.classMemberRepository = classMemberRepository;
         this.chapterRepository = chapterRepository;
         this.lessonRepository = lessonRepository;
         this.completionMarkRepository = completionMarkRepository;
+        this.mastery = mastery;
     }
 
     @Transactional
@@ -47,7 +51,7 @@ public class LessonCompletionService {
         ClassMember membership = requireWritableMembership(classId, studentId);
         requireAccessibleLesson(classId, lessonId);
 
-        return completionMarkRepository
+        CompletionMarkResponse response = completionMarkRepository
                 .findByClassMemberIdAndLessonId(membership.getClassMemberId(), lessonId)
                 .map(CompletionMarkResponse::from)
                 .orElseGet(() -> {
@@ -58,6 +62,9 @@ public class LessonCompletionService {
                     );
                     return CompletionMarkResponse.from(completionMarkRepository.save(created));
                 });
+        completionMarkRepository.flush();
+        mastery.synchronizeCompletion(classId, membership.getClassMemberId());
+        return response;
     }
 
     @Transactional
@@ -66,6 +73,8 @@ public class LessonCompletionService {
         requireAccessibleLesson(classId, lessonId);
         completionMarkRepository.findByClassMemberIdAndLessonId(membership.getClassMemberId(), lessonId)
                 .ifPresent(completionMarkRepository::delete);
+        completionMarkRepository.flush();
+        mastery.synchronizeCompletion(classId, membership.getClassMemberId());
         return CompletionMarkResponse.notCompleted(lessonId);
     }
 

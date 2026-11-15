@@ -47,7 +47,8 @@ class SkillTopicAssociationServiceTest {
         questions = mock(QuestionSkillTopicRepository.class);
         access = mock(ClassAccess.class);
         scope = mock(LearningResourceScope.class);
-        service = new SkillTopicAssociationService(topics, lessons, activities, questions, access, scope);
+        service = new SkillTopicAssociationService(topics, lessons, activities, questions, access, scope,
+                mock(MasteryRecalculationService.class));
         when(scope.classIdForLesson(LESSON)).thenReturn(CLASS_ID);
         when(scope.activityScope(ACTIVITY)).thenReturn(new ActivityScope(CLASS_ID, ActivityKind.QUIZ));
         when(scope.questionScope(Q1)).thenReturn(new QuestionScope(CLASS_ID, ACTIVITY));

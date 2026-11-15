@@ -40,7 +40,9 @@ class MigrationPolicyTest {
             Map.entry("V13__create_question_skill_topics.sql", -415992144),
             Map.entry("V14__index_lms_user_access_default_sort.sql", 354517154),
             Map.entry("V15__add_identity_sync_watermarks.sql", 1240703539),
-            Map.entry("V16__create_audit_logs.sql", 67085040));
+            Map.entry("V16__create_audit_logs.sql", 67085040),
+            Map.entry("V14__create_file_assignments.sql", 1890549139),
+            Map.entry("V17__create_learning_signals_and_learner_mastery.sql", 970127172));
 
     @Test
     void keepsExactlyTheSixteenApprovedMigrations() throws IOException {

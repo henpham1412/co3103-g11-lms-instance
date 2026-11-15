@@ -84,24 +84,21 @@ public class QuizAttemptService {
 
         List<QuizAttempt> attempts = attemptRepository.findByQuiz_IdAndClassMember_ClassMemberIdOrderByAttemptNumber(
                 quizId, member.getClassMemberId());
-        for (QuizAttempt attempt : attempts) {
-            if (!"IN_PROGRESS".equals(attempt.getStatus())) continue;
+        var eligibility = QuizAttemptEligibility.evaluate(new QuizAttemptEligibility.Window(
+                        quiz.getTimeLimitMinutes(), quiz.getAttemptsAllowed(), quiz.getOpeningTime(), quiz.getDeadline()),
+                attempts.stream().map(a -> new QuizAttemptEligibility.Attempt(a.getStatus(), a.getStartedAt())).toList(),
+                attempts.stream().anyMatch(a -> "IN_PROGRESS".equals(a.getStatus())) || hasPublishedQuestions(quiz), now);
+        if (eligibility == QuizAttemptEligibility.Action.RESUME) {
+            QuizAttempt attempt = attempts.stream().filter(a -> "IN_PROGRESS".equals(a.getStatus())).findFirst().orElseThrow();
             OffsetDateTime endAt = calculateEndAt(attempt.getStartedAt(), quiz);
-            if (hasReachedEndAt(endAt, now)) {
-                // The expiry worker will submit it; don't perform scheduler work in this request.
-                throw new ResponseStatusException(HttpStatus.CONFLICT, "QUIZ_NOT_AVAILABLE");
-            }
             return new StartResult(HttpStatus.OK, toResponse(attempt, endAt, now));
         }
-
-        if ((quiz.getOpeningTime() != null && now.isBefore(quiz.getOpeningTime()))
-                || !now.isBefore(quiz.getDeadline())
-                || !hasPublishedQuestions(quiz)) {
+        if (eligibility == QuizAttemptEligibility.Action.NOT_AVAILABLE
+                || eligibility == QuizAttemptEligibility.Action.EXPIRED_IN_PROGRESS) {
             throw new ResponseStatusException(HttpStatus.CONFLICT, "QUIZ_NOT_AVAILABLE");
         }
-
         long usedAttempts = attempts.size();
-        if (usedAttempts >= quiz.getAttemptsAllowed()) {
+        if (eligibility == QuizAttemptEligibility.Action.ATTEMPT_LIMIT_REACHED) {
             throw new ResponseStatusException(HttpStatus.CONFLICT, "ATTEMPT_LIMIT_REACHED");
         }
 
@@ -121,8 +118,7 @@ public class QuizAttemptService {
     }
 
     static OffsetDateTime calculateEndAt(OffsetDateTime startedAt, Quiz quiz) {
-        OffsetDateTime timeLimitEnd = startedAt.plusMinutes(quiz.getTimeLimitMinutes());
-        return timeLimitEnd.isBefore(quiz.getDeadline()) ? timeLimitEnd : quiz.getDeadline();
+        return QuizAttemptEligibility.endAt(startedAt, quiz.getTimeLimitMinutes(), quiz.getDeadline());
     }
 
     static boolean hasReachedEndAt(OffsetDateTime endAt, OffsetDateTime now) {
