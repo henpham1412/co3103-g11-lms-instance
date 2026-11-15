@@ -69,6 +69,8 @@ class AssignmentPostgresHttpTest {
         for (UUID c : List.of(course, foreign)) {
             db.update("DELETE FROM submission WHERE assignment_id IN (SELECT assignment_id FROM assignment WHERE activity_id IN (SELECT a.activity_id FROM activity a JOIN lesson l ON l.lesson_id=a.lesson_id JOIN chapter ch ON ch.chapter_id=l.chapter_id WHERE ch.class_id=?))", c);
             db.update("DELETE FROM assignment WHERE activity_id IN (SELECT a.activity_id FROM activity a JOIN lesson l ON l.lesson_id=a.lesson_id JOIN chapter ch ON ch.chapter_id=l.chapter_id WHERE ch.class_id=?)", c);
+            db.update("DELETE FROM activity_skill_topics WHERE skill_topic_id IN (SELECT skill_topic_id FROM skill_topics WHERE class_id=?)", c);
+            db.update("DELETE FROM skill_topics WHERE class_id=?", c);
             db.update("DELETE FROM activity WHERE lesson_id IN (SELECT l.lesson_id FROM lesson l JOIN chapter ch ON ch.chapter_id=l.chapter_id WHERE ch.class_id=?)", c);
             db.update("DELETE FROM lesson WHERE chapter_id IN (SELECT chapter_id FROM chapter WHERE class_id=?)", c);
             db.update("DELETE FROM chapter WHERE class_id=?", c); db.update("DELETE FROM class_member WHERE class_id=?", c); db.update("DELETE FROM class WHERE class_id=?", c);
@@ -76,6 +78,20 @@ class AssignmentPostgresHttpTest {
         for (UUID user : List.of(owner, otherTutor, student, outsider)) db.update("DELETE FROM lms_user_access WHERE user_id=?", user);
         try (var paths = Files.list(STORAGE)) { for (Path p : paths.toList()) Files.deleteIfExists(p); }
     }
+    @Test void ungradedUploadAndReplacementDoNotCreateMasteryEvenWithExplicitTopics() throws Exception {
+        UUID activity=create(), assignment=assignment(activity), topic=UUID.randomUUID();
+        db.update("INSERT INTO skill_topics(skill_topic_id,class_id,name,difficulty_level) VALUES (?,?,'Assignment topic',1)",topic,course);
+        db.update("INSERT INTO activity_skill_topics(activity_id,skill_topic_id) VALUES (?,?)",activity,topic);
+        var original=submit(assignment);
+        var replaced=upload("PUT",submitPath(assignment),"work.txt","text/plain","replacement".getBytes(),student);
+        assertThat(replaced.statusCode()).isEqualTo(200);
+        var current=json.readTree(replaced.body());
+        assertThat(current.get("submission_id")).isEqualTo(original.get("submission_id"));
+        assertThat(current.get("status").asText()).isEqualTo("SUBMITTED");
+        assertThat(db.queryForObject("SELECT count(*) FROM learning_signal WHERE class_member_id=?",Integer.class,member)).isZero();
+        assertThat(db.queryForObject("SELECT count(*) FROM learner_mastery WHERE class_member_id=?",Integer.class,member)).isZero();
+    }
+
     @Test void createsActivityAndConfigurationAtomicallyThroughTheDocumentedRoute() throws Exception {
         UUID activity = create(); var configuration = checked("GET", configPath(activity), null, student, 200);
         assertThat(configuration.get("activity_id").asText()).isEqualTo(activity.toString());
@@ -185,10 +201,12 @@ class AssignmentPostgresHttpTest {
     }
     @Test void gradeAndRegradeReturnTheCommittedVersionAndRejectAnActuallyStaleClient() throws Exception {
         var submitted = submit(assignment(create())); String id = submitted.get("submission_id").asText();
+        var originalSubmittedAt = db.queryForObject("SELECT submitted_at FROM submission WHERE submission_id=?", OffsetDateTime.class, UUID.fromString(id));
         var first = checked("PATCH", "/submissions/" + id + "/grade", grade(55, submitted.get("version").asLong()), owner, 200);
         assertVersion(id, first); assertThat(first.get("status").asText()).isEqualTo("GRADED");
         var second = checked("PATCH", "/submissions/" + id + "/grade", grade(75, first.get("version").asLong()), owner, 200);
         assertVersion(id, second); assertThat(second.get("version").asLong()).isGreaterThan(first.get("version").asLong());
+        assertThat(db.queryForObject("SELECT submitted_at FROM submission WHERE submission_id=?", OffsetDateTime.class, UUID.fromString(id))).isEqualTo(originalSubmittedAt);
         var conflict = checked("PATCH", "/submissions/" + id + "/grade", grade(10, first.get("version").asLong()), owner, 409);
         assertThat(conflict.get("code").asText()).isEqualTo("SUBMISSION_STATE_CHANGED");
         assertThat(db.queryForObject("SELECT score FROM submission WHERE submission_id=?", Integer.class, UUID.fromString(id))).isEqualTo(75);

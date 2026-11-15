@@ -40,17 +40,20 @@ public class SkillTopicAssociationService {
     private final QuestionSkillTopicRepository questions;
     private final ClassAccess access;
     private final LearningResourceScope scope;
+    private final MasteryRecalculationService mastery;
 
     public SkillTopicAssociationService(SkillTopicRepository topics, LessonSkillTopicRepository lessons,
                                         ActivitySkillTopicRepository activities,
                                         QuestionSkillTopicRepository questions,
-                                        ClassAccess access, LearningResourceScope scope) {
+                                        ClassAccess access, LearningResourceScope scope,
+                                        MasteryRecalculationService mastery) {
         this.topics = topics;
         this.lessons = lessons;
         this.activities = activities;
         this.questions = questions;
         this.access = access;
         this.scope = scope;
+        this.mastery = mastery;
     }
 
     /** Old/new sets allow future LMS-9 integration without calculating mastery here. */
@@ -86,6 +89,7 @@ public class SkillTopicAssociationService {
         lessons.saveAll(requested.stream().filter(id -> !previous.contains(id))
                 .map(id -> new LessonSkillTopic(new LessonSkillTopicId(lessonId, id))).toList());
         lessons.flush();
+        mastery.synchronizeLesson(lessonId);
         return new TopicChange(previous, requested);
     }
 
@@ -112,7 +116,11 @@ public class SkillTopicAssociationService {
             throw new AppException(ErrorCode.QUIZ_TOPICS_DERIVED);
         }
         SkillTopicChecks.requireTopicsInClass(topics, requested, activity.classId());
-        return replaceActivityMappings(activityId, requested);
+        TopicChange change = replaceActivityMappings(activityId, requested);
+        Set<UUID> changed = new java.util.HashSet<>(change.previousTopicIds());
+        changed.addAll(change.currentTopicIds());
+        mastery.synchronizeAssignment(activityId, changed);
+        return change;
     }
 
     public List<SkillTopic> getQuestionTopics(UUID questionId) {

@@ -65,6 +65,8 @@ public class QuizAttemptSubmissionService {
 
         if (attempt.getScore() == null || attempt.getGradedAt() == null) {
             gradingService.gradeAttempt(attempt);
+        } else {
+            gradingService.synchronizeAttemptMastery(attempt);
         }
         return Optional.of(toResultResponse(attempt));
     }

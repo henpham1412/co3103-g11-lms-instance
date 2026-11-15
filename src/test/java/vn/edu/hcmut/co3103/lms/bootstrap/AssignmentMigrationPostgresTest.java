@@ -23,7 +23,8 @@ class AssignmentMigrationPostgresTest {
             assertThat(db.queryForList("SELECT version,checksum FROM " + schema + ".flyway_schema_history WHERE version::integer<=13 ORDER BY installed_rank")).isEqualTo(before);
             assertThat(db.queryForList("SELECT table_name FROM information_schema.tables WHERE table_schema=? AND table_name IN ('assignment','assignment_attachment','submission')", String.class, schema))
                     .containsExactlyInAnyOrder("assignment", "assignment_attachment", "submission");
-            assertThat(db.queryForObject("SELECT count(*) FROM " + schema + ".flyway_schema_history WHERE version IS NOT NULL", Integer.class)).isEqualTo(14);
+            assertThat(db.queryForList("SELECT version FROM " + schema + ".flyway_schema_history WHERE version IS NOT NULL ORDER BY installed_rank", String.class))
+                    .containsExactly("1", "2", "3", "4", "5", "6", "7", "8", "9", "10", "11", "12", "13", "14", "17");
         } finally { db.execute("DROP SCHEMA " + schema + " CASCADE"); }
     }
     @Test void combiningThePendingV14AllocationsIsExplicitlyBlocked() {

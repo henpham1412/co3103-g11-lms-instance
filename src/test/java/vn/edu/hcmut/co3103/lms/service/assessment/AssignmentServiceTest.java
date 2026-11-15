@@ -45,7 +45,8 @@ class AssignmentServiceTest {
     void setUp() {
         service = new AssignmentService(assignments, attachments, submissions, activities,
                 members, storage, mock(vn.edu.hcmut.co3103.lms.service.learningcontent.ChapterService.class),
-                mock(AssignmentConfigurationService.class));
+                mock(AssignmentConfigurationService.class),
+                mock(vn.edu.hcmut.co3103.lms.service.adaptive.MasteryRecalculationService.class));
         Activity activity = new Activity(UUID.randomUUID(), "Assignment", null,
                 Activity.ActivityType.ASSIGNMENT, 0, null);
         when(activities.findById(activityId)).thenReturn(Optional.of(activity));

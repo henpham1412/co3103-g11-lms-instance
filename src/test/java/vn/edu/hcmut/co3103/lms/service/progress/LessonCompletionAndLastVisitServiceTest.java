@@ -50,7 +50,8 @@ class LessonCompletionAndLastVisitServiceTest {
             classMemberRepository,
             chapterRepository,
             lessonRepository,
-            completionMarkRepository
+            completionMarkRepository,
+            mock(vn.edu.hcmut.co3103.lms.service.adaptive.MasteryRecalculationService.class)
     );
 
     private final LastVisitService lastVisitService = new LastVisitService(
