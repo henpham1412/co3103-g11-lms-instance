@@ -37,6 +37,7 @@ class MigrationPolicyTest {
             Map.entry("V11__create_lesson_skill_topics.sql", 261484167),
             Map.entry("V12__create_activity_skill_topics.sql", -1627510611),
             Map.entry("V13__create_question_skill_topics.sql", -415992144),
+            Map.entry("V14__create_file_assignments.sql", 1890549139),
             Map.entry("V17__create_learning_signals_and_learner_mastery.sql", 970127172));
 
     @Test
