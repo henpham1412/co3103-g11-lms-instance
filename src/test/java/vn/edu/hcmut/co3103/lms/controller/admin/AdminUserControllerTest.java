@@ -22,6 +22,7 @@ import vn.edu.hcmut.co3103.lms.dto.admin.AdminUserPageResponse;
 import vn.edu.hcmut.co3103.lms.dto.admin.AdminUserResponse;
 import vn.edu.hcmut.co3103.lms.dto.admin.UpdateUserAccessRequest;
 import vn.edu.hcmut.co3103.lms.exception.GlobalExceptionHandler;
+import vn.edu.hcmut.co3103.lms.exception.AdminUserExceptionHandler;
 import vn.edu.hcmut.co3103.lms.exception.LastAdminProtectionException;
 import vn.edu.hcmut.co3103.lms.exception.UserNotFoundException;
 import vn.edu.hcmut.co3103.lms.service.admin.AdminUserService;
@@ -57,7 +58,7 @@ class AdminUserControllerTest {
     void setUp() {
         mockMvc = MockMvcBuilders.standaloneSetup(new AdminUserController(service))
                 .setCustomArgumentResolvers(new PageableHandlerMethodArgumentResolver())
-                .setControllerAdvice(new GlobalExceptionHandler())
+                .setControllerAdvice(new AdminUserExceptionHandler(), new GlobalExceptionHandler())
                 .build();
     }
 

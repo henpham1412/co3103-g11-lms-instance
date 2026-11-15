@@ -116,7 +116,7 @@ The service transaction:
 3. Writes one `LMS_USER_ACCESS_UPDATED` event for an actual change, in the same
    transaction, and commits both records together.
 
-Flyway **V16** creates `audit_logs`: `audit_log_id`, `actor_id`, `action`,
+Flyway **V20** creates `audit_logs`: `audit_log_id`, `actor_id`, `action`,
 `entity_type`, `entity_id`, `details`, `created_at`. The actor is the authenticated
 immutable UUID; the target is a `LmsUserAccess` UUID. JSON text in `details`
 contains before/after `lms_role` and `access_status`, without profile data. The
@@ -166,18 +166,29 @@ Custom appenders must use `%safeMessage` and `%safeThrowable`; raw `%msg`, `%ex`
 MDC, structured arguments, or replacement logging configurations bypass this
 boundary. Application logs must not deliberately include profiles or credentials.
 
-## Canonical migration history after the main merge
+## Canonical migration history after current-main integration
 
-The shared migration sequence is V1-V16. Main's V1-V13 SQL and checksums are
-unchanged. The three LMS-13 migrations were renamed without changing their SQL:
+Integrated main `f8f0b70a8e4e9222bd2c9d2063baf1687dfabc87`, which contains
+V1–V14 (LMS-6 V14) and V17 (LMS-9). These merged files and checksums remain unchanged.
+The unapplied LMS-13 SQL is reallocated by filename only, without changing SQL bytes:
 
-| Earlier feature version | Canonical migration | Flyway checksum |
+| Previous unmerged LMS-13 version | Current migration | Flyway checksum |
 | --- | --- | ---: |
-| V7 | `V14__index_lms_user_access_default_sort.sql` | 354517154 |
-| V8 | `V15__add_identity_sync_watermarks.sql` | 1240703539 |
-| V9 | `V16__create_audit_logs.sql` | 67085040 |
+| V14 (earlier feature V7) | `V18__index_lms_user_access_default_sort.sql` | 354517154 |
+| V15 (earlier feature V8) | `V19__add_identity_sync_watermarks.sql` | 1240703539 |
+| V16 (earlier feature V9) | `V20__create_audit_logs.sql` | 67085040 |
 
-Inspect an existing database's history before starting this version:
+The combined production set is V1–V14,V17–V20: 18 migrations. Missing V15/V16 versions
+are intentional. Versions are compared with current main only; unmerged PRs do not reserve versions.
+
+Before reallocation, the stopped local persistent PostgreSQL volume was mounted read-only and copied
+into an isolated inspection volume. SELECT-only inspection of every LMS Flyway history in that copy
+found no applications of the old LMS-13 V14/V15/V16 scripts. The actual development database was at
+V1–V13; older LMS-9 test histories included V17. The original volume/container was not started or
+modified. Old LMS-13 versions seen in prior review databases belong to disposable test runs.
+External/shared/production histories are not accessible and are not claimed verified.
+
+Inspect each deployment database before starting this version:
 
 ```sql
 SELECT installed_rank, version, script, checksum, success
@@ -187,25 +198,38 @@ ORDER BY installed_rank;
 
 | Existing history | Upgrade procedure |
 | --- | --- |
-| Empty database | Apply canonical V1-V16 and validate. |
-| Canonical main V1-V13 | Apply exactly V14-V16; preserve earlier data and history. |
-| Older canonical main (for example V4) | Apply the missing canonical migrations through V16 and validate. |
-| Old feature V7 index / V8 watermarks / V9 audit | Source renames alone cannot upgrade this history: canonical V7-V9 have different meanings. For disposable data, create a new database/schema and reseed. For persistent data, back up and inventory it, then prepare and verify a separate reconciliation runbook on a clone before deployment. |
+| Empty database | Apply V1–V14,V17–V20 and validate. |
+| Current main V1–V14,V17 | Apply exactly V18–V20; preserve existing data and checksums. |
+| Canonical V13/V4 | Apply remaining current-main migrations, then V18–V20; preserve earlier history. |
+| Applied old feature V7/V8/V9 or LMS-13 V14/V15/V16 | Stop. Source renames cannot reconcile a persistent conflicting history. Inventory/back up it and verify a separately approved reconciliation runbook on a clone. |
+| V17 already applied without main's V14 | Stop and coordinate the target's history before deployment; do not enable out-of-order migration blindly. |
 
-Do not use automatic `repair`, `baseline`, `outOfOrder`, disabled validation, or
-blind edits to history to reconcile the old feature database. This merge does
-not modify an existing application's database.
+Do not repair/reset, rewrite/renumber applied history, disable validation or change merged V14/V17.
+No shared or production database is migrated by this implementation task.
 
-`MigrationPolicyTest` pins all 16 filenames/checksums, unique numeric versions,
-and LF endings. `MainV13MigrationIntegrationTest` preserves populated users,
-bootstrap, classes/members, content, progress, prerequisites and topic links
-across the three-migration upgrade. It verifies watermark precision, the audit
-actor foreign key, and a second migration with zero changes. The index test
-covers fresh, V4 and V13 databases; the older bootstrap/V4 upgrade tests remain.
-Run a clean build after renaming SQL so obsolete V7-V9 resources cannot remain
-in `target/classes`.
+`MigrationPolicyTest` pins all 18 filenames/checksums and the exact unique version set. The existing
+`MainV13MigrationIntegrationTest` now exercises both V13 and current-main V17 baselines. Its V17 case
+preserves populated Assignment, attachment, submission, learning-signal and mastery rows, original
+constraints, user-access fields and existing migration history while applying exactly three migrations.
+Both cases verify watermark precision, index definition, audit actor FK/restricted deletion and no-op
+restart. V4, bootstrap, index and watermark upgrade regressions remain covered. Run a clean build after
+renaming so obsolete V14/V15/V16 feature resources cannot remain in target/classes.
 
-## Verification
+## Administrative error isolation
+
+`AdminUserExceptionHandler` is controller-scoped and retains administrative validation, missing-user,
+last-Administrator, persistence and framework error contracts. GlobalExceptionHandler otherwise retains
+current-main behavior, including INVALID_QUERY_PARAMETER for malformed recommendation/mastery UUIDs.
+Only method/media failures raised before a controller is selected use a narrow admin-users route check
+(including context paths and both route aliases) to delegate to the same administrative formatter.
+No adaptive routes are added to a global classification list. Existing tests keep admin probes under
+scoped advice and non-admin probes under main's global advice; no authorization/audit tests are removed.
+
+`Lms13ErrorContractPostgresHttpTest` exercises actual signed-JWT HTTP requests for malformed Student
+recommendation and Tutor mastery IDs, both admin route aliases, invalid admin bodies, and unauthorized,
+wrong-role, unprovisioned and suspended access. Existing LMS-6/LMS-7/LMS-9 implementations are preserved.
+
+## Historical verification before current-main integration
 
 Use JDK 25 and a **disposable PostgreSQL 18.6 database**. Set `DB_URL`, `DB_USERNAME`,
 and `DB_PASSWORD`; the test user needs schema-creation permission. Tests apply
@@ -260,3 +284,59 @@ origin is `http://localhost:8081`. Set `admin_jwt`, `student_jwt`, and
 and a third disposable target. Run the collection in order: access updates leave
 the target ACTIVE/TUTOR. Last-admin cases preflight the fixture and fail/skip the
 mutation if it is unsuitable. Keep token values out of exported files.
+
+## Current-main integration verification (2026-11-15)
+
+Main baseline: `f8f0b70a8e4e9222bd2c9d2063baf1687dfabc87`.
+Integration merge: `3affe5fdd140d17fad64f50057acdc71d280d9e5`.
+The corrections preserve the existing administrator service/controller, JWT identity synchronization,
+role/status validation, last-active-Administrator lock and transactional audit implementation.
+
+Executed on JDK 25.0.5.0.3 and disposable PostgreSQL 18.6, with explicit database variables:
+
+```bash
+DB_URL=jdbc:postgresql://localhost:55436/lms13_fixes_focus DB_USERNAME=postgres DB_PASSWORD='' \
+/workspace/.setup/mvn -B -Dtest=Lms13ErrorContractPostgresHttpTest,AdminUserControllerTest,AdminUserControllerIntegrationTest,AdminUserHttpRegressionTest,Lms9AdaptivePostgresHttpTest,GlobalExceptionHandlerTest,MigrationPolicyTest,MainV13MigrationIntegrationTest,AssignmentMigrationPostgresTest,MasteryMigrationPostgresTest test
+
+DB_URL=jdbc:postgresql://localhost:55436/lms13_fixes_focus DB_USERNAME=postgres DB_PASSWORD='' \
+/workspace/.setup/mvn -B --no-transfer-progress -Dtest=ClassAdminIntegrationHttpTest,Lms13ErrorContractPostgresHttpTest test
+
+DB_URL=jdbc:postgresql://localhost:55436/lms13_fixes_verify_final DB_USERNAME=postgres DB_PASSWORD='' \
+/workspace/.setup/mvn -B --no-transfer-progress clean verify
+```
+
+`/workspace/.setup/mvn` delegates to this repository's Maven Wrapper with the installed JDK 25,
+trusted Maven settings and dependency cache. Each database was created explicitly in an isolated test
+container; no test used the stopped persistent development database or a production/shared database.
+
+| Gate | Result |
+| --- | --- |
+| Focused migration/admin/LMS-9/error contracts | 463 passed, zero failures/errors/skips |
+| Class/admin header and HTTP contract gate | 12 passed, zero failures/errors/skips |
+| Final clean verify | 1,878 tests in 89 suites, zero failures/errors/skips; BUILD SUCCESS; application JAR packaged |
+| Existing admin HTTP / controller integration / controller tests | 193 / 54 / 95 passed |
+| Existing admin service / PostgreSQL integration tests | 58 / 12 passed |
+| JWT converter / validation | 47 / 69 passed |
+| New cross-module HTTP contracts | 4 passed |
+| Main V13/current-main V17 upgrade paths | 2 passed |
+| LMS-6 Assignment HTTP / file storage | 29 / 12 passed |
+| LMS-9 HTTP | 40 passed |
+| Quiz / Assignment evidence readers | 31 / 41 passed |
+| Calculator / persistence | 43 / 17 passed |
+| Recommendation PostgreSQL / ranker | 35 / 15 passed |
+| LMS-7 progress suites | 11 passed |
+
+Counts overlap; the full-suite total is 1,878. The final full execution completed at 03:30:25 UTC.
+These are newly executed results for this integration, not historical CI reports. The suite contains
+both unit/mock tests and real PostgreSQL/HTTP tests, plus the existing H2 bootstrap tests.
+
+Earlier integration runs exposed old migration-count/version expectations, standalone tests wired only
+to global advice, and admin formatting expectations on non-admin probes. Tests now exercise the proper
+scoped advice and exact current-main non-admin contracts; no security/audit assertions were removed.
+The first full run had two failures because a Class test expected the admin-normalized Allow header.
+Its non-admin assertion now preserves main's `GET, PATCH`; admin users retain `GET, HEAD, PATCH, OPTIONS`.
+The final full run above passes. No production LMS-6/LMS-9 implementation was changed.
+
+External deployment histories remain unverified. Inspect them before deploying; stop if older feature
+migration versions were applied persistently. No Flyway repair/reset, validation bypass, shared-history
+edit or production reconciliation was performed.

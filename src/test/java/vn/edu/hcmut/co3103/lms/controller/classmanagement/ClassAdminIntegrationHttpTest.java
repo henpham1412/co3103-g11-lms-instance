@@ -135,7 +135,8 @@ class ClassAdminIntegrationHttpTest {
         assertThat(adminMethod.headers().firstValue("Allow").orElseThrow()).isEqualTo("GET, HEAD, PATCH, OPTIONS");
         var classMethod = request("PUT", classPath(), tutorToken, "{}", "application/json");
         assertError(classMethod, 405, "METHOD_NOT_ALLOWED");
-        assertThat(classMethod.headers().firstValue("Allow").orElseThrow()).isEqualTo("GET, HEAD, PATCH, OPTIONS");
+        // Non-admin methods retain current main's Allow header; only admin-users formatting is normalized.
+        assertThat(classMethod.headers().firstValue("Allow").orElseThrow()).isEqualTo("GET, PATCH");
         for (String type : List.of("text/plain", "application/json;charset=unsupported-charset")) {
             assertError(request("PATCH", adminPath + "/" + student, adminToken, "{}", type),
                     415, "UNSUPPORTED_MEDIA_TYPE");

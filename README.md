@@ -288,9 +288,9 @@ File Assignment creation is atomic through `POST /api/v1/lessons/{lessonId}/acti
 with `activity_type: ASSIGNMENT` and an embedded `assignment` configuration.
 Update settings through `PATCH /api/v1/activities/{activityId}/assignment`; omitted
 fields are preserved. Separate POST/PUT configuration creation is not supported.
-**PR #35 remains blocked from merge by the V14 collision with PR #31.** See
-[the re-review record](docs/lms6-re-review.md) for access, byte validation, tests and
-required forward-only migration coordination.
+LMS-6 V14 is merged and preserved. LMS-13 uses unapplied V18–V20 after current main
+(V1–V14,V17); see [administrative migration coordination](docs/admin-user-management.md)
+for allocation and persistent-history checks.
 
 File assignments use the assessment storage directory `lms.storage.assignments.directory`
 (environment variable `LMS_STORAGE_ASSIGNMENTS_DIRECTORY` when configured by deployment) and

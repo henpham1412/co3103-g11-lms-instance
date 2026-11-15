@@ -1,7 +1,8 @@
 package vn.edu.hcmut.co3103.lms.bootstrap;
 
 import org.flywaydb.core.Flyway;
-import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.dao.DataIntegrityViolationException;
@@ -24,8 +25,9 @@ class MainV13MigrationIntegrationTest {
     @Autowired private DataSource dataSource;
     @Autowired private JdbcTemplate jdbc;
 
-    @Test
-    void upgradesCanonicalMainWithoutChangingLearningProgressTopicsOrHistory() {
+    @ParameterizedTest
+    @ValueSource(ints = {13, 17})
+    void upgradesCanonicalMainWithoutChangingLearningProgressTopicsOrHistory(int baseline) {
         String schema = "main_v13_" + UUID.randomUUID().toString().replace("-", "");
         UUID admin = UUID.randomUUID();
         UUID tutor = UUID.randomUUID();
@@ -41,11 +43,12 @@ class MainV13MigrationIntegrationTest {
         UUID prerequisiteId = UUID.randomUUID();
         var configuration = Flyway.configure().dataSource(dataSource).schemas(schema);
         try {
-            var main = configuration.target("13").load();
+            var main = configuration.target(Integer.toString(baseline)).load();
             main.migrate();
             main.validate();
-            assertThat(main.info().current().getScript()).isEqualTo("V13__create_question_skill_topics.sql");
-            assertThat(main.info().current().getChecksum()).isEqualTo(-415992144);
+            assertThat(main.info().current().getScript()).isEqualTo(baseline == 13 ? "V13__create_question_skill_topics.sql"
+                    : "V17__create_learning_signals_and_learner_mastery.sql");
+            assertThat(main.info().current().getChecksum()).isEqualTo(baseline == 13 ? -415992144 : 970127172);
             for (UUID user : List.of(admin, tutor, student)) {
                 jdbc.update("INSERT INTO " + schema + ".lms_user_access "
                                 + "(user_id, full_name, email, lms_role, access_status) VALUES (?, ?, ?, ?, 'ACTIVE')",
@@ -87,24 +90,43 @@ class MainV13MigrationIntegrationTest {
             String users = "SELECT user_id, full_name, email, lms_role, access_status, last_login_at, "
                     + "created_at, updated_at FROM " + schema + ".lms_user_access ORDER BY user_id";
             var usersBefore = jdbc.queryForList(users);
-            List<String> existingTables = List.of("class", "class_member", "lms_setup_state", "chapter", "lesson",
+            List<String> existingTables = new java.util.ArrayList<>(List.of("class", "class_member", "lms_setup_state", "chapter", "lesson",
                     "activity", "quiz", "question", "completion_mark", "last_visit", "skill_topics",
-                    "skill_prerequisites", "lesson_skill_topics", "activity_skill_topics", "question_skill_topics");
+                    "skill_prerequisites", "lesson_skill_topics", "activity_skill_topics", "question_skill_topics"));
+            if (baseline == 17) {
+                UUID assignmentActivity = UUID.randomUUID(), assignment = UUID.randomUUID(), submission = UUID.randomUUID();
+                jdbc.update("INSERT INTO " + schema + ".activity(activity_id,lesson_id,title,activity_type,sequence_order) VALUES (?,?,'Existing Assignment','ASSIGNMENT',1)", assignmentActivity, lessonId);
+                jdbc.update("INSERT INTO " + schema + ".activity_skill_topics(activity_id,skill_topic_id) VALUES (?,?)", assignmentActivity, topicId);
+                jdbc.update("INSERT INTO " + schema + ".assignment(assignment_id,activity_id,deadline) VALUES (?,?,TIMESTAMPTZ '2030-01-01')", assignment, assignmentActivity);
+                jdbc.update("INSERT INTO " + schema + ".assignment_attachment(assignment_id,file_name,storage_path,mime_type,size_bytes) VALUES (?,'reference','unused','text/plain',1)", assignment);
+                jdbc.update("INSERT INTO " + schema + ".submission(submission_id,assignment_id,class_member_id,file_name,storage_path,mime_type,size_bytes,submitted_at,status,score,graded_by,graded_at) VALUES (?,?,?,'answer','unused','text/plain',1,TIMESTAMPTZ '2026-01-01','GRADED',30,?,TIMESTAMPTZ '2026-01-02')", submission, assignment, memberId, tutor);
+                jdbc.update("INSERT INTO " + schema + ".learning_signal(class_member_id,skill_topic_id,signal_type,signal_value,recorded_at,source_type,source_id) VALUES (?,?,'ASSIGNMENT_RESULT',30,TIMESTAMPTZ '2026-01-01','SUBMISSION',?)", memberId, topicId, submission);
+                jdbc.update("INSERT INTO " + schema + ".learner_mastery(class_member_id,skill_topic_id,mastery_level,mastery_score) VALUES (?,?,'WEAK',30)", memberId, topicId);
+                existingTables.addAll(List.of("assignment", "assignment_attachment", "submission", "learning_signal", "learner_mastery"));
+            }
+            String constraints = "SELECT t.relname,c.conname,c.contype,pg_get_constraintdef(c.oid) definition "
+                    + "FROM pg_constraint c JOIN pg_class t ON t.oid=c.conrelid JOIN pg_namespace n ON n.oid=t.relnamespace "
+                    + "WHERE n.nspname=? AND t.relname IN ("
+                    + java.util.stream.Stream.concat(existingTables.stream(), java.util.stream.Stream.of("lms_user_access"))
+                    .map(table -> "'" + table + "'").collect(java.util.stream.Collectors.joining(","))
+                    + ") ORDER BY t.relname,c.conname";
+            var constraintsBefore = jdbc.queryForList(constraints, schema);
             var rowsBefore = snapshot(schema, existingTables);
             assertThat(rowsBefore.values()).allSatisfy(rows -> assertThat(rows).isNotEmpty());
             String history = "SELECT version, script, checksum, success FROM " + schema
-                    + ".flyway_schema_history WHERE version::integer <= 13 ORDER BY installed_rank";
+                    + ".flyway_schema_history WHERE version::integer <= " + baseline + " ORDER BY installed_rank";
             var historyBefore = jdbc.queryForList(history);
-            assertThat(historyBefore).hasSize(13);
+            assertThat(historyBefore).hasSize(baseline == 13 ? 13 : 15);
 
             var latest = configuration.target("latest").load();
-            assertThat(latest.migrate().migrationsExecuted).isEqualTo(3);
+            assertThat(latest.migrate().migrationsExecuted).isEqualTo(baseline == 13 ? 5 : 3);
             latest.validate();
             assertThat(latest.info().applied()).filteredOn(info -> info.getVersion() != null)
                     .extracting(info -> info.getVersion().getVersion())
                     .containsExactly("1", "2", "3", "4", "5", "6", "7", "8", "9", "10", "11", "12", "13",
-                            "14", "15", "16");
+                            "14", "17", "18", "19", "20");
             assertThat(jdbc.queryForList(history)).isEqualTo(historyBefore);
+            assertThat(jdbc.queryForList(constraints, schema)).isEqualTo(constraintsBefore);
             assertThat(jdbc.queryForList(users)).isEqualTo(usersBefore);
             assertThat(snapshot(schema, existingTables)).isEqualTo(rowsBefore);
             assertThat(jdbc.queryForObject("SELECT indexdef FROM pg_indexes WHERE schemaname = ? "

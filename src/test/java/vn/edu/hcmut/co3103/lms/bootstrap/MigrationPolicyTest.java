@@ -38,16 +38,16 @@ class MigrationPolicyTest {
             Map.entry("V11__create_lesson_skill_topics.sql", 261484167),
             Map.entry("V12__create_activity_skill_topics.sql", -1627510611),
             Map.entry("V13__create_question_skill_topics.sql", -415992144),
-            Map.entry("V14__index_lms_user_access_default_sort.sql", 354517154),
-            Map.entry("V15__add_identity_sync_watermarks.sql", 1240703539),
-            Map.entry("V16__create_audit_logs.sql", 67085040),
+            Map.entry("V18__index_lms_user_access_default_sort.sql", 354517154),
+            Map.entry("V19__add_identity_sync_watermarks.sql", 1240703539),
+            Map.entry("V20__create_audit_logs.sql", 67085040),
             Map.entry("V14__create_file_assignments.sql", 1890549139),
             Map.entry("V17__create_learning_signals_and_learner_mastery.sql", 970127172));
 
     @Test
-    void keepsExactlyTheSixteenApprovedMigrations() throws IOException {
+    void keepsExactlyTheCombinedApprovedMigrations() throws IOException {
         List<MigrationFile> migrations = migrations();
-        assertThat(migrations).hasSize(16);
+        assertThat(migrations).hasSize(18);
         assertThat(migrations).extracting(MigrationFile::fileName)
                 .containsExactlyInAnyOrderElementsOf(APPROVED_CHECKSUMS.keySet());
     }
@@ -57,8 +57,9 @@ class MigrationPolicyTest {
         assertThat(migrations()).extracting(migration -> MigrationVersion.fromVersion(
                 migration.fileName().substring(1, migration.fileName().indexOf("__"))))
                 .doesNotHaveDuplicates()
-                .containsExactlyInAnyOrderElementsOf(java.util.stream.IntStream.rangeClosed(1, 16)
-                        .mapToObj(version -> MigrationVersion.fromVersion(Integer.toString(version))).toList());
+                .containsExactlyInAnyOrderElementsOf(java.util.stream.Stream.concat(java.util.stream.IntStream.rangeClosed(1, 14).boxed(),
+                                java.util.stream.IntStream.rangeClosed(17, 20).boxed())
+                        .map(version -> MigrationVersion.fromVersion(Integer.toString(version))).toList());
     }
 
     @Test
