@@ -10,11 +10,11 @@ import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.*;
 
-/** PR #31 fixtures are exact files from 30a62a05906828261c105584582ad375b4abf552. */
+/** Upgrade only the current-main migration set plus LMS-9 V17; unmerged PRs reserve no versions. */
 class MasteryMigrationPostgresTest {
     @ParameterizedTest
-    @ValueSource(booleans = {false, true})
-    void upgradesV13AndValidatesWithOrWithoutThePendingLms13MigrationSet(boolean withLms13) {
+    @ValueSource(ints = {13, 14})
+    void upgradesCurrentMainBaselinesAndValidatesV17(int baseline) {
         var source = new DriverManagerDataSource(
                 System.getenv().getOrDefault("DB_URL", "jdbc:postgresql://localhost:5432/lms_instance_dev"),
                 System.getenv().getOrDefault("DB_USERNAME", "postgres"),
@@ -25,18 +25,15 @@ class MasteryMigrationPostgresTest {
         db.execute("CREATE SCHEMA " + schema);
         try {
             Flyway.configure().dataSource(source).schemas(schema).defaultSchema(schema)
-                    .locations("classpath:db/migration").target("13").load().migrate();
+                    .locations("classpath:db/migration").target(Integer.toString(baseline)).load().migrate();
             var checksums = db.queryForList("SELECT version,checksum FROM " + schema + ".flyway_schema_history WHERE version IS NOT NULL ORDER BY installed_rank");
-            String[] locations = withLms13
-                    ? new String[]{"classpath:db/migration", "classpath:adaptive/lms13-30a62a0"}
-                    : new String[]{"classpath:db/migration"};
             var upgraded = Flyway.configure().dataSource(source).schemas(schema).defaultSchema(schema)
-                    .locations(locations).load();
+                    .locations("classpath:db/migration").load();
             upgraded.migrate(); upgraded.validate();
-            assertThat(db.queryForList("SELECT version,checksum FROM " + schema + ".flyway_schema_history WHERE version::integer<=13 ORDER BY installed_rank"))
+            assertThat(db.queryForList("SELECT version,checksum FROM " + schema + ".flyway_schema_history WHERE version::integer<=? ORDER BY installed_rank", baseline))
                     .isEqualTo(checksums);
-            assertThat(db.queryForObject("SELECT count(*) FROM " + schema + ".flyway_schema_history WHERE version IS NOT NULL", Integer.class))
-                    .isEqualTo(withLms13 ? 17 : 14);
+            assertThat(db.queryForList("SELECT version FROM " + schema + ".flyway_schema_history WHERE version IS NOT NULL ORDER BY installed_rank", String.class))
+                    .containsExactly("1", "2", "3", "4", "5", "6", "7", "8", "9", "10", "11", "12", "13", "14", "17");
             assertThat(db.queryForList("SELECT table_name FROM information_schema.tables WHERE table_schema=? AND table_name IN ('learning_signal','learner_mastery')", String.class, schema))
                     .containsExactlyInAnyOrder("learning_signal", "learner_mastery");
             assertThat(db.queryForObject("SELECT numeric_scale IS NULL FROM information_schema.columns WHERE table_schema=? AND table_name='learner_mastery' AND column_name='mastery_score'", Boolean.class, schema)).isTrue();

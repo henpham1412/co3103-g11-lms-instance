@@ -32,6 +32,7 @@ public class MasteryRecalculationService {
     private final EntityManager entityManager;
     private final JdbcTemplate jdbc;
     private final TopicQuizEvidenceReader quizEvidence;
+    private final TopicAssignmentEvidenceReader assignmentEvidence;
     private final MasteryCalculator calculator;
     private final LearningSignalRepository signals;
     private final LearnerMasteryRepository masteries;
@@ -96,6 +97,100 @@ public class MasteryRecalculationService {
         entityManager.flush();
     }
 
+    /** Joins the canonical grading transaction after the persisted score is flushed. */
+    public void synchronizeSubmission(UUID submissionId) {
+        AssignmentScope scope = jdbc.query("""
+                SELECT ch.class_id, cm.class_member_id, a.activity_id FROM submission s
+                JOIN class_member cm ON cm.class_member_id=s.class_member_id
+                JOIN assignment assignment ON assignment.assignment_id=s.assignment_id
+                JOIN activity a ON a.activity_id=assignment.activity_id AND a.activity_type='ASSIGNMENT'
+                JOIN lesson l ON l.lesson_id=a.lesson_id JOIN chapter ch ON ch.chapter_id=l.chapter_id
+                WHERE s.submission_id=? AND cm.class_id=ch.class_id
+                """, (row, index) -> new AssignmentScope(row.getObject("class_id", UUID.class),
+                row.getObject("class_member_id", UUID.class), row.getObject("activity_id", UUID.class)), submissionId)
+                .stream().findFirst().orElseThrow(() -> new IllegalArgumentException("Submission scope not found"));
+        lockClass(scope.classId());
+        entityManager.flush();
+        Set<UUID> topics = new HashSet<>(currentAssignmentTopics(scope.activityId(), scope.classId()));
+        topics.addAll(jdbc.queryForList("""
+                SELECT skill_topic_id FROM learning_signal WHERE class_member_id=?
+                AND signal_type='ASSIGNMENT_RESULT' AND source_type='SUBMISSION' AND source_id=?
+                """, UUID.class, scope.memberId(), submissionId));
+        for (UUID topic : topics) recalculateLocked(scope.classId(), scope.memberId(), topic);
+        entityManager.flush();
+    }
+
+    /** Only Assignment association writes call this; Quiz mapping behavior is unchanged. */
+    public void synchronizeAssignment(UUID activityId, Set<UUID> changedTopicIds) {
+        UUID classId = jdbc.queryForObject("""
+                SELECT ch.class_id FROM activity a JOIN lesson l ON l.lesson_id=a.lesson_id
+                JOIN chapter ch ON ch.chapter_id=l.chapter_id
+                WHERE a.activity_id=? AND a.activity_type='ASSIGNMENT'
+                """, UUID.class, activityId);
+        lockClass(classId);
+        entityManager.flush();
+        Set<UUID> topics = new HashSet<>(Objects.requireNonNull(changedTopicIds));
+        topics.addAll(currentAssignmentTopics(activityId, classId));
+        topics.addAll(jdbc.queryForList("""
+                SELECT DISTINCT signal.skill_topic_id FROM learning_signal signal
+                JOIN submission s ON s.submission_id=signal.source_id AND s.class_member_id=signal.class_member_id
+                JOIN assignment assignment ON assignment.assignment_id=s.assignment_id
+                JOIN class_member cm ON cm.class_member_id=s.class_member_id
+                WHERE assignment.activity_id=? AND cm.class_id=?
+                  AND signal.signal_type='ASSIGNMENT_RESULT' AND signal.source_type='SUBMISSION'
+                """, UUID.class, activityId, classId));
+        var members = jdbc.queryForList("""
+                SELECT DISTINCT cm.class_member_id FROM submission s
+                JOIN assignment assignment ON assignment.assignment_id=s.assignment_id
+                JOIN class_member cm ON cm.class_member_id=s.class_member_id
+                WHERE assignment.activity_id=? AND cm.class_id=?
+                """, UUID.class, activityId, classId);
+        for (UUID topic : topics) for (UUID member : members) recalculateLocked(classId, member, topic);
+        entityManager.flush();
+    }
+
+    /** Operator integration boundary: one atomic Class rebuild, never invoked at startup or by an API. */
+    @Transactional
+    public void reconcileAssignments(UUID classId) {
+        lockClass(classId);
+        entityManager.flush();
+        var pairs = jdbc.query("""
+                SELECT cm.class_member_id, st.skill_topic_id FROM submission s
+                JOIN class_member cm ON cm.class_member_id=s.class_member_id
+                JOIN assignment assignment ON assignment.assignment_id=s.assignment_id
+                JOIN activity a ON a.activity_id=assignment.activity_id AND a.activity_type='ASSIGNMENT'
+                JOIN lesson l ON l.lesson_id=a.lesson_id JOIN chapter ch ON ch.chapter_id=l.chapter_id
+                JOIN activity_skill_topics mapping ON mapping.activity_id=a.activity_id
+                JOIN skill_topics st ON st.skill_topic_id=mapping.skill_topic_id AND st.class_id=cm.class_id
+                WHERE cm.class_id=? AND ch.class_id=?
+                UNION
+                SELECT cm.class_member_id, st.skill_topic_id FROM learning_signal signal
+                JOIN class_member cm ON cm.class_member_id=signal.class_member_id
+                JOIN skill_topics st ON st.skill_topic_id=signal.skill_topic_id AND st.class_id=cm.class_id
+                WHERE cm.class_id=? AND signal.signal_type='ASSIGNMENT_RESULT' AND signal.source_type='SUBMISSION'
+                UNION
+                SELECT cm.class_member_id, st.skill_topic_id FROM learner_mastery mastery
+                JOIN class_member cm ON cm.class_member_id=mastery.class_member_id
+                JOIN skill_topics st ON st.skill_topic_id=mastery.skill_topic_id AND st.class_id=cm.class_id
+                WHERE cm.class_id=?
+                ORDER BY 1, 2
+                """, (row, index) -> new MasteryPair(row.getObject("class_member_id", UUID.class),
+                row.getObject("skill_topic_id", UUID.class)), classId, classId, classId, classId);
+        for (var pair : pairs) recalculateLocked(classId, pair.memberId(), pair.topicId());
+        entityManager.flush();
+    }
+
+    private List<UUID> currentAssignmentTopics(UUID activityId, UUID classId) {
+        return jdbc.queryForList("""
+                SELECT st.skill_topic_id FROM activity_skill_topics mapping
+                JOIN skill_topics st ON st.skill_topic_id=mapping.skill_topic_id
+                WHERE mapping.activity_id=? AND st.class_id=?
+                """, UUID.class, activityId, classId);
+    }
+
+    private record AssignmentScope(UUID classId, UUID memberId, UUID activityId) { }
+    private record MasteryPair(UUID memberId, UUID topicId) { }
+
     public void synchronizeCompletion(UUID classId, UUID memberId) {
         lockClass(classId);
         entityManager.flush();
@@ -144,9 +239,22 @@ public class MasteryRecalculationService {
 
         var quizScores = evidence.stream().limit(3)
                 .map(TopicQuizEvidenceReader.TopicQuizEvidence::topicScore).toList();
-        // LMS-6 integration will supply canonical Assignment scores here. No Assignment
-        // producer/reader exists yet; contextual signals NEVER enter either component.
-        var result = calculator.calculateMastery(quizScores, List.of());
+        var assignmentResults = assignmentEvidence.readAllGradedCandidates(classId, memberId, topicId);
+        Map<UUID, LearningSignal> previousAssignments = signals
+                .findByClassMemberIdAndSkillTopicIdAndSignalType(memberId, topicId, LearningSignalType.ASSIGNMENT_RESULT)
+                .stream().collect(Collectors.toMap(LearningSignal::getSourceId, signal -> signal));
+        for (var assignment : assignmentResults) {
+            LearningSignal signal = previousAssignments.remove(assignment.submissionId());
+            if (signal == null) {
+                signals.save(new LearningSignal(memberId, topicId, LearningSignalType.ASSIGNMENT_RESULT,
+                        assignment.topicScore(), assignment.submittedAt(), LearningSignalSourceType.SUBMISSION,
+                        assignment.submissionId()));
+            } else signal.update(assignment.topicScore(), assignment.submittedAt());
+        }
+        signals.deleteAll(previousAssignments.values());
+        var assignmentScores = assignmentResults.stream().limit(3)
+                .map(TopicAssignmentEvidenceReader.TopicAssignmentEvidence::topicScore).toList();
+        var result = calculator.calculateMastery(quizScores, assignmentScores);
         var existing = masteries.findByClassMemberIdAndSkillTopicId(memberId, topicId);
         if (result.isEmpty()) {
             existing.ifPresent(masteries::delete);

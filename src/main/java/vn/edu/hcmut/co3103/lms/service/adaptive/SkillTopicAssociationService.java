@@ -116,7 +116,11 @@ public class SkillTopicAssociationService {
             throw new AppException(ErrorCode.QUIZ_TOPICS_DERIVED);
         }
         SkillTopicChecks.requireTopicsInClass(topics, requested, activity.classId());
-        return replaceActivityMappings(activityId, requested);
+        TopicChange change = replaceActivityMappings(activityId, requested);
+        Set<UUID> changed = new java.util.HashSet<>(change.previousTopicIds());
+        changed.addAll(change.currentTopicIds());
+        mastery.synchronizeAssignment(activityId, changed);
+        return change;
     }
 
     public List<SkillTopic> getQuestionTopics(UUID questionId) {

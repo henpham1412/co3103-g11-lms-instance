@@ -64,6 +64,7 @@ class Lms9AdaptivePostgresHttpTest {
     @AfterEach void cleanupOwnFixtures() {
         for (UUID courseId : courses) {
             var params = new Object[]{courseId};
+            db.update("DELETE FROM assignment WHERE activity_id IN (SELECT act.activity_id FROM activity act JOIN lesson l ON l.lesson_id=act.lesson_id JOIN chapter ch ON ch.chapter_id=l.chapter_id WHERE ch.class_id=?)", params);
             String quizzes = "SELECT q.quiz_id FROM quiz q JOIN activity act ON act.activity_id=q.activity_id JOIN lesson l ON l.lesson_id=act.lesson_id JOIN chapter ch ON ch.chapter_id=l.chapter_id WHERE ch.class_id=?";
             db.update("DELETE FROM attempt_answer_option WHERE answer_id IN (SELECT answer_id FROM attempt_answer WHERE attempt_id IN (SELECT attempt_id FROM quiz_attempt WHERE quiz_id IN (" + quizzes + ")))", params);
             db.update("DELETE FROM attempt_answer WHERE attempt_id IN (SELECT attempt_id FROM quiz_attempt WHERE quiz_id IN (" + quizzes + "))", params);
@@ -316,6 +317,56 @@ class Lms9AdaptivePostgresHttpTest {
         db.update("DELETE FROM question_skill_topics WHERE question_id IN (?,?)", first.question(), second.question());
         db.update("DELETE FROM skill_topics WHERE class_id=?", course);
         assertThat(get(progressPath(), owner).get("skill_mastery").size()).isZero(); assertThat(get(masteryPath(), owner).get("items").size()).isZero();
+    }
+
+    @Test void assignmentGradeAndRegradeReachExistingTutorApisWithUnchangedShapes() throws Exception {
+        UUID source=assignmentSubmission(a);
+        OffsetDateTime original=db.queryForObject("SELECT submitted_at FROM submission WHERE submission_id=?",OffsetDateTime.class,source);
+        assertMastery(item(get(masteryPath(),owner),a),null,null,false);
+        checked("PATCH","/submissions/"+source+"/grade","{\"score\":0,\"version\":0}",owner,200);
+        assertMastery(item(get(masteryPath(),owner),a),"0","WEAK",true);
+        var progress=get(progressPath(),owner).get("skill_mastery");
+        for(JsonNode value:progress) { assertThat(value.size()).isEqualTo(3); if(value.get("skill_topic_id").asText().equals(a.toString())) assertThat(value.get("level").asText()).isEqualTo("WEAK"); }
+        long version=db.queryForObject("SELECT version FROM submission WHERE submission_id=?",Long.class,source);
+        checked("PATCH","/submissions/"+source+"/grade","{\"score\":80,\"version\":"+version+"}",owner,200);
+        assertMastery(item(get(masteryPath(),owner),a),"80","SUFFICIENT",true);
+        assertThat(db.queryForObject("SELECT submitted_at FROM submission WHERE submission_id=?",OffsetDateTime.class,source)).isEqualTo(original);
+        assertMastery(item(get(masteryPath(),owner),c),null,null,false);
+    }
+
+    @Test void assignmentEvidenceChangesQuizRankingWithoutAddingAssignmentCandidates() throws Exception {
+        gradedAttempt(true);
+        assertThat(get(studentPath(),student).get("recommendation").get("activity_id").asText()).isEqualTo(second.activity().toString());
+        UUID source=assignmentSubmission(a);
+        checked("PATCH","/submissions/"+source+"/grade","{\"score\":0,\"version\":0}",owner,200);
+        assertMastery(item(get(masteryPath(),owner),a),"50","DEVELOPING",true);
+        var recommendation=get(studentPath(),student).get("recommendation");
+        assertThat(recommendation.get("activity_type").asText()).isEqualTo("QUIZ");
+        assertThat(recommendation.get("activity_id").asText()).isEqualTo(first.activity().toString());
+        assertThat(recommendation.size()).isEqualTo(5);
+    }
+
+    @Test void historicalAssignmentEvidenceDoesNotGrantCurrentApiAccess() throws Exception {
+        UUID source=assignmentSubmission(a);
+        checked("PATCH","/submissions/"+source+"/grade","{\"score\":75,\"version\":0}",owner,200);
+        db.update("UPDATE activity SET status='HIDDEN' WHERE lesson_id=?",lesson);
+        db.update("UPDATE class SET status='ARCHIVED' WHERE class_id=?",course);
+        assertMastery(item(get(masteryPath(),owner),a),"75","DEVELOPING",true);
+        db.update("UPDATE class_member SET status='INACTIVE' WHERE class_member_id=?",member);
+        error(masteryPath(),owner,404,"CLASS_OR_MEMBER_NOT_FOUND");
+        error(progressPath(),owner,404,"CLASS_OR_MEMBER_NOT_FOUND");
+        error(studentPath(),student,403,"MEMBERSHIP_REQUIRED");
+        error(masteryPath(),otherTutor,403,"FORBIDDEN");
+        assertThat(db.queryForObject("SELECT mastery_score FROM learner_mastery WHERE class_member_id=? AND skill_topic_id=?",BigDecimal.class,member,a)).isEqualByComparingTo("75");
+    }
+
+    private UUID assignmentSubmission(UUID topic) {
+        UUID activity=UUID.randomUUID(), assignment=UUID.randomUUID(), source=UUID.randomUUID();
+        db.update("INSERT INTO activity(activity_id,lesson_id,title,activity_type,sequence_order) VALUES (?,?,'Assignment','ASSIGNMENT',2)",activity,lesson);
+        db.update("INSERT INTO assignment(assignment_id,activity_id,deadline) VALUES (?,?,?)",assignment,activity,OffsetDateTime.now().plusDays(1));
+        db.update("INSERT INTO activity_skill_topics(activity_id,skill_topic_id) VALUES (?,?)",activity,topic);
+        db.update("INSERT INTO submission(submission_id,assignment_id,class_member_id,file_name,storage_path,mime_type,size_bytes,submitted_at) VALUES (?,?,?,'answer','unused','text/plain',1,?)",source,assignment,member,OffsetDateTime.parse("2026-11-01T10:00:00Z"));
+        return source;
     }
 
     private JsonNode get(String path, UUID user) throws Exception { return json.readTree(checked("GET", path, null, user, 200).body()); }

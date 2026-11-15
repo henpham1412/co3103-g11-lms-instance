@@ -11,6 +11,7 @@ import org.springframework.transaction.support.TransactionSynchronizationManager
 import org.springframework.web.multipart.MultipartFile;
 import org.springframework.web.server.ResponseStatusException;
 import vn.edu.hcmut.co3103.lms.service.learningcontent.ChapterService;
+import vn.edu.hcmut.co3103.lms.service.adaptive.MasteryRecalculationService;
 import vn.edu.hcmut.co3103.lms.dto.request.GradeSubmissionRequest;
 import vn.edu.hcmut.co3103.lms.dto.response.AssignmentConfigurationResponse;
 import vn.edu.hcmut.co3103.lms.dto.response.SubmissionResponse;
@@ -33,6 +34,7 @@ import java.util.UUID;
 
 @Service
 public class AssignmentService {
+    private final MasteryRecalculationService mastery;
     private final AssignmentRepository assignmentRepository;
     private final AssignmentAttachmentRepository attachmentRepository;
     private final SubmissionRepository submissionRepository;
@@ -48,7 +50,9 @@ public class AssignmentService {
                              ActivityRepository activityRepository,
                              ClassMemberRepository memberRepository,
                              AssignmentFileStorageService storage, ChapterService content,
-                             AssignmentConfigurationService configuration) {
+                             AssignmentConfigurationService configuration,
+                             MasteryRecalculationService mastery) {
+        this.mastery = mastery;
         this.assignmentRepository = assignmentRepository;
         this.attachmentRepository = attachmentRepository;
         this.submissionRepository = submissionRepository;
@@ -232,7 +236,9 @@ public class AssignmentService {
         }
         submission.grade(request.score(), request.feedback(), tutorId, OffsetDateTime.now());
         ClassMember member = memberRepository.findById(submission.getClassMemberId()).orElse(null);
-        return toResponse(submissionRepository.saveAndFlush(submission), member == null ? null : member.getStudentId());
+        Submission saved = submissionRepository.saveAndFlush(submission);
+        mastery.synchronizeSubmission(saved.getSubmissionId());
+        return toResponse(saved, member == null ? null : member.getStudentId());
     }
 
     private Assignment requireAssignmentByActivity(UUID activityId) {
