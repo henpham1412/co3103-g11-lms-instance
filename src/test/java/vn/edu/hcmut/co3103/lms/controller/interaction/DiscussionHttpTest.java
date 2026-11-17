@@ -3,6 +3,8 @@ package vn.edu.hcmut.co3103.lms.controller.interaction;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.test.context.TestConfiguration;
@@ -13,22 +15,37 @@ import org.springframework.context.annotation.Primary;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.test.context.DynamicPropertyRegistry;
 import org.springframework.test.context.DynamicPropertySource;
+import org.springframework.transaction.PlatformTransactionManager;
+import org.springframework.transaction.support.TransactionTemplate;
 import tools.jackson.databind.JsonNode;
 import tools.jackson.databind.ObjectMapper;
 import vn.edu.hcmut.co3103.lms.security.jwt.JwtTestSupport;
+import vn.edu.hcmut.co3103.lms.dto.response.DiscussionResponse;
+import vn.edu.hcmut.co3103.lms.exception.AppException;
+import vn.edu.hcmut.co3103.lms.exception.ErrorCode;
+import vn.edu.hcmut.co3103.lms.repository.interaction.DiscussionRepository;
+import vn.edu.hcmut.co3103.lms.service.interaction.DiscussionService;
 
 import java.net.URI;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
 import java.time.Clock;
+import java.time.Duration;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicReference;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.awaitility.Awaitility.await;
 
 /**
  * Discussion contract over a real servlet container and the real PostgreSQL schema. Authorization,
@@ -72,6 +89,10 @@ class DiscussionHttpTest {
 
     @Autowired
     private ObjectMapper objectMapper;
+
+    @Autowired private PlatformTransactionManager transactions;
+    @Autowired private DiscussionService discussions;
+    @Autowired private DiscussionRepository discussionRepository;
 
     private final HttpClient http = HttpClient.newHttpClient();
     private final List<UUID> userIds = new ArrayList<>();
@@ -463,6 +484,190 @@ class DiscussionHttpTest {
         assertThat(code(response)).isEqualTo("CONTENT_HAS_DEPENDENT_LEARNING_DATA");
         assertThat(db.queryForObject("SELECT count(*) FROM lesson WHERE lesson_id = ?", Long.class, lessonId))
                 .isEqualTo(1L);
+    }
+
+    @Test
+    void anotherStudentAndTheTutorCanReloadTheCompleteNestedConversation() throws Exception {
+        UUID root = createThread(studentToken, "{\"lesson_id\":\"" + lessonId
+                + "\",\"title\":\"Conversation\",\"content\":\"Root body\"}");
+        UUID reply = createReply(root, studentToken, "{\"content\":\"First reply\"}");
+        UUID nested = createReply(reply, studentToken, "{\"content\":\"Nested reply\"}");
+
+        for (String reader : List.of(secondStudentToken, tutorToken)) {
+            HttpResponse<String> response = get("/discussions/" + root, reader);
+            assertThat(response.statusCode()).isEqualTo(200);
+            JsonNode detail = json(response);
+            assertThat(detail.get("discussion_id").asString()).isEqualTo(root.toString());
+            assertThat(detail.get("content").asString()).isEqualTo("Root body");
+            assertThat(detail.get("lesson_id").asString()).isEqualTo(lessonId.toString());
+            JsonNode replies = detail.get("replies");
+            assertThat(rootIds(replies)).containsExactly(reply, nested);
+            assertThat(replies.get("total_items").asLong()).isEqualTo(2);
+            assertThat(replies.get("items").get(0).get("parent_id").asString()).isEqualTo(root.toString());
+            assertThat(replies.get("items").get(1).get("parent_id").asString()).isEqualTo(reply.toString());
+            assertThat(replies.get("items").get(1).get("content").asString()).isEqualTo("Nested reply");
+        }
+        assertThat(rootIds(json(get("/discussions/" + reply, secondStudentToken)).get("replies")))
+                .containsExactly(nested);
+        // Existing list and mutation responses remain plain posts, without embedded conversation pages.
+        assertThat(json(listThreads(studentToken, "")).get("items").get(0).has("replies")).isFalse();
+        assertThat(json(patch("/discussions/" + reply, studentToken, "{\"content\":\"Edited\"}"))
+                .has("replies")).isFalse();
+    }
+
+    @Test
+    void conversationTraversalRejectsCrossClassAndWrongLessonDescendantsAtEveryDepth() throws Exception {
+        UUID root = createThread(studentToken, "{\"lesson_id\":\"" + lessonId
+                + "\",\"title\":\"Scoped\",\"content\":\"body\"}");
+        UUID valid = createReply(root, studentToken, "{\"content\":\"Valid\"}");
+        UUID foreign = createThread(otherTutorToken, otherClassId, "{\"title\":\"Foreign\",\"content\":\"secret\"}");
+        // Simulate inconsistent legacy data allowed by the separate foreign keys.
+        db.update("UPDATE discussion SET parent_id = ? WHERE discussion_id = ?", valid, foreign);
+        UUID wrongLesson = createThread(studentToken, "{\"lesson_id\":\"" + secondLessonId
+                + "\",\"title\":\"Other lesson\",\"content\":\"private context\"}");
+        db.update("UPDATE discussion SET parent_id = ? WHERE discussion_id = ?", root, wrongLesson);
+        try {
+            JsonNode detail = json(get("/discussions/" + root, secondStudentToken));
+            assertThat(rootIds(detail.get("replies"))).containsExactly(valid);
+            assertThat(detail.get("replies").get("total_items").asLong()).isEqualTo(1);
+        } finally {
+            db.update("UPDATE discussion SET parent_id = NULL WHERE discussion_id IN (?, ?)", foreign, wrongLesson);
+        }
+    }
+
+    @Test
+    void unauthorizedActorsCannotRetrieveConversationReplies() throws Exception {
+        UUID root = createThread(studentToken, "{\"title\":\"Protected\",\"content\":\"body\"}");
+        createReply(root, studentToken, "{\"content\":\"Protected reply\"}");
+        for (String denied : List.of(outsiderToken, pendingToken, leftToken, otherTutorToken,
+                adminToken, suspendedToken)) {
+            HttpResponse<String> response = get("/discussions/" + root, denied);
+            assertThat(response.statusCode()).isEqualTo(403);
+            assertThat(code(response)).isEqualTo("FORBIDDEN");
+            assertThat(json(response).has("replies")).isFalse();
+        }
+        assertThat(request("GET", "/discussions/" + root, null, null).statusCode()).isEqualTo(401);
+    }
+
+    @Test
+    void conversationRepliesAreBoundedAndDeterministicallyOrderedAcrossPages() throws Exception {
+        UUID root = createThread(studentToken, "{\"title\":\"Paged\",\"content\":\"body\"}");
+        UUID high = UUID.fromString("ffffffff-ffff-ffff-ffff-ffffffffffff");
+        UUID low = UUID.fromString("00000000-0000-0000-0000-000000000001");
+        for (UUID id : List.of(high, low)) {
+            db.update("INSERT INTO discussion(discussion_id,class_id,author_id,parent_id,content,created_at) "
+                    + "VALUES (?,?,?,?,?,TIMESTAMPTZ '2026-01-01 00:00:00Z')", id, classId, studentId, root, "reply");
+        }
+        for (int run = 0; run < 2; run++) {
+            JsonNode first = json(get("/discussions/" + root + "?page=1&size=1", secondStudentToken)).get("replies");
+            assertThat(rootIds(first)).containsExactly(low);
+            assertThat(first.get("total_items").asLong()).isEqualTo(2);
+            assertThat(first.get("total_pages").asInt()).isEqualTo(2);
+            assertThat(first.get("page").asInt()).isEqualTo(1);
+            assertThat(first.get("size").asInt()).isEqualTo(1);
+            assertThat(rootIds(json(get("/discussions/" + root + "?page=2&size=1", secondStudentToken)).get("replies")))
+                    .containsExactly(high);
+        }
+        JsonNode beyond = json(get("/discussions/" + root + "?page=2147483647&size=100", studentToken)).get("replies");
+        assertThat(beyond.get("items")).isEmpty();
+        assertThat(beyond.get("total_items").asLong()).isEqualTo(2);
+        for (String query : List.of("?page=0", "?size=0", "?size=101", "?page=abc")) {
+            HttpResponse<String> invalid = get("/discussions/" + root + query, studentToken);
+            assertThat(invalid.statusCode()).isEqualTo(400);
+            assertThat(code(invalid)).isEqualTo("VALIDATION_ERROR");
+        }
+    }
+
+    @Test
+    void aDeepConversationCanBeReadAcrossBoundedPagesWithoutLosingDescendants() throws Exception {
+        UUID root = createThread(studentToken, "{\"title\":\"Deep conversation\",\"content\":\"body\"}");
+        List<UUID> ids = new ArrayList<>();
+        List<Object[]> rows = new ArrayList<>();
+        UUID parent = root;
+        for (int i = 0; i < 105; i++) {
+            UUID id = UUID.randomUUID();
+            ids.add(id);
+            rows.add(new Object[]{id, classId, studentId, parent, "Reply " + i,
+                    java.sql.Timestamp.from(java.time.Instant.parse("2026-01-01T00:00:00Z").plusSeconds(i))});
+            parent = id;
+        }
+        db.batchUpdate("INSERT INTO discussion(discussion_id,class_id,author_id,parent_id,content,created_at) "
+                + "VALUES (?,?,?,?,?,?)", rows);
+        JsonNode first = json(get("/discussions/" + root + "?size=100", secondStudentToken)).get("replies");
+        JsonNode second = json(get("/discussions/" + root + "?size=100&page=2", secondStudentToken)).get("replies");
+        assertThat(rootIds(first)).containsExactlyElementsOf(ids.subList(0, 100));
+        assertThat(rootIds(second)).containsExactlyElementsOf(ids.subList(100, 105));
+        assertThat(first.get("total_items").asLong()).isEqualTo(105);
+        assertThat(first.get("total_pages").asInt()).isEqualTo(2);
+        assertThat(second.get("items").get(0).get("parent_id").asString()).isEqualTo(ids.get(99).toString());
+    }
+
+    @Test
+    void emptyAndArchivedConversationsRemainReadable() throws Exception {
+        UUID root = createThread(studentToken, "{\"title\":\"Empty\",\"content\":\"body\"}");
+        JsonNode empty = json(get("/discussions/" + root, secondStudentToken)).get("replies");
+        assertThat(empty.get("items")).isEmpty();
+        assertThat(empty.get("total_items").asLong()).isZero();
+        assertThat(empty.get("total_pages").asInt()).isZero();
+        UUID reply = createReply(root, studentToken, "{\"content\":\"Before archive\"}");
+        db.update("UPDATE class SET status = 'ARCHIVED' WHERE class_id = ?", classId);
+        HttpResponse<String> response = get("/discussions/" + root, secondStudentToken);
+        assertThat(response.statusCode()).isEqualTo(200);
+        assertThat(rootIds(json(response).get("replies"))).containsExactly(reply);
+    }
+
+    @ParameterizedTest
+    @ValueSource(booleans = {false, true})
+    void concurrentPartialUpdatesKeepBothCommittedFields(boolean preloadInCallingTransaction) throws Exception {
+        UUID root = createThread(studentToken, "{\"title\":\"Original\",\"content\":\"Root body\"}");
+        DiscussionResponse result = updateAfterClassLock(root, preloadInCallingTransaction,
+                () -> discussions.updateDiscussion(root, studentId, false, Map.of("title", "Committed new title")));
+        assertThat(result.title()).isEqualTo("Committed new title");
+        assertThat(result.content()).isEqualTo("Concurrent body");
+        assertThat(db.queryForMap("SELECT title,content FROM discussion WHERE discussion_id = ?", root))
+                .containsEntry("title", "Committed new title").containsEntry("content", "Concurrent body");
+    }
+
+    @ParameterizedTest
+    @ValueSource(booleans = {false, true})
+    void anUpdateWaitingForADeletedDiscussionReturnsTheDocumentedNotFound(boolean preload) throws Exception {
+        UUID root = createThread(studentToken, "{\"title\":\"Deleted\",\"content\":\"body\"}");
+        org.assertj.core.api.Assertions.assertThatThrownBy(() -> updateAfterClassLock(root, preload,
+                () -> discussions.deleteDiscussion(root, studentId, false)))
+                .isInstanceOf(java.util.concurrent.ExecutionException.class)
+                .cause().isInstanceOfSatisfying(AppException.class,
+                        failure -> assertThat(failure.getErrorCode()).isEqualTo(ErrorCode.DISCUSSION_NOT_FOUND));
+        HttpResponse<String> missing = patch("/discussions/" + root, studentToken, "{\"content\":\"edit\"}");
+        assertThat(missing.statusCode()).isEqualTo(404);
+        assertThat(code(missing)).isEqualTo("DISCUSSION_NOT_FOUND");
+    }
+
+    private DiscussionResponse updateAfterClassLock(UUID root, boolean preload, Runnable firstWrite) throws Exception {
+        CountDownLatch entered = new CountDownLatch(1);
+        AtomicInteger workerPid = new AtomicInteger();
+        AtomicReference<Future<DiscussionResponse>> pending = new AtomicReference<>();
+        try (var worker = Executors.newSingleThreadExecutor()) {
+            new TransactionTemplate(transactions).executeWithoutResult(tx -> {
+                db.queryForObject("SELECT class_id FROM class WHERE class_id = ? FOR UPDATE", UUID.class, classId);
+                pending.set(worker.submit(() -> new TransactionTemplate(transactions).execute(second -> {
+                    workerPid.set(db.queryForObject("SELECT pg_backend_pid()", Integer.class));
+                    if (preload) discussionRepository.findById(root).orElseThrow();
+                    entered.countDown();
+                    return discussions.updateDiscussion(root, studentId, false, Map.of("content", "Concurrent body"));
+                })));
+                try {
+                    assertThat(entered.await(10, TimeUnit.SECONDS)).isTrue();
+                } catch (InterruptedException interrupted) {
+                    Thread.currentThread().interrupt();
+                    throw new AssertionError(interrupted);
+                }
+                // Observe an actual PostgreSQL lock wait, not a timing-based assumption.
+                await().atMost(Duration.ofSeconds(10)).until(() -> db.queryForObject(
+                        "SELECT cardinality(pg_blocking_pids(?)) > 0", Boolean.class, workerPid.get()));
+                firstWrite.run();
+            });
+            return pending.get().get(10, TimeUnit.SECONDS);
+        }
     }
 
     private UUID createThread(String token, String body) throws Exception {

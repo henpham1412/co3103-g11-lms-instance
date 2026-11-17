@@ -20,6 +20,7 @@ import org.springframework.web.server.ResponseStatusException;
 import vn.edu.hcmut.co3103.lms.dto.request.interaction.CreateDiscussionRequest;
 import vn.edu.hcmut.co3103.lms.dto.request.interaction.CreateReplyRequest;
 import vn.edu.hcmut.co3103.lms.dto.response.DiscussionResponse;
+import vn.edu.hcmut.co3103.lms.dto.response.DiscussionDetailResponse;
 import vn.edu.hcmut.co3103.lms.dto.response.PageResponse;
 import vn.edu.hcmut.co3103.lms.exception.AppException;
 import vn.edu.hcmut.co3103.lms.exception.ErrorCode;
@@ -64,9 +65,12 @@ public class DiscussionController {
 
     @GetMapping("/discussions/{discussionId}")
     @PreAuthorize("hasAnyRole('STUDENT', 'TUTOR')")
-    public DiscussionResponse getDiscussion(@AuthenticationPrincipal Jwt jwt, Authentication authentication,
-                                            @PathVariable UUID discussionId) {
-        return discussionService.getDiscussion(discussionId, userId(jwt), isTutor(authentication));
+    public DiscussionDetailResponse getDiscussion(@AuthenticationPrincipal Jwt jwt, Authentication authentication,
+                                                  @PathVariable UUID discussionId,
+                                                  @RequestParam(defaultValue = "1") int page,
+                                                  @RequestParam(defaultValue = "20") int size) {
+        requirePagination(page, size);
+        return discussionService.getConversation(discussionId, userId(jwt), isTutor(authentication), page, size);
     }
 
     @PatchMapping("/discussions/{discussionId}")

@@ -1,10 +1,13 @@
 package vn.edu.hcmut.co3103.lms.service.interaction;
 
+import jakarta.persistence.EntityManager;
+import jakarta.persistence.EntityNotFoundException;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import vn.edu.hcmut.co3103.lms.dto.request.interaction.CreateDiscussionRequest;
 import vn.edu.hcmut.co3103.lms.dto.request.interaction.CreateReplyRequest;
 import vn.edu.hcmut.co3103.lms.dto.response.DiscussionResponse;
+import vn.edu.hcmut.co3103.lms.dto.response.DiscussionDetailResponse;
 import vn.edu.hcmut.co3103.lms.dto.response.PageResponse;
 import vn.edu.hcmut.co3103.lms.entity.Class;
 import vn.edu.hcmut.co3103.lms.entity.ClassMember;
@@ -39,15 +42,18 @@ public class DiscussionService {
     private final ClassMemberRepository classMemberRepository;
     private final LessonRepository lessonRepository;
     private final DiscussionRepository discussionRepository;
+    private final EntityManager entityManager;
 
     public DiscussionService(ClassRepository classRepository,
                              ClassMemberRepository classMemberRepository,
                              LessonRepository lessonRepository,
-                             DiscussionRepository discussionRepository) {
+                             DiscussionRepository discussionRepository,
+                             EntityManager entityManager) {
         this.classRepository = classRepository;
         this.classMemberRepository = classMemberRepository;
         this.lessonRepository = lessonRepository;
         this.discussionRepository = discussionRepository;
+        this.entityManager = entityManager;
     }
 
     @Transactional(readOnly = true)
@@ -105,11 +111,34 @@ public class DiscussionService {
         return DiscussionResponse.from(discussion);
     }
 
+    @Transactional(readOnly = true, isolation = org.springframework.transaction.annotation.Isolation.REPEATABLE_READ)
+    public DiscussionDetailResponse getConversation(UUID discussionId, UUID actorId, boolean tutor,
+                                                     int page, int size) {
+        Discussion discussion = requireDiscussion(discussionId);
+        requireReadableClass(discussion.getClassId(), actorId, tutor);
+        long total = discussionRepository.countDescendants(discussionId, discussion.getClassId(),
+                discussion.getLessonId());
+        List<DiscussionResponse> replies = discussionRepository.findDescendants(discussionId,
+                        discussion.getClassId(), discussion.getLessonId(), size, (long) (page - 1) * size)
+                .stream().map(DiscussionResponse::from).toList();
+        return new DiscussionDetailResponse(DiscussionResponse.from(discussion),
+                new PageResponse<>(replies, page, size, total, (int) ((total + size - 1) / size)));
+    }
+
     @Transactional
     public DiscussionResponse updateDiscussion(UUID discussionId, UUID actorId, boolean tutor,
                                                Map<String, Object> patch) {
+        // A scalar lookup does not put a potentially stale Discussion in the persistence context.
+        UUID classId = discussionRepository.findClassIdByDiscussionId(discussionId)
+                .orElseThrow(() -> new AppException(ErrorCode.DISCUSSION_NOT_FOUND));
+        requireWritableClass(classId, actorId, tutor);
         Discussion discussion = requireDiscussion(discussionId);
-        requireWritableClass(discussion.getClassId(), actorId, tutor);
+        try {
+            // Also handle a Discussion already managed by a calling transaction before the lock.
+            entityManager.refresh(discussion);
+        } catch (EntityNotFoundException deletedWhileWaiting) {
+            throw new AppException(ErrorCode.DISCUSSION_NOT_FOUND);
+        }
         requireAuthorOrOwningTutor(discussion, actorId, tutor);
         if (patch == null || patch.isEmpty() || !PATCHABLE_FIELDS.containsAll(patch.keySet())) {
             throw new AppException(ErrorCode.VALIDATION_ERROR);
