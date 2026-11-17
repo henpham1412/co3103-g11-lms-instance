@@ -173,6 +173,9 @@ public class GlobalExceptionHandler extends ResponseEntityExceptionHandler {
     protected ResponseEntity<Object> handleHttpRequestMethodNotSupported(
             HttpRequestMethodNotSupportedException exception, HttpHeaders headers,
             HttpStatusCode status, WebRequest request) {
+        if (AdminUserExceptionHandler.isAdminUserRequest(request)) {
+            return AdminUserExceptionHandler.frameworkFailure(exception, headers, status);
+        }
         if (isAdaptiveOrProbeRequest(request)) {
             return super.handleExceptionInternal(exception, envelope(ErrorCode.METHOD_NOT_ALLOWED),
                     jsonHeaders(headers), status, request);
@@ -216,6 +219,9 @@ public class GlobalExceptionHandler extends ResponseEntityExceptionHandler {
     @Override
     protected ResponseEntity<Object> handleExceptionInternal(Exception exception, Object body,
             HttpHeaders headers, HttpStatusCode status, WebRequest request) {
+        if (AdminUserExceptionHandler.isAdminUserRequest(request)) {
+            return AdminUserExceptionHandler.frameworkFailure(exception, headers, status);
+        }
         if (body instanceof ApiErrorResponse || body instanceof Map<?, ?>) {
             return super.handleExceptionInternal(exception, body, jsonHeaders(headers), status, request);
         }
@@ -363,4 +369,3 @@ public class GlobalExceptionHandler extends ResponseEntityExceptionHandler {
     public record ApiErrorResponse(String code, String message, List<?> details) {
     }
 }
-

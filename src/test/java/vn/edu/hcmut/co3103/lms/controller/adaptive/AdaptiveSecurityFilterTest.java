@@ -111,4 +111,3 @@ class AdaptiveSecurityFilterTest {
         ObjectMapper objectMapper() { return new ObjectMapper(); }
     }
 }
-
