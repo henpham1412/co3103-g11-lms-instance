@@ -1,6 +1,7 @@
 package vn.edu.hcmut.co3103.lms.domain;
 
 import jakarta.persistence.Column;
+import jakarta.persistence.Convert;
 import jakarta.persistence.Entity;
 import jakarta.persistence.EnumType;
 import jakarta.persistence.Enumerated;
@@ -17,11 +18,14 @@ import lombok.AllArgsConstructor;
 import lombok.Getter;
 import lombok.NoArgsConstructor;
 import lombok.Setter;
+import org.hibernate.annotations.DynamicUpdate;
 
 import java.time.Instant;
 import java.util.UUID;
 
 @Entity
+// Administration must not overwrite a concurrently refreshed CI display projection.
+@DynamicUpdate
 @Table(name = "lms_user_access")
 @Getter
 @Setter
@@ -65,6 +69,19 @@ public class LmsUserAccess {
 
     @Column(name = "updated_at", nullable = false)
     private Instant updatedAt;
+
+    @Convert(converter = TokenIssuedAtConverter.class)
+    @Column(name = "last_synced_profile_iat", precision = 21, scale = 9)
+    private Instant lastSyncedProfileIat;
+
+    @Convert(converter = TokenIssuedAtConverter.class)
+    @Column(name = "last_login_token_iat", precision = 21, scale = 9)
+    private Instant lastLoginTokenIat;
+
+    public LmsUserAccess(UUID userId, String fullName, String email, LmsRole lmsRole,
+                         AccessStatus accessStatus, Instant lastLoginAt, Instant createdAt, Instant updatedAt) {
+        this(userId, fullName, email, lmsRole, accessStatus, lastLoginAt, createdAt, updatedAt, null, null);
+    }
 
     @PrePersist
     void initializeTimestamps() {

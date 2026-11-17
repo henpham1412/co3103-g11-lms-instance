@@ -14,12 +14,7 @@ import java.util.LinkedHashMap;
 import java.util.Collections;
 import java.util.Map;
 
-/**
- * Placement fields only: Learning Content owns an Activity's position, order and visibility, while
- * the Quiz or Assignment configuration behind {@code activity_type} belongs to the Assessment
- * module. Anything else in the body is captured rather than ignored, so a request that tries to
- * configure the assessment in the same call is refused instead of half-applied.
- */
+/** Placement belongs to Learning Content; embedded Assignment settings are delegated atomically to Assessment. */
 @JsonAutoDetect(fieldVisibility = JsonAutoDetect.Visibility.ANY)
 public class ActivityRequest {
 
