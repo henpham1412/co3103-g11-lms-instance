@@ -61,6 +61,17 @@ public class AdminContentReportController {
         return contentReportService.review(reportId, userId(jwt), patch);
     }
 
+    @GetMapping("/{reportId}/target/file")
+    @PreAuthorize("hasRole('ADMINISTRATOR')")
+    public org.springframework.http.ResponseEntity<org.springframework.core.io.Resource> targetFile(@PathVariable UUID reportId) {
+        var file = contentReportService.targetFile(reportId);
+        return org.springframework.http.ResponseEntity.ok()
+                .contentType(org.springframework.http.MediaType.parseMediaType(file.contentType()))
+                .header(org.springframework.http.HttpHeaders.CONTENT_DISPOSITION,
+                        org.springframework.http.ContentDisposition.attachment().filename(file.downloadName()).build().toString())
+                .body(new org.springframework.core.io.FileSystemResource(file.path()));
+    }
+
     private UUID userId(Jwt jwt) {
         try { return UUID.fromString(jwt.getSubject()); }
         catch (IllegalArgumentException | NullPointerException exception) {

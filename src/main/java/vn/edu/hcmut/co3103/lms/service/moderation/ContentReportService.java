@@ -24,6 +24,12 @@ import java.time.Instant;
 import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
+import java.util.List;
+import java.util.HashSet;
+import jakarta.persistence.EntityManager;
+import vn.edu.hcmut.co3103.lms.domain.AuditLog;
+import vn.edu.hcmut.co3103.lms.repository.AuditLogRepository;
+import vn.edu.hcmut.co3103.lms.repository.classmanagement.ClassRepository;
 
 /**
  * Content reporting and moderation (DOC-05 sections 3.5 and 5.3, DOC-04 section 2.5.2, BR-6.5).
@@ -40,17 +46,27 @@ public class ContentReportService {
     private final MaterialRepository materialRepository;
     private final DiscussionService discussionService;
     private final ChapterService chapterService;
+    private final ClassRepository classRepository;
+    private final AuditLogRepository auditLogs;
+    private final EntityManager entityManager;
+    private final ModerationTargetReader targetReader;
 
     public ContentReportService(ContentReportRepository contentReportRepository,
                                 DiscussionRepository discussionRepository,
                                 MaterialRepository materialRepository,
                                 DiscussionService discussionService,
-                                ChapterService chapterService) {
+                                ChapterService chapterService, ClassRepository classRepository,
+                                AuditLogRepository auditLogs, EntityManager entityManager,
+                                ModerationTargetReader targetReader) {
         this.contentReportRepository = contentReportRepository;
         this.discussionRepository = discussionRepository;
         this.materialRepository = materialRepository;
         this.discussionService = discussionService;
         this.chapterService = chapterService;
+        this.classRepository = classRepository;
+        this.auditLogs = auditLogs;
+        this.entityManager = entityManager;
+        this.targetReader = targetReader;
     }
 
     @Transactional
@@ -60,6 +76,31 @@ public class ContentReportService {
         ContentReport.Reason reason = reason(request.reason());
         String description = optionalDescription(request.description());
         UUID contentId = request.content_id();
+        UUID classId = (contentType == ContentReport.ContentType.DISCUSSION
+                ? discussionRepository.findClassIdByDiscussionId(contentId)
+                : materialRepository.findClassIdByMaterialId(contentId))
+                .orElseThrow(() -> new AppException(ErrorCode.REPORTED_CONTENT_NOT_FOUND));
+        // Creation and deletion serialize on Class before any target mutation. Reporting is a
+        // moderation operation: retain canonical read rules, including archived read access.
+        var lockedClass = classRepository.findByIdForUpdate(classId)
+                .orElseThrow(() -> new AppException(ErrorCode.REPORTED_CONTENT_NOT_FOUND));
+        entityManager.refresh(lockedClass);
+        // Refresh only the relevant target; do not clear an enclosing transaction's context.
+        try {
+            Class<?> targetType = contentType == ContentReport.ContentType.DISCUSSION
+                    ? vn.edu.hcmut.co3103.lms.entity.Discussion.class
+                    : vn.edu.hcmut.co3103.lms.entity.Material.class;
+            Object target = entityManager.find(targetType, contentId);
+            if (target == null) throw new AppException(ErrorCode.REPORTED_CONTENT_NOT_FOUND);
+            entityManager.refresh(target);
+            if (target instanceof vn.edu.hcmut.co3103.lms.entity.Material material) {
+                var lesson = entityManager.find(vn.edu.hcmut.co3103.lms.entity.Lesson.class, material.getLessonId());
+                entityManager.refresh(lesson);
+                entityManager.refresh(entityManager.find(vn.edu.hcmut.co3103.lms.entity.Chapter.class, lesson.getChapterId()));
+            }
+        } catch (jakarta.persistence.EntityNotFoundException deletedWhileWaiting) {
+            throw new AppException(ErrorCode.REPORTED_CONTENT_NOT_FOUND);
+        }
         requireTargetAccess(contentType, contentId, reporterId, tutor);
         if (contentReportRepository.existsByReporterIdAndContentTypeAndContentId(reporterId, contentType, contentId)) {
             throw new AppException(ErrorCode.DUPLICATE_CONTENT_REPORT);
@@ -74,29 +115,55 @@ public class ContentReportService {
                                                          ContentReport.ContentType contentType,
                                                          int page, int size) {
         Page<ContentReport> reports = contentReportRepository.search(status, contentType,
-                PageRequest.of(page - 1, size, Sort.by(Sort.Direction.DESC, "createdAt")));
-        return new PageResponse<>(reports.getContent().stream().map(this::toAdminResponse).toList(),
+                PageRequest.of(page - 1, size, Sort.by(Sort.Direction.DESC, "createdAt", "reportId")));
+        Set<UUID> discussions = existingTargets(reports.getContent(), ContentReport.ContentType.DISCUSSION);
+        Set<UUID> materials = existingTargets(reports.getContent(), ContentReport.ContentType.MATERIAL);
+        return new PageResponse<>(reports.getContent().stream().map(report -> AdminContentReportResponse.from(report,
+                        (report.getContentType() == ContentReport.ContentType.DISCUSSION ? discussions : materials)
+                                .contains(report.getContentId()))).toList(),
                 page, size, reports.getTotalElements(), reports.getTotalPages());
     }
 
     @Transactional(readOnly = true)
     public AdminContentReportResponse get(UUID reportId) {
-        return toAdminResponse(requireReport(reportId));
+        ContentReport report = requireReport(reportId);
+        var target = targetReader.inspect(report);
+        return AdminContentReportResponse.from(report, target != null, target);
     }
 
     @Transactional
     public AdminContentReportResponse review(UUID reportId, UUID administratorId, Map<String, Object> patch) {
-        ContentReport report = requireReport(reportId);
+        ContentReport report = contentReportRepository.findForReview(reportId)
+                .orElseThrow(() -> new AppException(ErrorCode.CONTENT_REPORT_NOT_FOUND));
+        entityManager.refresh(report);
         if (patch == null || patch.isEmpty() || !PATCHABLE_FIELDS.containsAll(patch.keySet())) {
             throw new AppException(ErrorCode.INVALID_REPORT_STATUS);
         }
         ContentReport.ReportStatus outcome = reviewOutcome(patch.get("status"));
-        // DOC-05 section 5.3: the outcome is recorded once, while the report is still PENDING.
-        if (report.getStatus() != ContentReport.ReportStatus.PENDING) {
+        ContentReport.ReportStatus before = report.getStatus();
+        if (before == ContentReport.ReportStatus.RESOLVED || before == ContentReport.ReportStatus.DISMISSED
+                || (before == ContentReport.ReportStatus.REVIEWED && outcome == ContentReport.ReportStatus.REVIEWED)) {
             throw new AppException(ErrorCode.REPORT_ALREADY_UPDATED);
         }
         report.markReviewed(outcome, administratorId, Instant.now());
+        auditLogs.saveAndFlush(AuditLog.contentReportReviewed(administratorId, reportId, before, outcome));
         return toAdminResponse(contentReportRepository.saveAndFlush(report));
+    }
+
+    private Set<UUID> existingTargets(List<ContentReport> reports, ContentReport.ContentType type) {
+        List<UUID> ids = reports.stream().filter(r -> r.getContentType() == type)
+                .map(ContentReport::getContentId).distinct().toList();
+        if (ids.isEmpty()) return Set.of();
+        return new HashSet<>(type == ContentReport.ContentType.DISCUSSION
+                ? discussionRepository.findExistingIds(ids) : materialRepository.findExistingIds(ids));
+    }
+
+    @Transactional(readOnly = true)
+    public ChapterService.DownloadableMaterial targetFile(UUID reportId) {
+        ContentReport report = requireReport(reportId);
+        if (report.getContentType() != ContentReport.ContentType.MATERIAL)
+            throw new AppException(ErrorCode.REPORTED_CONTENT_NOT_FOUND);
+        return chapterService.getModerationMaterialFile(report.getContentId());
     }
 
     private AdminContentReportResponse toAdminResponse(ContentReport report) {

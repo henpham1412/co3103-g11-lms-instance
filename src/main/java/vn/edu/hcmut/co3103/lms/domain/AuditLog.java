@@ -18,6 +18,18 @@ import java.util.UUID;
 @Getter
 @NoArgsConstructor(access = AccessLevel.PROTECTED)
 public class AuditLog {
+    public static AuditLog contentReportReviewed(UUID actorId, UUID reportId,
+            vn.edu.hcmut.co3103.lms.entity.ContentReport.ReportStatus before,
+            vn.edu.hcmut.co3103.lms.entity.ContentReport.ReportStatus after) {
+        AuditLog event = new AuditLog();
+        event.actorId = actorId;
+        event.action = "REPORTED_CONTENT_REVIEWED";
+        event.entityType = "ContentReport";
+        event.entityId = reportId;
+        event.details = "{\"before\":{\"status\":\"%s\"},\"after\":{\"status\":\"%s\"}}".formatted(before, after);
+        event.createdAt = Instant.now();
+        return event;
+    }
     @Id
     @GeneratedValue(strategy = GenerationType.UUID)
     @Column(name = "audit_log_id", nullable = false, updatable = false)

@@ -310,6 +310,29 @@ public class ChapterService {
         Material material = materialRepository.findByFileUrl(fileUrl)
                 .orElseThrow(() -> notFound("FILE_NOT_FOUND"));
         getMaterial(material.getMaterialId(), userId, tutor);
+        return readMaterialFile(material, fileKey);
+    }
+
+    /** Internal moderation read; callers must first authorize the Administrator and load a report. */
+    @Transactional(readOnly = true)
+    public DownloadableMaterial getModerationMaterialFile(UUID materialId) {
+        return findModerationMaterialFile(materialId).orElseThrow(() -> notFound("FILE_NOT_FOUND"));
+    }
+
+    @Transactional(readOnly = true)
+    public java.util.Optional<DownloadableMaterial> findModerationMaterialFile(UUID materialId) {
+        return materialRepository.findById(materialId).flatMap(material -> {
+            String key = localFileKey(material.getFileUrl());
+            if (key == null) return java.util.Optional.empty();
+            try { return java.util.Optional.of(readMaterialFile(material, key)); }
+            catch (ResponseStatusException missing) {
+                if (missing.getStatusCode().value() != 404) throw missing;
+                return java.util.Optional.empty();
+            }
+        });
+    }
+
+    private DownloadableMaterial readMaterialFile(Material material, String fileKey) {
         if (material.getMaterialType() != Material.MaterialType.DOCUMENT
                 && material.getMaterialType() != Material.MaterialType.VIDEO) throw notFound("FILE_NOT_FOUND");
         Path path = materialStorage.resolve(fileKey);

@@ -21,12 +21,18 @@ public record AdminContentReportResponse(
         @JsonProperty("reviewed_by") UUID reviewedBy,
         @JsonProperty("reviewed_at") Instant reviewedAt,
         @JsonProperty("created_at") Instant createdAt,
-        @JsonProperty("target_available") boolean targetAvailable
+        @JsonProperty("target_available") boolean targetAvailable,
+        @com.fasterxml.jackson.annotation.JsonInclude(com.fasterxml.jackson.annotation.JsonInclude.Include.NON_NULL)
+        ModerationTargetResponse target
 ) {
     public static AdminContentReportResponse from(ContentReport report, boolean targetAvailable) {
+        return from(report, targetAvailable, null);
+    }
+
+    public static AdminContentReportResponse from(ContentReport report, boolean targetAvailable, ModerationTargetResponse target) {
         return new AdminContentReportResponse(report.getReportId(), report.getReporterId(),
                 report.getContentType(), report.getContentId(), report.getReason(), report.getDescription(),
                 report.getStatus(), report.getReviewedBy(), report.getReviewedAt(), report.getCreatedAt(),
-                targetAvailable);
+                targetAvailable, target);
     }
 }

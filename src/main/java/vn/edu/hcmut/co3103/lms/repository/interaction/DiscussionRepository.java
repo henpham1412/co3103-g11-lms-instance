@@ -11,6 +11,9 @@ import java.util.UUID;
 
 public interface DiscussionRepository extends JpaRepository<Discussion, UUID> {
 
+    @Query("select d.discussionId from Discussion d where d.discussionId in :ids")
+    List<UUID> findExistingIds(@Param("ids") java.util.Collection<UUID> ids);
+
     @Query("select d.classId from Discussion d where d.discussionId = :id")
     Optional<UUID> findClassIdByDiscussionId(@Param("id") UUID discussionId);
 

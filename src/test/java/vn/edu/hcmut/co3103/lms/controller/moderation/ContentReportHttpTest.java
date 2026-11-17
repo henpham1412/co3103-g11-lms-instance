@@ -3,6 +3,8 @@ package vn.edu.hcmut.co3103.lms.controller.moderation;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.CsvSource;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.test.context.TestConfiguration;
@@ -22,12 +24,30 @@ import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
 import java.time.Clock;
+import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
+import java.util.HashSet;
+import java.util.concurrent.*;
+import java.util.concurrent.atomic.*;
+import java.util.function.Supplier;
+import org.springframework.transaction.PlatformTransactionManager;
+import org.springframework.transaction.support.TransactionTemplate;
+import jakarta.persistence.EntityManager;
+import jakarta.persistence.EntityManagerFactory;
+import vn.edu.hcmut.co3103.lms.service.moderation.ContentReportService;
+import vn.edu.hcmut.co3103.lms.service.interaction.DiscussionService;
+import vn.edu.hcmut.co3103.lms.service.learningcontent.ChapterService;
+import vn.edu.hcmut.co3103.lms.entity.ContentReport;
+import vn.edu.hcmut.co3103.lms.exception.AppException;
+import vn.edu.hcmut.co3103.lms.exception.ErrorCode;
+import vn.edu.hcmut.co3103.lms.dto.request.moderation.CreateContentReportRequest;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.awaitility.Awaitility.await;
 
 /**
  * Content reporting and moderation over a real servlet container and the real PostgreSQL schema
@@ -72,6 +92,14 @@ class ContentReportHttpTest {
 
     @Autowired
     private ObjectMapper objectMapper;
+
+    @Autowired private ContentReportService reports;
+    @Autowired private DiscussionService discussions;
+    @Autowired private ChapterService chapters;
+    @Autowired private PlatformTransactionManager transactions;
+    @Autowired private EntityManager entityManager;
+    @Autowired private EntityManagerFactory entityManagerFactory;
+    @Autowired private vn.edu.hcmut.co3103.lms.service.learningcontent.LocalMaterialStorageService materialStorage;
 
     private final HttpClient http = HttpClient.newHttpClient();
     private final List<UUID> userIds = new ArrayList<>();
@@ -145,6 +173,7 @@ class ContentReportHttpTest {
     @AfterEach
     void cleanup() {
         for (UUID id : userIds) {
+            db.update("DELETE FROM audit_logs WHERE actor_id = ?", id);
             db.update("DELETE FROM content_report WHERE reporter_id = ? OR reviewed_by = ?", id, id);
         }
         for (UUID id : classIds) {
@@ -644,6 +673,248 @@ class ContentReportHttpTest {
         assertThat(reportRow(reportId).get("status")).isEqualTo("DISMISSED");
         assertThat(json(get("/admin/content-reports/" + reportId, adminToken))
                 .get("target_available").asBoolean()).isFalse();
+    }
+
+    @Test
+    void administratorInspectsReportedContentWithoutChangingOrdinaryReadPermissions() throws Exception {
+        UUID root = createThread(studentToken, "{\"title\":\"Moderation\",\"content\":\"Reported body\"}");
+        UUID discussionReport = createReport(studentToken, "DISCUSSION", root);
+        UUID materialReport = createReport(tutorToken, "MATERIAL", hiddenMaterialId);
+        db.update("UPDATE class SET status='ARCHIVED' WHERE class_id=?", classId);
+        JsonNode discussion = json(get("/admin/content-reports/" + discussionReport, adminToken)).get("target");
+        assertThat(discussion.get("content").asString()).isEqualTo("Reported body");
+        assertThat(discussion.get("author_id").asString()).isEqualTo(studentId.toString());
+        assertThat(discussion.get("class_status").asString()).isEqualTo("ARCHIVED");
+        JsonNode material = json(get("/admin/content-reports/" + materialReport, adminToken)).get("target");
+        assertThat(material.get("content").asString()).isEqualTo(db.queryForObject("SELECT content FROM material WHERE material_id=?", String.class, hiddenMaterialId));
+        assertThat(material.get("visibility").asString()).isEqualTo("HIDDEN");
+        for (UUID id : List.of(discussionReport, materialReport)) {
+            for (String denied : List.of(studentToken, tutorToken, suspendedAdminToken))
+                assertThat(get("/admin/content-reports/" + id, denied).statusCode()).isEqualTo(403);
+        }
+        assertThat(get("/discussions/" + root, adminToken).statusCode()).isEqualTo(403);
+        assertThat(get("/materials/" + hiddenMaterialId, adminToken).statusCode()).isEqualTo(403);
+        assertThat(get("/materials/" + hiddenMaterialId, studentToken).statusCode()).isEqualTo(404);
+        assertThat(get("/discussions/" + root, studentToken).statusCode()).isEqualTo(200);
+    }
+
+    @Test
+    void moderationFileReadIsReportScopedAndMissingFilesNeverExposePaths() throws Exception {
+        var bytes = new java.io.ByteArrayOutputStream();
+        try (var pdf = new org.apache.pdfbox.pdmodel.PDDocument()) {
+            pdf.addPage(new org.apache.pdfbox.pdmodel.PDPage());
+            pdf.save(bytes);
+        }
+        var stored = materialStorage.store(new org.springframework.mock.web.MockMultipartFile(
+                "file", "moderation.pdf", "application/pdf", bytes.toByteArray()),
+                vn.edu.hcmut.co3103.lms.entity.Material.MaterialType.DOCUMENT);
+        String key = stored.key();
+        try {
+        db.update("UPDATE material SET material_type='DOCUMENT',content=NULL,file_url=? WHERE material_id=?",
+                "/api/v1/materials/files/" + key, materialId);
+        UUID report = createReport(studentToken, "MATERIAL", materialId);
+        HttpResponse<String> inspected = get("/admin/content-reports/" + report, adminToken);
+        assertThat(inspected.statusCode()).as(inspected.body()).isEqualTo(200);
+        JsonNode present = json(inspected);
+        assertThat(present.get("target").get("file_available").asBoolean()).isTrue();
+        String path = present.get("target").get("file_url").asString();
+        assertThat(path).isEqualTo("/api/v1/admin/content-reports/" + report + "/target/file");
+        HttpResponse<String> download = get(path.substring("/api/v1".length()), adminToken);
+        assertThat(download.statusCode()).isEqualTo(200);
+        assertThat(download.headers().firstValue("content-type").orElse("")).isEqualTo("application/pdf");
+        java.nio.file.Files.delete(materialStorage.resolve(key));
+        JsonNode absent = json(get("/admin/content-reports/" + report, adminToken));
+        assertThat(absent.get("target_available").asBoolean()).isTrue();
+        assertThat(absent.get("target").get("file_available").asBoolean()).isFalse();
+        assertThat(absent.get("target").get("file_url").isNull()).isTrue();
+        assertThat(get("/admin/content-reports/" + report + "/target/file", adminToken).statusCode()).isEqualTo(404);
+        db.update("UPDATE material SET file_url='/private/storage/not-public.pdf' WHERE material_id=?", materialId);
+        HttpResponse<String> sanitized = get("/admin/content-reports/" + report, adminToken);
+        assertThat(sanitized.statusCode()).isEqualTo(200);
+        assertThat(sanitized.body()).doesNotContain("/private/storage");
+        assertThat(json(sanitized).get("target").get("file_url").isNull()).isTrue();
+        db.update("UPDATE material SET file_url=? WHERE material_id=?", "/api/v1/materials/files/" + key, materialId);
+        for (String denied : List.of(studentToken, tutorToken, suspendedAdminToken))
+            assertThat(get("/admin/content-reports/" + report + "/target/file", denied).statusCode()).isEqualTo(403);
+        reports.review(report, adminId, Map.of("status", "RESOLVED"));
+        chapters.deleteMaterial(materialId, tutorId);
+        JsonNode deleted = json(get("/admin/content-reports/" + report, adminToken));
+        assertThat(deleted.get("target_available").asBoolean()).isFalse();
+        assertThat(deleted.has("target")).isFalse();
+        } finally { materialStorage.delete(key); }
+    }
+
+    @ParameterizedTest
+    @CsvSource({"PENDING,PENDING,400", "PENDING,REVIEWED,200", "PENDING,RESOLVED,200", "PENDING,DISMISSED,200",
+            "REVIEWED,PENDING,400", "REVIEWED,REVIEWED,409", "REVIEWED,RESOLVED,200", "REVIEWED,DISMISSED,200",
+            "RESOLVED,PENDING,400", "RESOLVED,REVIEWED,409", "RESOLVED,RESOLVED,409", "RESOLVED,DISMISSED,409",
+            "DISMISSED,PENDING,400", "DISMISSED,REVIEWED,409", "DISMISSED,RESOLVED,409", "DISMISSED,DISMISSED,409"})
+    void everyStatusTransitionHasTheDocumentedResultAndAtomicAudit(String before, String after, int expected) throws Exception {
+        UUID root = createThread(studentToken, "{\"title\":\"Transition\",\"content\":\"Private target text\"}");
+        UUID report = createReport(studentToken, "DISCUSSION", root);
+        if (!before.equals("PENDING")) reports.review(report, adminId, Map.of("status", before));
+        long priorEvents = auditCount(report);
+        HttpResponse<String> response = patch("/admin/content-reports/" + report, adminToken, "{\"status\":\"" + after + "\"}");
+        assertThat(response.statusCode()).isEqualTo(expected);
+        assertThat(reportRow(report).get("status")).isEqualTo(expected == 200 ? after : before);
+        assertThat(auditCount(report)).isEqualTo(priorEvents + (expected == 200 ? 1 : 0));
+        if (expected == 200) {
+            assertThat(reportRow(report)).containsEntry("reviewed_by", adminId);
+            assertThat(reportRow(report).get("reviewed_at")).isNotNull();
+            var event = db.queryForMap("SELECT * FROM audit_logs WHERE entity_id=? ORDER BY created_at DESC LIMIT 1", report);
+            assertThat(event).containsEntry("actor_id", adminId).containsEntry("action", "REPORTED_CONTENT_REVIEWED")
+                    .containsEntry("entity_type", "ContentReport").containsEntry("entity_id", report);
+            JsonNode details = objectMapper.readTree(event.get("details").toString());
+            assertThat(details.get("before").get("status").asString()).isEqualTo(before);
+            assertThat(details.get("after").get("status").asString()).isEqualTo(after);
+            assertThat(event.get("details").toString()).doesNotContain("Private target text", "@", "Report ");
+            if (after.equals("RESOLVED") || after.equals("DISMISSED"))
+                assertThat(delete("/discussions/" + root, studentToken).statusCode()).isEqualTo(204);
+        } else assertThat(code(response)).isEqualTo(expected == 400 ? "INVALID_REPORT_STATUS" : "REPORT_ALREADY_UPDATED");
+    }
+
+    @Test
+    void auditDetailsExcludeContentAndCallingTransactionRollbackRemovesBothWrites() throws Exception {
+        UUID root = createThread(studentToken, "{\"title\":\"Audit privacy\",\"content\":\"PRIVATE_TARGET_CONTENT\"}");
+        HttpResponse<String> created = post("/content-reports", studentToken,
+                reportBody("DISCUSSION", root, "SPAM", "PRIVATE_REPORT_DESCRIPTION"));
+        assertThat(created.statusCode()).isEqualTo(201);
+        UUID report = UUID.fromString(json(created).get("report_id").asString());
+        reports.review(report, adminId, Map.of("status", "REVIEWED"));
+        String details = db.queryForObject("SELECT details FROM audit_logs WHERE entity_id=?", String.class, report);
+        assertThat(details).isEqualTo("{\"before\":{\"status\":\"PENDING\"},\"after\":{\"status\":\"REVIEWED\"}}");
+        assertThat(details).doesNotContain("PRIVATE_TARGET_CONTENT", "PRIVATE_REPORT_DESCRIPTION");
+        new TransactionTemplate(transactions).executeWithoutResult(tx -> {
+            reports.review(report, adminId, Map.of("status", "RESOLVED"));
+            assertThat(auditCount(report)).isEqualTo(2);
+            tx.setRollbackOnly();
+        });
+        assertThat(reportRow(report)).containsEntry("status", "REVIEWED").containsEntry("reviewed_by", adminId);
+        assertThat(auditCount(report)).isEqualTo(1);
+    }
+
+    @ParameterizedTest
+    @CsvSource({"DISCUSSION", "MATERIAL"})
+    void archivedReportingRetainsCanonicalReadAuthorization(String type) throws Exception {
+        UUID target = type.equals("MATERIAL") ? materialId : createThread(studentToken, "{\"title\":\"Archived\",\"content\":\"body\"}");
+        db.update("UPDATE class SET status='ARCHIVED' WHERE class_id=?", classId);
+        assertThat(post("/content-reports", studentToken, reportBody(type, target, "SPAM", null)).statusCode()).isEqualTo(201);
+        assertThat(post("/content-reports", outsiderToken, reportBody(type, target, "SPAM", null)).statusCode()).isEqualTo(403);
+    }
+
+    @Test
+    void auditInsertionFailureRollsBackTheReportTransition() throws Exception {
+        UUID root = createThread(studentToken, "{\"title\":\"Rollback\",\"content\":\"body\"}");
+        UUID report = createReport(studentToken, "DISCUSSION", root);
+        String name = "reject_moderation_" + UUID.randomUUID().toString().replace("-", "");
+        db.execute("CREATE FUNCTION " + name + "() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN IF NEW.entity_id = '"
+                + report + "'::uuid THEN RAISE EXCEPTION 'Reject test audit' USING ERRCODE='23514', CONSTRAINT='reject_moderation_audit'; END IF; RETURN NEW; END $$");
+        db.execute("CREATE TRIGGER " + name + " BEFORE INSERT ON audit_logs FOR EACH ROW EXECUTE FUNCTION " + name + "()");
+        try {
+            HttpResponse<String> failure = patch("/admin/content-reports/" + report, adminToken, "{\"status\":\"RESOLVED\"}");
+            assertThat(failure.statusCode()).isEqualTo(409);
+            assertThat(json(failure).get("details")).isEmpty();
+            assertThat(reportRow(report)).containsEntry("status", "PENDING").containsEntry("reviewed_by", null).containsEntry("reviewed_at", null);
+            assertThat(auditCount(report)).isZero();
+        } finally {
+            db.execute("DROP TRIGGER " + name + " ON audit_logs");
+            db.execute("DROP FUNCTION " + name + "()");
+        }
+    }
+
+    @ParameterizedTest
+    @CsvSource({"DISCUSSION,true", "DISCUSSION,false", "MATERIAL,true", "MATERIAL,false"})
+    void reportingAndDeletionSerializeInBothOrders(String type, boolean reportWins) throws Exception {
+        UUID target = type.equals("MATERIAL") ? materialId : createThread(studentToken, "{\"title\":\"Race\",\"content\":\"body\"}");
+        CreateContentReportRequest request = objectMapper.readValue(reportBody(type, target, "SPAM", null), CreateContentReportRequest.class);
+        Runnable deletion = () -> { if (type.equals("MATERIAL")) chapters.deleteMaterial(target, tutorId); else discussions.deleteDiscussion(target, studentId, false); };
+        Supplier<Object> creation = () -> reports.create(studentId, false, request);
+        if (reportWins) {
+            assertThatThrownBy(() -> race("SELECT class_id FROM class WHERE class_id=? FOR UPDATE", classId,
+                    () -> creation.get(), () -> { deletion.run(); return null; }, () -> {}))
+                    .isInstanceOf(ExecutionException.class).satisfies(error -> {
+                        Throwable cause = error.getCause();
+                        if (type.equals("DISCUSSION")) assertThat(((AppException) cause).getErrorCode()).isEqualTo(ErrorCode.DISCUSSION_HAS_UNRESOLVED_REPORT);
+                        else assertThat(((org.springframework.web.server.ResponseStatusException) cause).getStatusCode().value()).isEqualTo(409);
+                    });
+            assertThat(db.queryForObject("SELECT count(*) FROM content_report WHERE content_id=? AND status='PENDING'", Long.class, target)).isEqualTo(1);
+            assertThat(db.queryForObject("SELECT count(*) FROM " + (type.equals("MATERIAL") ? "material WHERE material_id" : "discussion WHERE discussion_id") + "=?", Long.class, target)).isEqualTo(1);
+        } else {
+            assertThatThrownBy(() -> race("SELECT class_id FROM class WHERE class_id=? FOR UPDATE", classId,
+                    deletion, creation, () -> {
+                        Class<?> targetType = type.equals("MATERIAL") ? vn.edu.hcmut.co3103.lms.entity.Material.class
+                                : vn.edu.hcmut.co3103.lms.entity.Discussion.class;
+                        entityManager.find(targetType, target);
+                    }))
+                    .isInstanceOf(ExecutionException.class).cause().isInstanceOfSatisfying(AppException.class,
+                            failure -> assertThat(failure.getErrorCode()).isEqualTo(ErrorCode.REPORTED_CONTENT_NOT_FOUND));
+            assertThat(db.queryForObject("SELECT count(*) FROM content_report WHERE content_id=?", Long.class, target)).isZero();
+        }
+    }
+
+    @Test
+    void concurrentAdministratorsCannotOverwriteTheWinnerOrCreateDuplicateAuditEvents() throws Exception {
+        UUID root = createThread(studentToken, "{\"title\":\"Reviews\",\"content\":\"body\"}");
+        UUID report = createReport(studentToken, "DISCUSSION", root);
+        UUID otherAdmin = insertUser("ADMINISTRATOR", "ACTIVE");
+        assertThatThrownBy(() -> race("SELECT report_id FROM content_report WHERE report_id=? FOR UPDATE", report,
+                () -> reports.review(report, adminId, Map.of("status", "RESOLVED")),
+                () -> reports.review(report, otherAdmin, Map.of("status", "DISMISSED")),
+                () -> entityManager.find(ContentReport.class, report)))
+                .isInstanceOf(ExecutionException.class).cause().isInstanceOfSatisfying(AppException.class,
+                        failure -> assertThat(failure.getErrorCode()).isEqualTo(ErrorCode.REPORT_ALREADY_UPDATED));
+        assertThat(reportRow(report)).containsEntry("status", "RESOLVED").containsEntry("reviewed_by", adminId);
+        assertThat(auditCount(report)).isEqualTo(1);
+        assertThat(db.queryForObject("SELECT actor_id FROM audit_logs WHERE entity_id=?", UUID.class, report)).isEqualTo(adminId);
+    }
+
+    @Test
+    void equalTimestampPagesVisitEveryReportExactlyOnceAndAvailabilityIsBatched() throws Exception {
+        for (int i = 0; i < 25; i++) {
+            UUID root = createThread(studentToken, "{\"title\":\"Page " + i + "\",\"content\":\"body\"}");
+            createReport(studentToken, "DISCUSSION", root);
+        }
+        createReport(studentToken, "MATERIAL", materialId);
+        db.update("UPDATE content_report SET created_at=TIMESTAMPTZ '2026-01-01 00:00:00Z'");
+        List<UUID> ordered = db.queryForList("SELECT report_id FROM content_report ORDER BY created_at DESC,report_id DESC", UUID.class);
+        for (int repeat = 0; repeat < 2; repeat++) {
+            List<UUID> actual = new ArrayList<>();
+            for (int page = 1; page <= 26; page++) actual.addAll(reportIds(json(get("/admin/content-reports?page=" + page + "&size=1", adminToken))));
+            assertThat(actual).containsExactlyElementsOf(ordered).doesNotHaveDuplicates();
+        }
+        var stats = entityManagerFactory.unwrap(org.hibernate.SessionFactory.class).getStatistics();
+        boolean enabled = stats.isStatisticsEnabled();
+        try {
+            stats.setStatisticsEnabled(true);
+            stats.clear();
+            var page = reports.list(null, null, 1, 20);
+            assertThat(page.items()).hasSize(20).allSatisfy(item -> assertThat(item.targetAvailable()).isTrue());
+            assertThat(stats.getPrepareStatementCount()).isLessThanOrEqualTo(4);
+        } finally { stats.setStatisticsEnabled(enabled); }
+    }
+
+    private long auditCount(UUID report) {
+        return db.queryForObject("SELECT count(*) FROM audit_logs WHERE entity_type='ContentReport' AND entity_id=?", Long.class, report);
+    }
+
+    private Object race(String lockSql, UUID lockId, Runnable winner, Supplier<Object> loser, Runnable preload) throws Exception {
+        var entered = new CountDownLatch(1);
+        var pid = new AtomicInteger();
+        var pending = new AtomicReference<Future<Object>>();
+        try (var worker = Executors.newSingleThreadExecutor()) {
+            new TransactionTemplate(transactions).executeWithoutResult(tx -> {
+                db.queryForObject(lockSql, UUID.class, lockId);
+                pending.set(worker.submit(() -> new TransactionTemplate(transactions).execute(other -> {
+                    pid.set(db.queryForObject("SELECT pg_backend_pid()", Integer.class));
+                    preload.run(); entered.countDown(); return loser.get();
+                })));
+                try { assertThat(entered.await(10, TimeUnit.SECONDS)).isTrue(); }
+                catch (InterruptedException e) { Thread.currentThread().interrupt(); throw new AssertionError(e); }
+                await().atMost(Duration.ofSeconds(10)).until(() -> db.queryForObject("SELECT cardinality(pg_blocking_pids(?))>0", Boolean.class, pid.get()));
+                winner.run();
+            });
+            return pending.get().get(10, TimeUnit.SECONDS);
+        }
     }
 
     private UUID createThread(String token, String body) throws Exception {

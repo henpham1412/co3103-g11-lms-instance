@@ -9,8 +9,15 @@ import vn.edu.hcmut.co3103.lms.entity.ContentReport;
 
 import java.util.Collection;
 import java.util.UUID;
+import java.util.Optional;
+import jakarta.persistence.LockModeType;
+import org.springframework.data.jpa.repository.Lock;
 
 public interface ContentReportRepository extends JpaRepository<ContentReport, UUID> {
+
+    @Lock(LockModeType.PESSIMISTIC_WRITE)
+    @Query("select r from ContentReport r where r.reportId = :id")
+    Optional<ContentReport> findForReview(@Param("id") UUID id);
 
     boolean existsByReporterIdAndContentTypeAndContentId(UUID reporterId, ContentReport.ContentType contentType,
                                                          UUID contentId);
