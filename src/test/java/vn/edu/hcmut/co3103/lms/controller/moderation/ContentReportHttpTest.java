@@ -464,6 +464,47 @@ class ContentReportHttpTest {
                 .isEqualTo(200);
     }
 
+    @ParameterizedTest
+    @CsvSource({"1,1", "999,20", "2147483647,1", "1073741824,2", "107374183,20", "1,100"})
+    void supportedPaginationOffsetsPreserveTheHttpPageContract(int page, int size) throws Exception {
+        long offset = (page - 1L) * size;
+        assertThat(offset).isBetween(0L, (long) Integer.MAX_VALUE);
+        if (page == 1073741824) {
+            // Nearest supported offset below the integer boundary with size=2.
+            assertThat(offset).isEqualTo(Integer.MAX_VALUE - 1L);
+        }
+        UUID root = createThread(studentToken, "{\"title\":\"Pagination boundary\",\"content\":\"body\"}");
+        UUID report = createReport(studentToken, "DISCUSSION", root);
+        HttpResponse<String> response = get("/admin/content-reports?page=" + page + "&size=" + size, adminToken);
+        assertThat(response.statusCode()).as(response.body()).isEqualTo(200);
+        JsonNode body = json(response);
+        assertThat(body.get("page").asInt()).isEqualTo(page);
+        assertThat(body.get("size").asInt()).isEqualTo(size);
+        assertThat(body.get("total_items").asLong()).isEqualTo(1L);
+        assertThat(body.get("total_pages").asInt()).isEqualTo(1);
+        if (page == 1) assertThat(reportIds(body)).containsExactly(report);
+        else assertThat(body.get("items")).isEmpty();
+    }
+
+    @ParameterizedTest
+    @CsvSource({"2147483647,2", "107374184,20", "1073741825,2", "0,1", "-1,1", "1,0", "1,-1", "1,101"})
+    void invalidPaginationInputsReturnTheValidationEnvelope(int page, int size) throws Exception {
+        long offset = (page - 1L) * size;
+        if (page >= 1 && size >= 1 && size <= 100) assertThat(offset).isGreaterThan((long) Integer.MAX_VALUE);
+        if (page == 1073741825) {
+            // First representable unsupported offset above the boundary with size=2.
+            assertThat(offset).isEqualTo(Integer.MAX_VALUE + 1L);
+        }
+        HttpResponse<String> response = get("/admin/content-reports?page=" + page + "&size=" + size, adminToken);
+        assertThat(response.statusCode()).as(response.body()).isEqualTo(400);
+        JsonNode envelope = json(response);
+        assertThat(envelope.size()).isEqualTo(3);
+        assertThat(envelope.get("code").asString()).isEqualTo("VALIDATION_ERROR");
+        assertThat(envelope.get("message").asString()).isNotBlank();
+        assertThat(envelope.get("details").isArray()).isTrue();
+        assertThat(envelope.get("details")).isEmpty();
+    }
+
     @Test
     void onlyAnAdministratorCanReadOneReportAndMissingReportsAreNotFound() throws Exception {
         UUID discussionId = createThread(studentToken, "{\"title\":\"Target\",\"content\":\"body\"}");

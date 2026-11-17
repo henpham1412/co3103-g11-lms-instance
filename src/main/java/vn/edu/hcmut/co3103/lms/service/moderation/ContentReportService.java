@@ -114,6 +114,10 @@ public class ContentReportService {
     public PageResponse<AdminContentReportResponse> list(ContentReport.ReportStatus status,
                                                          ContentReport.ContentType contentType,
                                                          int page, int size) {
+        long offset = (page - 1L) * size;
+        if (offset > Integer.MAX_VALUE) {
+            throw new AppException(ErrorCode.VALIDATION_ERROR);
+        }
         Page<ContentReport> reports = contentReportRepository.search(status, contentType,
                 PageRequest.of(page - 1, size, Sort.by(Sort.Direction.DESC, "createdAt", "reportId")));
         Set<UUID> discussions = existingTargets(reports.getContent(), ContentReport.ContentType.DISCUSSION);
