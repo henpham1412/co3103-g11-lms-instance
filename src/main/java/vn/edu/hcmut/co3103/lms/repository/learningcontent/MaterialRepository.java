@@ -10,6 +10,9 @@ import java.util.Optional;
 import java.util.UUID;
 
 public interface MaterialRepository extends JpaRepository<Material, UUID> {
+
+    @Query("select m.materialId from Material m where m.materialId in :ids")
+    List<UUID> findExistingIds(@Param("ids") java.util.Collection<UUID> ids);
     List<Material> findByLessonIdOrderBySequenceOrderAsc(UUID lessonId);
     List<Material> findByLessonIdAndStatusOrderBySequenceOrderAsc(UUID lessonId, Chapter.VisibilityStatus status);
     Optional<Material> findByMaterialIdAndLessonId(UUID materialId, UUID lessonId);

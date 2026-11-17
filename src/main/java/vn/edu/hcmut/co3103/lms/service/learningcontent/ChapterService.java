@@ -17,6 +17,7 @@ import vn.edu.hcmut.co3103.lms.entity.Activity;
 import vn.edu.hcmut.co3103.lms.entity.Chapter;
 import vn.edu.hcmut.co3103.lms.entity.Class;
 import vn.edu.hcmut.co3103.lms.entity.ClassMember;
+import vn.edu.hcmut.co3103.lms.entity.ContentReport;
 import vn.edu.hcmut.co3103.lms.entity.Lesson;
 import vn.edu.hcmut.co3103.lms.entity.Material;
 import vn.edu.hcmut.co3103.lms.repository.classmanagement.ClassMemberRepository;
@@ -25,6 +26,7 @@ import vn.edu.hcmut.co3103.lms.repository.learningcontent.ActivityRepository;
 import vn.edu.hcmut.co3103.lms.repository.learningcontent.ChapterRepository;
 import vn.edu.hcmut.co3103.lms.repository.learningcontent.LessonRepository;
 import vn.edu.hcmut.co3103.lms.repository.learningcontent.MaterialRepository;
+import vn.edu.hcmut.co3103.lms.repository.moderation.ContentReportRepository;
 
 import java.net.URI;
 import java.nio.file.Files;
@@ -55,6 +57,7 @@ public class ChapterService {
     private final MaterialRepository materialRepository;
     private final ActivityRepository activityRepository;
     private final LocalMaterialStorageService materialStorage;
+    private final ContentReportRepository contentReportRepository;
     private final AssignmentConfigurationService assignmentConfiguration;
 
     @Autowired
@@ -62,6 +65,7 @@ public class ChapterService {
                           ChapterRepository chapterRepository, LessonRepository lessonRepository,
                           MaterialRepository materialRepository, ActivityRepository activityRepository,
                           LocalMaterialStorageService materialStorage,
+                          ContentReportRepository contentReportRepository,
                           AssignmentConfigurationService assignmentConfiguration) {
         this.classRepository = classRepository;
         this.classMemberRepository = classMemberRepository;
@@ -70,6 +74,7 @@ public class ChapterService {
         this.materialRepository = materialRepository;
         this.activityRepository = activityRepository;
         this.materialStorage = materialStorage;
+        this.contentReportRepository = contentReportRepository;
         this.assignmentConfiguration = assignmentConfiguration;
     }
 
@@ -305,6 +310,29 @@ public class ChapterService {
         Material material = materialRepository.findByFileUrl(fileUrl)
                 .orElseThrow(() -> notFound("FILE_NOT_FOUND"));
         getMaterial(material.getMaterialId(), userId, tutor);
+        return readMaterialFile(material, fileKey);
+    }
+
+    /** Internal moderation read; callers must first authorize the Administrator and load a report. */
+    @Transactional(readOnly = true)
+    public DownloadableMaterial getModerationMaterialFile(UUID materialId) {
+        return findModerationMaterialFile(materialId).orElseThrow(() -> notFound("FILE_NOT_FOUND"));
+    }
+
+    @Transactional(readOnly = true)
+    public java.util.Optional<DownloadableMaterial> findModerationMaterialFile(UUID materialId) {
+        return materialRepository.findById(materialId).flatMap(material -> {
+            String key = localFileKey(material.getFileUrl());
+            if (key == null) return java.util.Optional.empty();
+            try { return java.util.Optional.of(readMaterialFile(material, key)); }
+            catch (ResponseStatusException missing) {
+                if (missing.getStatusCode().value() != 404) throw missing;
+                return java.util.Optional.empty();
+            }
+        });
+    }
+
+    private DownloadableMaterial readMaterialFile(Material material, String fileKey) {
         if (material.getMaterialType() != Material.MaterialType.DOCUMENT
                 && material.getMaterialType() != Material.MaterialType.VIDEO) throw notFound("FILE_NOT_FOUND");
         Path path = materialStorage.resolve(fileKey);
@@ -346,6 +374,11 @@ public class ChapterService {
     @Transactional
     public void deleteMaterial(UUID materialId, UUID tutorId) {
         Material material = requireWritableMaterial(materialId, tutorId);
+        // DOC-05 section 3.2.5: a report dependency blocks deletion; the Tutor hides the Material instead.
+        if (contentReportRepository.existsByContentTypeAndContentIdAndStatusIn(
+                ContentReport.ContentType.MATERIAL, materialId, ContentReport.UNRESOLVED_STATUSES)) {
+            throw conflict("CONTENT_HAS_DEPENDENT_LEARNING_DATA");
+        }
         String fileUrl = material.getFileUrl();
         String fileKey = localFileKey(fileUrl);
         try {

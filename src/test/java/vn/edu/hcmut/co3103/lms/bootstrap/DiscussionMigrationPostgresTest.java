@@ -52,7 +52,7 @@ class DiscussionMigrationPostgresTest {
             var latest = configuration.target("latest").load();
             latest.migrate();
             latest.validate();
-            assertThat(latest.info().current().getVersion().getVersion()).isEqualTo("21");
+            assertThat(latest.info().current().getVersion().getVersion()).isEqualTo("22");
             assertThat(db.queryForList("SELECT version,script,checksum,success FROM " + schema
                     + ".flyway_schema_history WHERE version::integer <= 20 ORDER BY installed_rank"))
                     .isEqualTo(historyBefore);

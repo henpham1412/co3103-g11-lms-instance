@@ -11,6 +11,7 @@ import vn.edu.hcmut.co3103.lms.dto.response.DiscussionDetailResponse;
 import vn.edu.hcmut.co3103.lms.dto.response.PageResponse;
 import vn.edu.hcmut.co3103.lms.entity.Class;
 import vn.edu.hcmut.co3103.lms.entity.ClassMember;
+import vn.edu.hcmut.co3103.lms.entity.ContentReport;
 import vn.edu.hcmut.co3103.lms.entity.Discussion;
 import vn.edu.hcmut.co3103.lms.exception.AppException;
 import vn.edu.hcmut.co3103.lms.exception.ErrorCode;
@@ -18,6 +19,7 @@ import vn.edu.hcmut.co3103.lms.repository.classmanagement.ClassMemberRepository;
 import vn.edu.hcmut.co3103.lms.repository.classmanagement.ClassRepository;
 import vn.edu.hcmut.co3103.lms.repository.interaction.DiscussionRepository;
 import vn.edu.hcmut.co3103.lms.repository.learningcontent.LessonRepository;
+import vn.edu.hcmut.co3103.lms.repository.moderation.ContentReportRepository;
 
 import java.util.List;
 import java.util.Map;
@@ -42,17 +44,20 @@ public class DiscussionService {
     private final ClassMemberRepository classMemberRepository;
     private final LessonRepository lessonRepository;
     private final DiscussionRepository discussionRepository;
+    private final ContentReportRepository contentReportRepository;
     private final EntityManager entityManager;
 
     public DiscussionService(ClassRepository classRepository,
                              ClassMemberRepository classMemberRepository,
                              LessonRepository lessonRepository,
                              DiscussionRepository discussionRepository,
+                             ContentReportRepository contentReportRepository,
                              EntityManager entityManager) {
         this.classRepository = classRepository;
         this.classMemberRepository = classMemberRepository;
         this.lessonRepository = lessonRepository;
         this.discussionRepository = discussionRepository;
+        this.contentReportRepository = contentReportRepository;
         this.entityManager = entityManager;
     }
 
@@ -161,6 +166,11 @@ public class DiscussionService {
         // BR-6.3: physical deletion, and only once no reply depends on this post.
         if (discussionRepository.existsByParentId(discussionId)) {
             throw new AppException(ErrorCode.DISCUSSION_HAS_REPLIES);
+        }
+        // DOC-05 section 3.3: an unresolved report keeps the post available for Administrator review.
+        if (contentReportRepository.existsByContentTypeAndContentIdAndStatusIn(
+                ContentReport.ContentType.DISCUSSION, discussionId, ContentReport.UNRESOLVED_STATUSES)) {
+            throw new AppException(ErrorCode.DISCUSSION_HAS_UNRESOLVED_REPORT);
         }
         discussionRepository.delete(discussion);
         discussionRepository.flush();
