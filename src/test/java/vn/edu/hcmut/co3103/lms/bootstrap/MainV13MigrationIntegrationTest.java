@@ -119,12 +119,12 @@ class MainV13MigrationIntegrationTest {
             assertThat(historyBefore).hasSize(baseline == 13 ? 13 : 15);
 
             var latest = configuration.target("latest").load();
-            assertThat(latest.migrate().migrationsExecuted).isEqualTo(baseline == 13 ? 5 : 3);
+            assertThat(latest.migrate().migrationsExecuted).isEqualTo(baseline == 13 ? 6 : 4);
             latest.validate();
             assertThat(latest.info().applied()).filteredOn(info -> info.getVersion() != null)
                     .extracting(info -> info.getVersion().getVersion())
                     .containsExactly("1", "2", "3", "4", "5", "6", "7", "8", "9", "10", "11", "12", "13",
-                            "14", "17", "18", "19", "20");
+                            "14", "17", "18", "19", "20", "21");
             assertThat(jdbc.queryForList(history)).isEqualTo(historyBefore);
             assertThat(jdbc.queryForList(constraints, schema)).isEqualTo(constraintsBefore);
             assertThat(jdbc.queryForList(users)).isEqualTo(usersBefore);

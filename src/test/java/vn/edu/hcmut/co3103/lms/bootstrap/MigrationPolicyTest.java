@@ -42,12 +42,13 @@ class MigrationPolicyTest {
             Map.entry("V19__add_identity_sync_watermarks.sql", 1240703539),
             Map.entry("V20__create_audit_logs.sql", 67085040),
             Map.entry("V14__create_file_assignments.sql", 1890549139),
-            Map.entry("V17__create_learning_signals_and_learner_mastery.sql", 970127172));
+            Map.entry("V17__create_learning_signals_and_learner_mastery.sql", 970127172),
+            Map.entry("V21__create_discussions.sql", -1362377202));
 
     @Test
     void keepsExactlyTheCombinedApprovedMigrations() throws IOException {
         List<MigrationFile> migrations = migrations();
-        assertThat(migrations).hasSize(18);
+        assertThat(migrations).hasSize(19);
         assertThat(migrations).extracting(MigrationFile::fileName)
                 .containsExactlyInAnyOrderElementsOf(APPROVED_CHECKSUMS.keySet());
     }
@@ -58,7 +59,7 @@ class MigrationPolicyTest {
                 migration.fileName().substring(1, migration.fileName().indexOf("__"))))
                 .doesNotHaveDuplicates()
                 .containsExactlyInAnyOrderElementsOf(java.util.stream.Stream.concat(java.util.stream.IntStream.rangeClosed(1, 14).boxed(),
-                                java.util.stream.IntStream.rangeClosed(17, 20).boxed())
+                                java.util.stream.IntStream.rangeClosed(17, 21).boxed())
                         .map(version -> MigrationVersion.fromVersion(Integer.toString(version))).toList());
     }
 

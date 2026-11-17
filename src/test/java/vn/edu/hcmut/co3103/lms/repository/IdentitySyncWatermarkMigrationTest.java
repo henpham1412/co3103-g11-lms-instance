@@ -43,7 +43,7 @@ class IdentitySyncWatermarkMigrationTest {
             var flyway = migration.target("latest").load();
             flyway.migrate();
             flyway.validate();
-            assertThat(flyway.info().current().getVersion().getVersion()).isEqualTo("20");
+            assertThat(flyway.info().current().getVersion().getVersion()).isEqualTo("21");
             assertThat(jdbc.queryForList(originalColumns)).isEqualTo(before);
             assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM " + table
                     + " WHERE last_synced_profile_iat IS NULL AND last_login_token_iat IS NULL", Integer.class)).isEqualTo(2);
