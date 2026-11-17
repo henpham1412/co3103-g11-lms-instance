@@ -1,5 +1,6 @@
 package vn.edu.hcmut.co3103.lms.bootstrap;
 
+import org.flywaydb.core.api.MigrationVersion;
 import org.flywaydb.core.api.resource.LoadableResource;
 import org.flywaydb.core.internal.resolver.ChecksumCalculator;
 import org.junit.jupiter.api.Test;
@@ -37,20 +38,37 @@ class MigrationPolicyTest {
             Map.entry("V11__create_lesson_skill_topics.sql", 261484167),
             Map.entry("V12__create_activity_skill_topics.sql", -1627510611),
             Map.entry("V13__create_question_skill_topics.sql", -415992144),
-            Map.entry("V18__create_discussions.sql", -1362377202),
-            Map.entry("V19__create_content_reports.sql", 420574687));
+            Map.entry("V18__index_lms_user_access_default_sort.sql", 354517154),
+            Map.entry("V19__add_identity_sync_watermarks.sql", 1240703539),
+            Map.entry("V20__create_audit_logs.sql", 67085040),
+            Map.entry("V14__create_file_assignments.sql", 1890549139),
+            Map.entry("V17__create_learning_signals_and_learner_mastery.sql", 970127172),
+            Map.entry("V21__create_discussions.sql", -1362377202),
+            Map.entry("V22__create_content_reports.sql", 420574687));
 
     @Test
-    void keepsTheMigrationSetDownToTheApprovedFiles() throws IOException {
-        assertThat(migrations()).extracting(MigrationFile::fileName)
+    void keepsExactlyTheCombinedApprovedMigrations() throws IOException {
+        List<MigrationFile> migrations = migrations();
+        assertThat(migrations).hasSize(20);
+        assertThat(migrations).extracting(MigrationFile::fileName)
                 .containsExactlyInAnyOrderElementsOf(APPROVED_CHECKSUMS.keySet());
+    }
+
+    @Test
+    void migrationVersionsAreUniqueRegardlessOfDescription() throws IOException {
+        assertThat(migrations()).extracting(migration -> MigrationVersion.fromVersion(
+                migration.fileName().substring(1, migration.fileName().indexOf("__"))))
+                .doesNotHaveDuplicates()
+                .containsExactlyInAnyOrderElementsOf(java.util.stream.Stream.concat(java.util.stream.IntStream.rangeClosed(1, 14).boxed(),
+                                java.util.stream.IntStream.rangeClosed(17, 22).boxed())
+                        .map(version -> MigrationVersion.fromVersion(Integer.toString(version))).toList());
     }
 
     @Test
     void keepsTheChecksumOfEveryAlreadyAppliedMigration() throws IOException {
         for (MigrationFile migration : migrations()) {
             assertThat(migration.checksum())
-                    .as("Flyway checksum of %s - add a new forward migration instead of editing this one",
+                    .as("Flyway checksum of %s - add a new versioned migration instead of editing this one",
                             migration.fileName())
                     .isEqualTo(APPROVED_CHECKSUMS.get(migration.fileName()));
         }

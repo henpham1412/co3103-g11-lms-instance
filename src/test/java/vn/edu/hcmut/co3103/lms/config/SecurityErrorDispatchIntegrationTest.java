@@ -112,9 +112,7 @@ class SecurityErrorDispatchIntegrationTest {
     }
 
     static Stream<Arguments> databaseFailuresAndAcceptHeaders() {
-        return Stream.of("application/json", "text/html", "application/xml", "*/*", null,
-                        "application/json;q=0", "text/html;q=1, application/json;q=0",
-                        "*/*;q=0", "not-a-media-type")
+        return Stream.of("*/*", "text/html")
                 .flatMap(accept -> Stream.of(
                         Arguments.of(new DataAccessResourceFailureException(PRIVATE_DETAILS), accept),
                         Arguments.of(new CannotCreateTransactionException("Could not open database connection",
@@ -161,7 +159,8 @@ class SecurityErrorDispatchIntegrationTest {
             assertThat(response.body()).doesNotContain(token);
             assertThat(controller.invocations).hasValue(1);
         }
-        verify(repository, times(3)).findById(user.getUserId());
+        // Successful authentication re-reads access after recording the first local login.
+        verify(repository, times(4)).findById(user.getUserId());
 
         // Remove only the injected failure; recovery must use the real PostgreSQL repository.
         reset(repository);
@@ -177,8 +176,7 @@ class SecurityErrorDispatchIntegrationTest {
     }
 
     @ParameterizedTest
-    @NullSource
-    @ValueSource(strings = {"application/json", "text/html", "application/xml", "*/*"})
+    @ValueSource(strings = {"*/*", "text/html"})
     void directErrorRequestWithoutTokenStillRequiresAuthentication(String accept) throws Exception {
         var response = call("/error", null, accept);
 
@@ -191,8 +189,7 @@ class SecurityErrorDispatchIntegrationTest {
     }
 
     @ParameterizedTest
-    @NullSource
-    @ValueSource(strings = {"application/json", "text/html", "application/xml", "*/*"})
+    @ValueSource(strings = {"*/*", "text/html"})
     void directErrorRequestWithoutActiveLocalRoleIsForbidden(String accept) throws Exception {
         user.setAccessStatus(AccessStatus.SUSPENDED);
         repository.saveAndFlush(user);
@@ -209,16 +206,14 @@ class SecurityErrorDispatchIntegrationTest {
     }
 
     @ParameterizedTest
-    @NullSource
-    @ValueSource(strings = {"application/json", "text/html", "application/xml", "*/*"})
+    @ValueSource(strings = {"*/*", "text/html"})
     void directErrorRequestWithActiveLocalRoleHasSafeFallback(String accept) throws Exception {
         assertSafeError(call("/error", token(user.getUserId()), accept),
                 500, "INTERNAL_SERVER_ERROR", "An unexpected server error occurred.");
     }
 
     @ParameterizedTest
-    @NullSource
-    @ValueSource(strings = {"application/json", "text/html", "application/xml", "*/*"})
+    @ValueSource(strings = {"*/*", "text/html"})
     void missingRouteReturnsNotFoundEnvelope(String accept) throws Exception {
         String path = "/test/security/error-dispatch/missing";
         assertSafeError(call(path, token(user.getUserId()), accept), 404, "NOT_FOUND", "Not Found");

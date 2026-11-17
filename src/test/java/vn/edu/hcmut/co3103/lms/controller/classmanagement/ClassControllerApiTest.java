@@ -24,6 +24,7 @@ import vn.edu.hcmut.co3103.lms.dto.response.ClassCreationResponse;
 import vn.edu.hcmut.co3103.lms.dto.response.ClassDetailResponse;
 import vn.edu.hcmut.co3103.lms.dto.response.StudentClassPageResponse;
 import vn.edu.hcmut.co3103.lms.exception.GlobalExceptionHandler;
+import vn.edu.hcmut.co3103.lms.exception.ClassManagementExceptionHandler;
 import vn.edu.hcmut.co3103.lms.exception.ClassCodeAlreadyExistsException;
 import vn.edu.hcmut.co3103.lms.entity.Class;
 import vn.edu.hcmut.co3103.lms.mapper.ClassMapper;
@@ -67,7 +68,7 @@ class ClassControllerApiTest {
         ClassController controller = new ClassController(classService, membershipService, mapper, thumbnailService);
         mvc = MockMvcBuilders.standaloneSetup(controller)
                 .setCustomArgumentResolvers(new AuthenticationArgumentResolver())
-                .setControllerAdvice(new GlobalExceptionHandler())
+                .setControllerAdvice(new ClassManagementExceptionHandler(), new GlobalExceptionHandler())
                 .build();
     }
 

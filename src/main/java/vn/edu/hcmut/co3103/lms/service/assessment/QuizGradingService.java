@@ -1,6 +1,8 @@
 package vn.edu.hcmut.co3103.lms.service.assessment;
 
 import lombok.RequiredArgsConstructor;
+import jakarta.persistence.EntityManager;
+import jakarta.persistence.LockModeType;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import vn.edu.hcmut.co3103.lms.entity.AttemptAnswer;
@@ -13,6 +15,8 @@ import vn.edu.hcmut.co3103.lms.repository.assessment.AttemptAnswerRepository;
 import vn.edu.hcmut.co3103.lms.repository.assessment.QuestionOptionRepository;
 import vn.edu.hcmut.co3103.lms.repository.assessment.QuestionRepository;
 import vn.edu.hcmut.co3103.lms.repository.assessment.QuizAttemptRepository;
+import vn.edu.hcmut.co3103.lms.repository.assessment.QuizRepository;
+import vn.edu.hcmut.co3103.lms.service.adaptive.MasteryRecalculationService;
 
 import java.math.BigDecimal;
 import java.math.RoundingMode;
@@ -30,12 +34,36 @@ public class QuizGradingService {
     private final QuestionOptionRepository optionRepository;
     private final AttemptAnswerRepository answerRepository;
     private final AttemptAnswerOptionRepository selectedOptionRepository;
+    private final MasteryRecalculationService mastery;
+    private final AssessmentLocks locks;
+    private final QuizRepository quizzes;
+    private final EntityManager entityManager;
 
     @Transactional
     public void recalculateSubmittedAttempts(Quiz quiz) {
+        recalculateSubmittedAttempts(quiz, Set.of());
+    }
+
+    @Transactional
+    public void recalculateSubmittedAttempts(Quiz quiz, Set<UUID> changedTopicIds) {
+        lockQuiz(quiz.getId());
         for (QuizAttempt attempt : attemptRepository.findByQuiz_IdAndStatus(quiz.getId(), "SUBMITTED")) {
-            gradeAttempt(attempt);
+            entityManager.refresh(attempt, LockModeType.PESSIMISTIC_WRITE);
+            gradeStoredAttempt(attempt);
         }
+        mastery.synchronizeQuiz(quiz.getId(), changedTopicIds);
+    }
+
+    @Transactional
+    public void synchronizeMastery(Quiz quiz, Set<UUID> changedTopicIds) {
+        lockQuiz(quiz.getId());
+        mastery.synchronizeQuiz(quiz.getId(), changedTopicIds);
+    }
+
+    @Transactional
+    public void synchronizeAttemptMastery(QuizAttempt attempt) {
+        lockQuiz(attempt.getQuiz().getId());
+        mastery.synchronizeAttempt(attempt.getId());
     }
 
     public BigDecimal calculateFinalGrade(QuizAttempt viewedAttempt) {
@@ -67,7 +95,24 @@ public class QuizGradingService {
         };
     }
 
+    @Transactional
     public void gradeAttempt(QuizAttempt attempt) {
+        lockQuiz(attempt.getQuiz().getId());
+        QuizAttempt locked = attemptRepository.findLockedById(attempt.getId()).orElseThrow();
+        entityManager.refresh(locked);
+        if (!"SUBMITTED".equals(locked.getStatus())) {
+            throw new IllegalStateException("Only submitted attempts can be graded");
+        }
+        gradeStoredAttempt(locked);
+        mastery.synchronizeAttempt(locked.getId());
+    }
+
+    private void lockQuiz(UUID quizId) {
+        locks.lockQuiz(quizId);
+        quizzes.findLockedById(quizId).orElseThrow();
+    }
+
+    private void gradeStoredAttempt(QuizAttempt attempt) {
         var questions = questionRepository.findByQuiz_IdOrderByOrderIndex(attempt.getQuiz().getId());
         BigDecimal totalEarnable = questions.stream().map(Question::getPointsAwarded)
                 .reduce(BigDecimal.ZERO, BigDecimal::add);

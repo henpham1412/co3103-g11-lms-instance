@@ -19,6 +19,16 @@ spring:
     url: ${DB_URL:jdbc:postgresql://localhost:5432/lms_instance_dev}
     username: ${DB_USERNAME:postgres}
     password: ${DB_PASSWORD}
+    hikari:
+      # Applies to application and Flyway connections. Refuse a connection if privacy settings fail.
+      connection-init-sql: >-
+        SET log_error_verbosity = 'terse';
+        SET log_min_error_statement = 'panic';
+        SET log_parameter_max_length_on_error = 0;
+        SET log_statement = 'none';
+        SET log_min_duration_statement = -1;
+        SET log_min_duration_sample = -1;
+        SET log_transaction_sample_rate = 0;
 
   jpa:
     hibernate:

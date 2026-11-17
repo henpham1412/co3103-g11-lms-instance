@@ -20,6 +20,18 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 @AutoConfigureMockMvc
 class Co3103G11LmsInstanceApplicationTests {
 
+    @Test
+    void postgresVersionAndConnectionErrorLoggingPolicyMeetDeploymentContract() {
+        assertThat(jdbcTemplate.queryForObject("SHOW server_version_num", String.class)).isEqualTo("180006");
+        assertThat(jdbcTemplate.queryForObject("SHOW log_error_verbosity", String.class)).isEqualTo("terse");
+        assertThat(jdbcTemplate.queryForObject("SHOW log_min_error_statement", String.class)).isEqualTo("panic");
+        assertThat(jdbcTemplate.queryForObject("SHOW log_parameter_max_length_on_error", String.class)).isEqualTo("0");
+        assertThat(jdbcTemplate.queryForObject("SHOW log_statement", String.class)).isEqualTo("none");
+        assertThat(jdbcTemplate.queryForObject("SHOW log_min_duration_statement", String.class)).isEqualTo("-1");
+        assertThat(jdbcTemplate.queryForObject("SHOW log_min_duration_sample", String.class)).isEqualTo("-1");
+        assertThat(jdbcTemplate.queryForObject("SHOW log_transaction_sample_rate", String.class)).isEqualTo("0");
+    }
+
     @Autowired
     private MockMvc mockMvc;
 

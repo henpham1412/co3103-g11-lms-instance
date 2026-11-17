@@ -60,6 +60,8 @@ class TutorAndAssessmentHistoryServiceTest {
     private final ActivityRepository activityRepository = mock(ActivityRepository.class);
     private final CompletionMarkRepository completionMarkRepository = mock(CompletionMarkRepository.class);
     private final QuizAttemptRepository quizAttemptRepository = mock(QuizAttemptRepository.class);
+    private final vn.edu.hcmut.co3103.lms.service.adaptive.MasteryReadService mastery =
+            mock(vn.edu.hcmut.co3103.lms.service.adaptive.MasteryReadService.class);
 
     private final TutorProgressService tutorService = new TutorProgressService(
             classRepository,
@@ -69,7 +71,8 @@ class TutorAndAssessmentHistoryServiceTest {
             lessonRepository,
             activityRepository,
             completionMarkRepository,
-            quizAttemptRepository
+            quizAttemptRepository,
+            mastery
     );
 
     private final AssessmentHistoryService historyService = new AssessmentHistoryService(quizAttemptRepository);

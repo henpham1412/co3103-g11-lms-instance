@@ -6,9 +6,39 @@ import org.springframework.data.repository.query.Param;
 import vn.edu.hcmut.co3103.lms.entity.Discussion;
 
 import java.util.List;
+import java.util.Optional;
 import java.util.UUID;
 
 public interface DiscussionRepository extends JpaRepository<Discussion, UUID> {
+
+    @Query("select d.classId from Discussion d where d.discussionId = :id")
+    Optional<UUID> findClassIdByDiscussionId(@Param("id") UUID discussionId);
+
+    // UNION also bounds traversal if legacy data contains a cycle. Scope is checked at every hop,
+    // rather than relying on the separate foreign keys to guarantee equal Class/Lesson context.
+    String DESCENDANTS = """
+            WITH RECURSIVE replies AS (
+                SELECT d.* FROM discussion d
+                WHERE d.parent_id = :discussionId AND d.class_id = :classId
+                  AND d.lesson_id IS NOT DISTINCT FROM CAST(:lessonId AS uuid)
+                UNION
+                SELECT child.* FROM discussion child
+                JOIN replies parent ON child.parent_id = parent.discussion_id
+                WHERE child.class_id = :classId
+                  AND child.lesson_id IS NOT DISTINCT FROM CAST(:lessonId AS uuid)
+            )
+            """;
+
+    @Query(value = DESCENDANTS + "SELECT count(*) FROM replies", nativeQuery = true)
+    long countDescendants(@Param("discussionId") UUID discussionId, @Param("classId") UUID classId,
+                          @Param("lessonId") UUID lessonId);
+
+    @Query(value = DESCENDANTS + """
+            SELECT * FROM replies ORDER BY created_at ASC, discussion_id ASC LIMIT :limit OFFSET :offset
+            """, nativeQuery = true)
+    List<Discussion> findDescendants(@Param("discussionId") UUID discussionId, @Param("classId") UUID classId,
+                                     @Param("lessonId") UUID lessonId, @Param("limit") int limit,
+                                     @Param("offset") long offset);
 
     boolean existsByParentId(UUID parentId);
 
