@@ -15,9 +15,11 @@ import org.springframework.context.annotation.Primary;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.test.context.DynamicPropertyRegistry;
 import org.springframework.test.context.DynamicPropertySource;
+import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import tools.jackson.databind.JsonNode;
 import tools.jackson.databind.ObjectMapper;
 import vn.edu.hcmut.co3103.lms.security.jwt.JwtTestSupport;
+import vn.edu.hcmut.co3103.lms.service.assessment.QuizAttemptExpiryScheduler;
 
 import java.net.URI;
 import java.net.http.HttpClient;
@@ -57,6 +59,9 @@ import static org.awaitility.Awaitility.await;
  */
 @SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT)
 @Import(ContentReportHttpTest.Clocks.class)
+// Background quiz scans share the SessionFactory statistics used by the query-budget assertion.
+// Replace only this unrelated scheduler in this test context; all report SQL remains real.
+@MockitoBean(types = QuizAttemptExpiryScheduler.class, enforceOverride = true)
 class ContentReportHttpTest {
 
     private static final JwtTestSupport JWT = createJwtSupport();
