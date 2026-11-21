@@ -50,7 +50,9 @@ class ChapterServiceTest {
     private final LocalMaterialStorageService materialStorage = mock(LocalMaterialStorageService.class);
     private final ContentReportRepository contentReportRepository = mock(ContentReportRepository.class);
     private final ChapterService service = new ChapterService(classRepository, memberRepository,
-            chapterRepository, lessonRepository, materialRepository, activityRepository, materialStorage, contentReportRepository, mock(vn.edu.hcmut.co3103.lms.service.assessment.AssignmentConfigurationService.class));
+            chapterRepository, lessonRepository, materialRepository, activityRepository, materialStorage, contentReportRepository,
+            mock(vn.edu.hcmut.co3103.lms.service.assessment.AssignmentConfigurationService.class),
+            mock(vn.edu.hcmut.co3103.lms.service.notification.NotificationEvents.class));
 
     private final UUID classId = UUID.randomUUID();
     private final UUID tutorId = UUID.randomUUID();

@@ -36,7 +36,8 @@ class ClassMembershipServiceTest {
             classMemberRepository,
             userAccessRepository,
             lessonRepository,
-            completionMarkRepository
+            completionMarkRepository,
+            mock(vn.edu.hcmut.co3103.lms.service.notification.NotificationEvents.class)
     );
 
     private final UUID classId = UUID.randomUUID();

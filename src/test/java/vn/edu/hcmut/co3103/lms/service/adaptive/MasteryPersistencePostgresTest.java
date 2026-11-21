@@ -87,6 +87,7 @@ class MasteryPersistencePostgresTest {
         db.update("DELETE FROM chapter WHERE chapter_id=?", chapter);
         db.update("DELETE FROM class_member WHERE class_member_id=?", member);
         db.update("DELETE FROM class WHERE class_id=?", course);
+        db.update("DELETE FROM notification WHERE recipient_id IN (?,?)", owner, student);
         db.update("DELETE FROM lms_user_access WHERE user_id IN (?,?)", owner, student);
     }
 

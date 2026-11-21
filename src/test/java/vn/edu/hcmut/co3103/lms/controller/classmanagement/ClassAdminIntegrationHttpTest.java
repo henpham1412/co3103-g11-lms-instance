@@ -90,6 +90,7 @@ class ClassAdminIntegrationHttpTest {
         jdbc.update("DELETE FROM class_member WHERE class_id = ?", classId);
         if (classId != null) classes.deleteById(classId);
         jdbc.update("DELETE FROM audit_logs WHERE actor_id = ?", admin);
+        jdbc.update("DELETE FROM notification WHERE recipient_id IN (?, ?, ?)", admin, tutor, student);
         for (UUID id : List.of(admin, tutor, student)) users.deleteById(id);
     }
 

@@ -220,6 +220,7 @@ class Lms8AdaptivePostgresHttpTest {
         db.update("DELETE FROM chapter WHERE chapter_id = ?", chapterId);
         db.update("DELETE FROM class_member WHERE class_id IN (?, ?)", classId, otherClassId);
         db.update("DELETE FROM class WHERE class_id IN (?, ?)", classId, otherClassId);
+        db.update("DELETE FROM notification WHERE recipient_id IN (?, ?, ?)", ownerId, otherTutorId, studentId);
         db.update("DELETE FROM lms_user_access WHERE user_id IN (?, ?, ?)", ownerId, otherTutorId, studentId);
     }
 

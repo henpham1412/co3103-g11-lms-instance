@@ -27,6 +27,8 @@ import vn.edu.hcmut.co3103.lms.repository.learningcontent.ChapterRepository;
 import vn.edu.hcmut.co3103.lms.repository.learningcontent.LessonRepository;
 import vn.edu.hcmut.co3103.lms.repository.learningcontent.MaterialRepository;
 import vn.edu.hcmut.co3103.lms.repository.moderation.ContentReportRepository;
+import vn.edu.hcmut.co3103.lms.repository.notification.NotificationDeliveryRepository.ContentScope;
+import vn.edu.hcmut.co3103.lms.service.notification.NotificationEvents;
 
 import java.net.URI;
 import java.nio.file.Files;
@@ -59,6 +61,7 @@ public class ChapterService {
     private final LocalMaterialStorageService materialStorage;
     private final ContentReportRepository contentReportRepository;
     private final AssignmentConfigurationService assignmentConfiguration;
+    private final NotificationEvents notifications;
 
     @Autowired
     public ChapterService(ClassRepository classRepository, ClassMemberRepository classMemberRepository,
@@ -66,7 +69,8 @@ public class ChapterService {
                           MaterialRepository materialRepository, ActivityRepository activityRepository,
                           LocalMaterialStorageService materialStorage,
                           ContentReportRepository contentReportRepository,
-                          AssignmentConfigurationService assignmentConfiguration) {
+                          AssignmentConfigurationService assignmentConfiguration,
+                          NotificationEvents notifications) {
         this.classRepository = classRepository;
         this.classMemberRepository = classMemberRepository;
         this.chapterRepository = chapterRepository;
@@ -76,6 +80,7 @@ public class ChapterService {
         this.materialStorage = materialStorage;
         this.contentReportRepository = contentReportRepository;
         this.assignmentConfiguration = assignmentConfiguration;
+        this.notifications = notifications;
     }
 
     @Transactional(readOnly = true)
@@ -135,12 +140,15 @@ public class ChapterService {
     @Transactional
     public Chapter updateChapter(UUID chapterId, UUID tutorId, Map<String, Object> patch) {
         Chapter chapter = requireWritableChapter(chapterId, tutorId);
+        var previousStatus = chapter.getStatus();
         validatePatch(patch, Set.of("title", "description", "sequence_order", "status"));
         if (patch.containsKey("title")) { validateContentTitle(text(patch, "title")); chapter.setTitle(text(patch, "title").trim()); }
         if (patch.containsKey("description")) chapter.setDescription(nullableText(patch, "description"));
         if (patch.containsKey("sequence_order")) chapter.setSequenceOrder(nonNegativeInt(patch, "sequence_order"));
         if (patch.containsKey("status")) chapter.setStatus(visibility(patch, "status"));
-        return chapterRepository.save(chapter);
+        Chapter saved = chapterRepository.save(chapter);
+        notifyPublication(ContentScope.CHAPTER, chapterId, previousStatus, chapter.getStatus());
+        return saved;
     }
 
     @Transactional
@@ -205,13 +213,16 @@ public class ChapterService {
     @Transactional
     public Lesson updateLesson(UUID lessonId, UUID tutorId, Map<String, Object> patch) {
         Lesson lesson = requireWritableLesson(lessonId, tutorId);
+        var previousStatus = lesson.getStatus();
         validatePatch(patch, Set.of("title", "description", "estimated_duration", "sequence_order", "status"));
         if (patch.containsKey("title")) { validateContentTitle(text(patch, "title")); lesson.setTitle(text(patch, "title").trim()); }
         if (patch.containsKey("description")) lesson.setDescription(nullableText(patch, "description"));
         if (patch.containsKey("estimated_duration")) { Integer duration = nullableInt(patch, "estimated_duration"); validateDuration(duration); lesson.setEstimatedDuration(duration); }
         if (patch.containsKey("sequence_order")) lesson.setSequenceOrder(nonNegativeInt(patch, "sequence_order"));
         if (patch.containsKey("status")) lesson.setStatus(visibility(patch, "status"));
-        return lessonRepository.save(lesson);
+        Lesson saved = lessonRepository.save(lesson);
+        notifyPublication(ContentScope.LESSON, lessonId, previousStatus, lesson.getStatus());
+        return saved;
     }
 
     @Transactional
@@ -251,10 +262,12 @@ public class ChapterService {
         // A stored asset key is only minted by the upload endpoint, which validates the bytes.
         if (isLocalFileUrl(request.file_url())) throw badRequest();
         validateMaterialPayload(request.material_type(), request.file_url(), request.content());
-        return materialRepository.save(new Material(lessonId, request.title().trim(), request.material_type(),
+        Material material = materialRepository.save(new Material(lessonId, request.title().trim(), request.material_type(),
                 request.file_url(), request.content(),
                 resolveOrder(request.sequence_order(), () -> materialRepository.nextSequenceOrderForLesson(lessonId)),
                 request.status()));
+        notifyPublication(ContentScope.MATERIAL, material.getMaterialId(), null, material.getStatus());
+        return material;
     }
 
     @Transactional
@@ -275,7 +288,9 @@ public class ChapterService {
                     null,
                     resolveOrder(request.sequence_order(), () -> materialRepository.nextSequenceOrderForLesson(lessonId)),
                     request.status());
-            return materialRepository.saveAndFlush(material);
+            Material saved = materialRepository.saveAndFlush(material);
+            notifyPublication(ContentScope.MATERIAL, saved.getMaterialId(), null, saved.getStatus());
+            return saved;
         } catch (RuntimeException exception) {
             materialStorage.delete(stored.key());
             throw exception;
@@ -352,6 +367,7 @@ public class ChapterService {
     @Transactional
     public Material updateMaterial(UUID materialId, UUID tutorId, Map<String, Object> patch) {
         Material material = requireWritableMaterial(materialId, tutorId);
+        var previousStatus = material.getStatus();
         validatePatch(patch, Set.of("title", "content", "file_url", "sequence_order", "status"));
         if (patch.containsKey("title")) { validateTitle(text(patch, "title")); material.setTitle(text(patch, "title").trim()); }
         if (patch.containsKey("content")) material.setContent(nullableText(patch, "content"));
@@ -368,7 +384,9 @@ public class ChapterService {
         if (patch.containsKey("sequence_order")) material.setSequenceOrder(nonNegativeInt(patch, "sequence_order"));
         if (patch.containsKey("status")) material.setStatus(visibility(patch, "status"));
         validateMaterialPayload(material.getMaterialType(), material.getFileUrl(), material.getContent());
-        return materialRepository.save(material);
+        Material saved = materialRepository.save(material);
+        notifyPublication(ContentScope.MATERIAL, materialId, previousStatus, material.getStatus());
+        return saved;
     }
 
     @Transactional
@@ -410,7 +428,10 @@ public class ChapterService {
                 request.activity_type(),
                 resolveOrder(request.sequence_order(), () -> activityRepository.nextSequenceOrderForLesson(lessonId)),
                 request.status()));
-        if (assignment) assignmentConfiguration.create(activity, request.extraFields().get("assignment"));
+        if (assignment) {
+            assignmentConfiguration.create(activity, request.extraFields().get("assignment"));
+            notifyPublication(ContentScope.ACTIVITY, activity.getActivityId(), null, activity.getStatus());
+        }
         return activity;
     }
 
@@ -439,6 +460,7 @@ public class ChapterService {
     @Transactional
     public Activity updateActivity(UUID activityId, UUID tutorId, Map<String, Object> patch) {
         Activity activity = requireWritableActivity(activityId, tutorId);
+        var previousStatus = activity.getStatus();
         // activity_type is deliberately not patchable: switching it would leave the Quiz or
         // Assignment configuration owned by the Assessment module bound to the wrong activity.
         validatePatch(patch, Set.of("title", "description", "sequence_order", "status"));
@@ -446,7 +468,16 @@ public class ChapterService {
         if (patch.containsKey("description")) activity.setDescription(nullableText(patch, "description"));
         if (patch.containsKey("sequence_order")) activity.setSequenceOrder(nonNegativeInt(patch, "sequence_order"));
         if (patch.containsKey("status")) activity.setStatus(visibility(patch, "status"));
-        return activityRepository.save(activity);
+        Activity saved = activityRepository.save(activity);
+        notifyPublication(ContentScope.ACTIVITY, activityId, previousStatus, activity.getStatus());
+        return saved;
+    }
+
+    private void notifyPublication(ContentScope scope, UUID resourceId, Chapter.VisibilityStatus previousStatus,
+                                   Chapter.VisibilityStatus currentStatus) {
+        if (previousStatus != Chapter.VisibilityStatus.PUBLISHED && currentStatus == Chapter.VisibilityStatus.PUBLISHED) {
+            notifications.contentReleased(scope, resourceId);
+        }
     }
 
     @Transactional

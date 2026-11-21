@@ -66,7 +66,10 @@ class TopicAssignmentEvidenceReaderPostgresTest {
             db.update("DELETE FROM class_member WHERE class_id=?", c);
             db.update("DELETE FROM class WHERE class_id=?", c);
         }
-        for (UUID u : users) db.update("DELETE FROM lms_user_access WHERE user_id=?", u);
+        for (UUID u : users) {
+            db.update("DELETE FROM notification WHERE recipient_id=?", u);
+            db.update("DELETE FROM lms_user_access WHERE user_id=?", u);
+        }
     }
 
     @Test void onlyGradedMappedSourcesContributeAndZeroIsRealEvidence() {

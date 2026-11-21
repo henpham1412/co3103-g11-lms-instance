@@ -33,7 +33,7 @@ class MasteryMigrationPostgresTest {
             assertThat(db.queryForList("SELECT version,checksum FROM " + schema + ".flyway_schema_history WHERE version::integer<=? ORDER BY installed_rank", baseline))
                     .isEqualTo(checksums);
             assertThat(db.queryForList("SELECT version FROM " + schema + ".flyway_schema_history WHERE version IS NOT NULL ORDER BY installed_rank", String.class))
-                    .containsExactly("1", "2", "3", "4", "5", "6", "7", "8", "9", "10", "11", "12", "13", "14", "17", "18", "19", "20", "21", "22");
+                    .containsExactly("1", "2", "3", "4", "5", "6", "7", "8", "9", "10", "11", "12", "13", "14", "17", "18", "19", "20", "21", "22", "23");
             assertThat(db.queryForList("SELECT table_name FROM information_schema.tables WHERE table_schema=? AND table_name IN ('learning_signal','learner_mastery')", String.class, schema))
                     .containsExactlyInAnyOrder("learning_signal", "learner_mastery");
             assertThat(db.queryForObject("SELECT numeric_scale IS NULL FROM information_schema.columns WHERE table_schema=? AND table_name='learner_mastery' AND column_name='mastery_score'", Boolean.class, schema)).isTrue();
