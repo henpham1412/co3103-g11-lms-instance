@@ -12,6 +12,7 @@ import org.springframework.web.multipart.MultipartFile;
 import org.springframework.web.server.ResponseStatusException;
 import vn.edu.hcmut.co3103.lms.service.learningcontent.ChapterService;
 import vn.edu.hcmut.co3103.lms.service.adaptive.MasteryRecalculationService;
+import vn.edu.hcmut.co3103.lms.service.notification.NotificationEvents;
 import vn.edu.hcmut.co3103.lms.dto.request.GradeSubmissionRequest;
 import vn.edu.hcmut.co3103.lms.dto.response.AssignmentConfigurationResponse;
 import vn.edu.hcmut.co3103.lms.dto.response.SubmissionResponse;
@@ -26,10 +27,12 @@ import vn.edu.hcmut.co3103.lms.repository.classmanagement.ClassMemberRepository;
 import vn.edu.hcmut.co3103.lms.repository.learningcontent.ActivityRepository;
 
 import java.math.BigDecimal;
+import java.math.RoundingMode;
 import java.time.OffsetDateTime;
 import java.nio.file.Path;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import java.util.UUID;
 
 @Service
@@ -43,6 +46,7 @@ public class AssignmentService {
     private final AssignmentConfigurationService configuration;
     private final ClassMemberRepository memberRepository;
     private final AssignmentFileStorageService storage;
+    private final NotificationEvents notifications;
 
     public AssignmentService(AssignmentRepository assignmentRepository,
                              AssignmentAttachmentRepository attachmentRepository,
@@ -51,7 +55,7 @@ public class AssignmentService {
                              ClassMemberRepository memberRepository,
                              AssignmentFileStorageService storage, ChapterService content,
                              AssignmentConfigurationService configuration,
-                             MasteryRecalculationService mastery) {
+                             MasteryRecalculationService mastery, NotificationEvents notifications) {
         this.mastery = mastery;
         this.assignmentRepository = assignmentRepository;
         this.attachmentRepository = attachmentRepository;
@@ -61,6 +65,7 @@ public class AssignmentService {
         this.configuration = configuration;
         this.memberRepository = memberRepository;
         this.storage = storage;
+        this.notifications = notifications;
     }
 
     @Transactional
@@ -130,6 +135,7 @@ public class AssignmentService {
             throw conflict("SUBMISSION_ALREADY_EXISTS");
         }
         if (oldPath != null) deleteOnCommit(oldPath);
+        notifications.assignmentSubmitted(member.getClassId(), activityId, saved.getSubmissionId(), saved.getVersion());
         return toResponse(saved, member.getStudentId());
     }
 
@@ -234,10 +240,16 @@ public class AssignmentService {
         if (request.version() != null && request.version() != submission.getVersion()) {
             throw conflict("SUBMISSION_STATE_CHANGED");
         }
+        boolean resultChanged = submission.getStatus() != Submission.Status.GRADED
+                || submission.getScore().compareTo(request.score().setScale(2, RoundingMode.HALF_UP)) != 0
+                || !Objects.equals(submission.getFeedback(), request.feedback());
         submission.grade(request.score(), request.feedback(), tutorId, OffsetDateTime.now());
         ClassMember member = memberRepository.findById(submission.getClassMemberId()).orElse(null);
         Submission saved = submissionRepository.saveAndFlush(submission);
         mastery.synchronizeSubmission(saved.getSubmissionId());
+        if (resultChanged && member != null) {
+            notifications.assignmentGraded(member.getStudentId(), saved.getSubmissionId(), saved.getVersion());
+        }
         return toResponse(saved, member == null ? null : member.getStudentId());
     }
 

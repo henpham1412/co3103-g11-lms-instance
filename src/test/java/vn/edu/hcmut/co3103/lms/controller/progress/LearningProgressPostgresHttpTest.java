@@ -183,6 +183,8 @@ class LearningProgressPostgresHttpTest {
         db.update("DELETE FROM chapter WHERE class_id = ?", classId);
         db.update("DELETE FROM class_member WHERE class_id = ?", classId);
         db.update("DELETE FROM class WHERE class_id = ?", classId);
+        db.update("DELETE FROM notification WHERE recipient_id IN (?, ?, ?, ?)",
+                tutorId, otherTutorId, activeStudentId, secondStudentId);
         db.update("DELETE FROM lms_user_access WHERE user_id IN (?, ?, ?, ?)",
                 tutorId, otherTutorId, activeStudentId, secondStudentId);
     }

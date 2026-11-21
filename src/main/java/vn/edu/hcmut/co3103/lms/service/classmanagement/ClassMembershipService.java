@@ -19,6 +19,8 @@ import vn.edu.hcmut.co3103.lms.repository.learningcontent.CompletionMarkReposito
 import vn.edu.hcmut.co3103.lms.repository.learningcontent.LessonRepository;
 import vn.edu.hcmut.co3103.lms.repository.classmanagement.ClassMemberRepository;
 import vn.edu.hcmut.co3103.lms.repository.classmanagement.ClassRepository;
+import vn.edu.hcmut.co3103.lms.service.notification.NotificationEvents;
+import vn.edu.hcmut.co3103.lms.service.notification.NotificationEvents.MembershipDecision;
 
 import java.time.Instant;
 import java.util.List;
@@ -34,19 +36,22 @@ public class ClassMembershipService {
     private final LmsUserAccessRepository userAccessRepository;
     private final LessonRepository lessonRepository;
     private final CompletionMarkRepository completionMarkRepository;
+    private final NotificationEvents notifications;
 
     public ClassMembershipService(
             ClassRepository classRepository,
             ClassMemberRepository classMemberRepository,
             LmsUserAccessRepository userAccessRepository,
             LessonRepository lessonRepository,
-            CompletionMarkRepository completionMarkRepository
+            CompletionMarkRepository completionMarkRepository,
+            NotificationEvents notifications
     ) {
         this.classRepository = classRepository;
         this.classMemberRepository = classMemberRepository;
         this.userAccessRepository = userAccessRepository;
         this.lessonRepository = lessonRepository;
         this.completionMarkRepository = completionMarkRepository;
+        this.notifications = notifications;
     }
 
     /**
@@ -258,7 +263,9 @@ public class ClassMembershipService {
 
         membership.setStatus(MembershipStatus.ACTIVE);
         membership.setJoinedAt(Instant.now());
-        return classMemberRepository.save(membership);
+        ClassMember saved = classMemberRepository.save(membership);
+        notifications.membershipDecided(saved, MembershipDecision.APPROVED);
+        return saved;
     }
 
     @Transactional
@@ -273,7 +280,9 @@ public class ClassMembershipService {
 
         membership.setStatus(MembershipStatus.REJECTED);
         membership.setJoinedAt(null);
-        return classMemberRepository.save(membership);
+        ClassMember saved = classMemberRepository.save(membership);
+        notifications.membershipDecided(saved, MembershipDecision.REJECTED);
+        return saved;
     }
 
     @Transactional
@@ -308,7 +317,9 @@ public class ClassMembershipService {
         ensureStatus(membership, MembershipStatus.ACTIVE);
 
         membership.setStatus(MembershipStatus.INACTIVE);
-        return classMemberRepository.save(membership);
+        ClassMember saved = classMemberRepository.save(membership);
+        notifications.membershipDecided(saved, MembershipDecision.REMOVED);
+        return saved;
     }
 
     private Class requireClass(UUID classId) {

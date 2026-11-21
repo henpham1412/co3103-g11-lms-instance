@@ -47,10 +47,10 @@ class AdminBootstrapCliIntegrationTest {
         try (var context = application(schema).run()) {
             var flyway = context.getBean(Flyway.class);
             flyway.validate();
-            assertThat(flyway.info().current().getVersion().getVersion()).isEqualTo("22");
+            assertThat(flyway.info().current().getVersion().getVersion()).isEqualTo("23");
             assertThat(flyway.info().applied()).filteredOn(info -> info.getVersion() != null)
                     .extracting(info -> info.getVersion().getVersion()).containsExactly("1", "2", "3", "4", "5", "6", "7", "8", "9",
-                            "10", "11", "12", "13", "14", "17", "18", "19", "20", "21", "22");
+                            "10", "11", "12", "13", "14", "17", "18", "19", "20", "21", "22", "23");
             var users = context.getBean(LmsUserAccessRepository.class);
             assertThat(users.findAll()).extracting(LmsUserAccess::getUserId)
                     .containsExactlyInAnyOrder(firstId, secondId);
@@ -133,10 +133,10 @@ class AdminBootstrapCliIntegrationTest {
         try (var context = application(schema).run()) {
             var flyway = context.getBean(Flyway.class);
             flyway.validate();
-            assertThat(flyway.info().current().getVersion().getVersion()).isEqualTo("22");
+            assertThat(flyway.info().current().getVersion().getVersion()).isEqualTo("23");
             assertThat(flyway.info().applied()).filteredOn(info -> info.getVersion() != null)
                     .extracting(info -> info.getVersion().getVersion()).containsExactly("1", "2", "3", "4", "5", "6", "7", "8", "9",
-                            "10", "11", "12", "13", "14", "17", "18", "19", "20", "21", "22");
+                            "10", "11", "12", "13", "14", "17", "18", "19", "20", "21", "22", "23");
             assertThat(context.getBeansOfType(AdminBootstrapRunner.class)).isEmpty();
             var state = context.getBean(LmsSetupStateRepository.class).findById(LmsSetupState.GLOBAL_ID).orElseThrow();
             assertThat(state.isCompleted()).isTrue();

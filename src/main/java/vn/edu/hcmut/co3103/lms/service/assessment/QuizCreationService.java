@@ -7,10 +7,13 @@ import org.springframework.transaction.annotation.Propagation;
 import org.springframework.http.HttpStatus;
 import org.springframework.web.server.ResponseStatusException;
 import vn.edu.hcmut.co3103.lms.entity.Activity;
+import vn.edu.hcmut.co3103.lms.entity.Chapter.VisibilityStatus;
 import vn.edu.hcmut.co3103.lms.entity.Quiz;
 import vn.edu.hcmut.co3103.lms.dto.request.QuestionCreateRequest;
 import vn.edu.hcmut.co3103.lms.repository.learningcontent.ActivityRepository;
 import vn.edu.hcmut.co3103.lms.repository.assessment.*;
+import vn.edu.hcmut.co3103.lms.repository.notification.NotificationDeliveryRepository.ContentScope;
+import vn.edu.hcmut.co3103.lms.service.notification.NotificationEvents;
 import java.time.OffsetDateTime;
 import java.math.BigDecimal;
 import java.util.*;
@@ -27,6 +30,7 @@ public class QuizCreationService {
     private final QuestionOptionRepository options;
     private final QuizQuestionService questionService;
     private final QuizConfigurationAccessService access;
+    private final NotificationEvents notifications;
 
     public CreatedQuiz createForActivity(UUID activityId, UUID actorId, QuizCreation command) {
         locks.lockActivity(activityId);
@@ -57,6 +61,9 @@ public class QuizCreationService {
         quizzes.saveAndFlush(quiz);
         for (QuestionCreateRequest question : command.questions()) questionService.addQuestion(activityId, actorId, question);
         quizzes.flush();
+        if (activity.getStatus() == VisibilityStatus.PUBLISHED) {
+            notifications.contentReleased(ContentScope.ACTIVITY, activityId);
+        }
         return new CreatedQuiz(quiz.getId(), activityId);
     }
 

@@ -20,6 +20,7 @@ import vn.edu.hcmut.co3103.lms.repository.classmanagement.ClassRepository;
 import vn.edu.hcmut.co3103.lms.repository.interaction.DiscussionRepository;
 import vn.edu.hcmut.co3103.lms.repository.learningcontent.LessonRepository;
 import vn.edu.hcmut.co3103.lms.repository.moderation.ContentReportRepository;
+import vn.edu.hcmut.co3103.lms.service.notification.NotificationEvents;
 
 import java.util.List;
 import java.util.Map;
@@ -46,19 +47,22 @@ public class DiscussionService {
     private final DiscussionRepository discussionRepository;
     private final ContentReportRepository contentReportRepository;
     private final EntityManager entityManager;
+    private final NotificationEvents notifications;
 
     public DiscussionService(ClassRepository classRepository,
                              ClassMemberRepository classMemberRepository,
                              LessonRepository lessonRepository,
                              DiscussionRepository discussionRepository,
                              ContentReportRepository contentReportRepository,
-                             EntityManager entityManager) {
+                             EntityManager entityManager,
+                             NotificationEvents notifications) {
         this.classRepository = classRepository;
         this.classMemberRepository = classMemberRepository;
         this.lessonRepository = lessonRepository;
         this.discussionRepository = discussionRepository;
         this.contentReportRepository = contentReportRepository;
         this.entityManager = entityManager;
+        this.notifications = notifications;
     }
 
     @Transactional(readOnly = true)
@@ -106,6 +110,7 @@ public class DiscussionService {
         String content = requireContent(request.content());
         Discussion saved = discussionRepository.saveAndFlush(new Discussion(parent.getClassId(),
                 parent.getLessonId(), actorId, parent.getDiscussionId(), title, content));
+        notifications.discussionReplied(saved.getDiscussionId());
         return DiscussionResponse.from(saved);
     }
 

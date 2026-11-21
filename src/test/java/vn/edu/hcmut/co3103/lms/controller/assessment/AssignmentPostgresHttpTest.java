@@ -75,7 +75,10 @@ class AssignmentPostgresHttpTest {
             db.update("DELETE FROM lesson WHERE chapter_id IN (SELECT chapter_id FROM chapter WHERE class_id=?)", c);
             db.update("DELETE FROM chapter WHERE class_id=?", c); db.update("DELETE FROM class_member WHERE class_id=?", c); db.update("DELETE FROM class WHERE class_id=?", c);
         }
-        for (UUID user : List.of(owner, otherTutor, student, outsider)) db.update("DELETE FROM lms_user_access WHERE user_id=?", user);
+        for (UUID user : List.of(owner, otherTutor, student, outsider)) {
+            db.update("DELETE FROM notification WHERE recipient_id=?", user);
+            db.update("DELETE FROM lms_user_access WHERE user_id=?", user);
+        }
         try (var paths = Files.list(STORAGE)) { for (Path p : paths.toList()) Files.deleteIfExists(p); }
     }
     @Test void ungradedUploadAndReplacementDoNotCreateMasteryEvenWithExplicitTopics() throws Exception {
@@ -99,6 +102,41 @@ class AssignmentPostgresHttpTest {
         assertThat(configuration.get("allowed_file_types").get(0).asText()).isEqualTo("pdf");
         assertThat(db.queryForObject("SELECT count(*) FROM assignment WHERE activity_id=?", Integer.class, activity)).isEqualTo(1);
         assertThat(db.queryForObject("SELECT status FROM activity WHERE activity_id=?", String.class, activity)).isEqualTo("PUBLISHED");
+    }
+    @Test void submissionRevisionsNotifyTutorAndChangedGradesNotifyOnlyStudent() throws Exception {
+        UUID activity = create();
+        UUID assignment = assignment(activity);
+        String gradingUrl = "/tutor/classes/" + course + "/content/assignment/" + activity + "/grade";
+        assertThat(notificationTargets(student, "CONTENT_RELEASED"))
+                .containsExactly("/classes/" + course + "/lessons/" + lesson + "/activities/" + activity);
+        var original = submit(assignment);
+        assertThat(notificationTargets(owner, "ASSIGNMENT_SUBMISSION")).containsExactly(gradingUrl);
+        assertThat(notificationTargets(student, "ASSIGNMENT_SUBMISSION")).isEmpty();
+
+        var replacement = upload("PUT", submitPath(assignment), "work.txt", "text/plain", "replacement".getBytes(), student);
+        assertThat(replacement.statusCode()).isEqualTo(200);
+        var updated = json.readTree(replacement.body());
+        assertThat(updated.get("submission_id")).isEqualTo(original.get("submission_id"));
+        assertThat(notificationTargets(owner, "ASSIGNMENT_SUBMISSION")).containsExactly(gradingUrl, gradingUrl);
+        assertThat(notificationTargets(otherTutor, "ASSIGNMENT_SUBMISSION")).isEmpty();
+
+        String gradePath = "/submissions/" + original.get("submission_id").asText() + "/grade";
+        var first = checked("PATCH", gradePath, grade(80, updated.get("version").asLong()), owner, 200);
+        assertThat(notificationTargets(student, "ASSESSMENT_RESULT")).containsExactly("/assessment-history");
+        var unchanged = checked("PATCH", gradePath, grade(80, first.get("version").asLong()), owner, 200);
+        assertThat(notificationTargets(student, "ASSESSMENT_RESULT")).containsExactly("/assessment-history");
+        checked("PATCH", gradePath, """
+                {"score":80,"feedback":"Updated feedback","version":%d}
+                """.formatted(unchanged.get("version").asLong()), owner, 200);
+        assertThat(notificationTargets(student, "ASSESSMENT_RESULT"))
+                .containsExactly("/assessment-history", "/assessment-history");
+        assertThat(notificationTargets(owner, "ASSESSMENT_RESULT")).isEmpty();
+        assertThat(notificationTargets(outsider, "ASSESSMENT_RESULT")).isEmpty();
+    }
+
+    private List<String> notificationTargets(UUID user, String type) {
+        return db.queryForList("SELECT target_url FROM notification WHERE recipient_id=? AND notification_type=?",
+                String.class, user, type);
     }
     @Test void invalidAssignmentRollsBackItsActivityAndCannotLeaveABareAssignment() throws Exception {
         checked("POST", activityPath(), creation("{\"deadline\":\"" + future() + "\",\"max_file_size_mb\":0}"), owner, 400);

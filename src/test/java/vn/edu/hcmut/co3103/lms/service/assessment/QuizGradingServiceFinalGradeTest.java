@@ -60,7 +60,8 @@ class QuizGradingServiceFinalGradeTest {
                 mock(AttemptAnswerRepository.class), mock(AttemptAnswerOptionRepository.class),
                 mock(vn.edu.hcmut.co3103.lms.service.adaptive.MasteryRecalculationService.class),
                 mock(AssessmentLocks.class), mock(vn.edu.hcmut.co3103.lms.repository.assessment.QuizRepository.class),
-                mock(jakarta.persistence.EntityManager.class));
+                mock(jakarta.persistence.EntityManager.class),
+                mock(vn.edu.hcmut.co3103.lms.service.notification.NotificationEvents.class));
         when(attemptRepository.findByQuiz_IdAndClassMember_ClassMemberIdOrderByAttemptNumber(
                 quiz.getId(), member.getClassMemberId())).thenReturn(List.of(gradedAttempt, ungradedAttempt));
 

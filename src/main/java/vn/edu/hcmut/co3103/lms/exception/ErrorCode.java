@@ -30,6 +30,7 @@ public enum ErrorCode {
     DISCUSSION_NOT_FOUND("Discussion not found", HttpStatus.NOT_FOUND),
     DISCUSSION_HAS_REPLIES("Cannot delete a discussion that still has replies", HttpStatus.CONFLICT),
     DISCUSSION_HAS_UNRESOLVED_REPORT("Cannot delete a discussion with an unresolved content report", HttpStatus.CONFLICT),
+    NOTIFICATION_NOT_FOUND("Notification not found", HttpStatus.NOT_FOUND),
     REPORTED_CONTENT_NOT_FOUND("Reported content not found", HttpStatus.NOT_FOUND),
     DUPLICATE_CONTENT_REPORT("This content has already been reported by you", HttpStatus.CONFLICT),
     CONTENT_REPORT_NOT_FOUND("Content report not found", HttpStatus.NOT_FOUND),
