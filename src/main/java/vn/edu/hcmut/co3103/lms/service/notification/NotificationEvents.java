@@ -50,7 +50,7 @@ public class NotificationEvents {
     public void contentReleased(ContentScope scope, UUID id) {
         // The recipient query must see the source changes staged by JPA in this transaction.
         entities.flush();
-        repository.notifyContent(scope, id, UUID.randomUUID().toString(), now());
+        repository.notifyContent(scope, id, now());
     }
 
     public void assignmentSubmitted(UUID classId, UUID activityId, UUID submissionId, long version) {

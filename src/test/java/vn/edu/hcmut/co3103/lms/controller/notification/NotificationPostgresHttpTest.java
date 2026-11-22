@@ -195,27 +195,77 @@ class NotificationPostgresHttpTest {
 
     @Test
     void contentReleaseUsesEffectiveVisibilityAndKeepsSourceAndNotificationAtomic() throws Exception {
+        UUID secondActiveStudent = user("STUDENT", "ACTIVE");
+        membership(secondActiveStudent);
         db.update("UPDATE class_member SET status='PENDING' WHERE class_member_id=?", otherMembership);
         request("PATCH", "/chapters/" + chapter, tutor, "{\"status\":\"HIDDEN\"}", 200);
         var material = request("POST", "/lessons/" + lesson + "/materials", tutor,
                 """
                 {"title":"Visible notes","content":"notes","material_type":"TEXT","status":"PUBLISHED"}
                 """, 201);
-        String materialPath = "/materials/" + material.get("material_id").asString();
+        String materialId = material.get("material_id").asString();
+        String materialPath = "/materials/" + materialId;
         assertThat(titles(student, "CONTENT_RELEASED")).isEmpty();
+        assertThat(titles(secondActiveStudent, "CONTENT_RELEASED")).isEmpty();
+
+        // Initial effective publication when the parent chapter becomes PUBLISHED.
         request("PATCH", "/chapters/" + chapter, tutor, PUBLISH, 200);
         request("PATCH", materialPath, tutor, PUBLISH, 200);
         request("PATCH", materialPath, tutor, "{\"title\":\"Renamed notes\"}", 200);
         assertThat(messages(student, "CONTENT_RELEASED")).containsExactly("Now available: Visible notes");
+        assertThat(messages(secondActiveStudent, "CONTENT_RELEASED")).containsExactly("Now available: Visible notes");
 
+        // Repeated HIDDEN -> PUBLISHED transition on the same material does not emit a duplicate.
         request("PATCH", materialPath, tutor, "{\"status\":\"HIDDEN\"}", 200);
         request("PATCH", materialPath, tutor, PUBLISH, 200);
-        assertThat(messages(student, "CONTENT_RELEASED"))
-                .containsExactlyInAnyOrder("Now available: Visible notes", "Now available: Renamed notes");
+        assertThat(messages(student, "CONTENT_RELEASED")).containsExactly("Now available: Visible notes");
+        assertThat(messages(secondActiveStudent, "CONTENT_RELEASED")).containsExactly("Now available: Visible notes");
+
+        // Hide the lesson, add a new published material while hidden, then republish the lesson:
+        // only the newly added material notifies students; the previously announced material is not re-sent.
         request("PATCH", "/lessons/" + lesson, tutor, "{\"status\":\"HIDDEN\"}", 200);
+        var addedWhileLessonHidden = request("POST", "/lessons/" + lesson + "/materials", tutor,
+                """
+                {"title":"Worksheet added while lesson hidden","content":"sheet","material_type":"TEXT","status":"PUBLISHED"}
+                """, 201);
+        String secondMaterialId = addedWhileLessonHidden.get("material_id").asString();
+        assertThat(messages(student, "CONTENT_RELEASED")).containsExactly("Now available: Visible notes");
+        assertThat(messages(secondActiveStudent, "CONTENT_RELEASED")).containsExactly("Now available: Visible notes");
+
         request("PATCH", "/lessons/" + lesson, tutor, PUBLISH, 200);
-        assertThat(messages(student, "CONTENT_RELEASED")).containsExactlyInAnyOrder(
-                "Now available: Visible notes", "Now available: Renamed notes", "Now available: Renamed notes");
+        assertThat(messages(student, "CONTENT_RELEASED"))
+                .containsExactlyInAnyOrder("Now available: Visible notes", "Now available: Worksheet added while lesson hidden");
+        assertThat(messages(secondActiveStudent, "CONTENT_RELEASED"))
+                .containsExactlyInAnyOrder("Now available: Visible notes", "Now available: Worksheet added while lesson hidden");
+
+        // Hide the chapter, add an assignment activity while hidden, then republish the chapter:
+        // previously announced materials are not re-sent, and only the new activity generates a notification.
+        request("PATCH", "/chapters/" + chapter, tutor, "{\"status\":\"HIDDEN\"}", 200);
+        var activityAddedWhileChapterHidden = request("POST", "/lessons/" + lesson + "/activities", tutor,
+                """
+                {"title":"Project added while chapter hidden","activity_type":"ASSIGNMENT","status":"PUBLISHED",
+                 "assignment":{"deadline":"%s","allow_late":false}}
+                """.formatted(NOW.plusDays(3)), 201);
+        String activityId = activityAddedWhileChapterHidden.get("activity_id").asString();
+        assertThat(messages(student, "CONTENT_RELEASED")).hasSize(2);
+        assertThat(messages(secondActiveStudent, "CONTENT_RELEASED")).hasSize(2);
+
+        request("PATCH", "/chapters/" + chapter, tutor, PUBLISH, 200);
+        List<String> expectedMessages = List.of(
+                "Now available: Visible notes",
+                "Now available: Worksheet added while lesson hidden",
+                "Now available: Project added while chapter hidden");
+        List<String> expectedSourceKeys = List.of(
+                "material:" + materialId,
+                "material:" + secondMaterialId,
+                "activity:" + activityId);
+        for (UUID recipient : List.of(student, secondActiveStudent)) {
+            assertThat(messages(recipient, "CONTENT_RELEASED")).containsExactlyInAnyOrderElementsOf(expectedMessages);
+            assertThat(db.queryForList("""
+                    SELECT source_event_key FROM notification
+                    WHERE recipient_id=? AND notification_type='CONTENT_RELEASED'
+                    """, String.class, recipient)).containsExactlyInAnyOrderElementsOf(expectedSourceKeys);
+        }
         for (UUID ineligible : List.of(tutor, other, suspended)) {
             assertThat(titles(ineligible, "CONTENT_RELEASED")).isEmpty();
         }
@@ -226,8 +276,9 @@ class NotificationPostgresHttpTest {
             assertThat(messages(student, "CONTENT_RELEASED")).contains("Now available: Rolled-back material");
             status.setRollbackOnly();
         });
-        assertThat(messages(student, "CONTENT_RELEASED")).hasSize(3);
-        assertThat(db.queryForObject("SELECT count(*) FROM material WHERE lesson_id=?", Long.class, lesson)).isEqualTo(1);
+        assertThat(messages(student, "CONTENT_RELEASED")).containsExactlyInAnyOrderElementsOf(expectedMessages);
+        assertThat(messages(secondActiveStudent, "CONTENT_RELEASED")).containsExactlyInAnyOrderElementsOf(expectedMessages);
+        assertThat(db.queryForObject("SELECT count(*) FROM material WHERE lesson_id=?", Long.class, lesson)).isEqualTo(2);
     }
 
     @Test

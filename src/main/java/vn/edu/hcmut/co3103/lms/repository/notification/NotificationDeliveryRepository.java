@@ -56,7 +56,7 @@ public class NotificationDeliveryRepository {
         }
     }
 
-    public void notifyContent(ContentScope scope, UUID id, String source, OffsetDateTime now) {
+    public void notifyContent(ContentScope scope, UUID id, OffsetDateTime now) {
         jdbc.update("""
                 WITH visible_lessons AS NOT MATERIALIZED (
                     SELECT l.lesson_id, c.class_id
@@ -84,13 +84,13 @@ public class NotificationDeliveryRepository {
                 """.formatted(scope.lessonFilter, LESSON_URL, scope.materialFilter, LESSON_URL, scope.activityFilter)
                 + INSERT + """
                 SELECT cm.student_id, 'CONTENT_RELEASED', 'New learning content',
-                    'Now available: ' || r.title, r.target_url, :source || ':' || r.resource_key, :now
+                    'Now available: ' || r.title, r.target_url, r.resource_key, :now
                 FROM released r
                 JOIN class_member cm ON cm.class_id = r.class_id AND cm.status = 'ACTIVE'
                 JOIN lms_user_access u ON u.user_id = cm.student_id
                 WHERE u.lms_role = 'STUDENT' AND u.access_status = 'ACTIVE'
                 ORDER BY cm.student_id, r.resource_key
-                """ + IGNORE_DUPLICATE, Map.of("id", id, "source", source, "now", now));
+                """ + IGNORE_DUPLICATE, Map.of("id", id, "now", now));
     }
 
     public void notifyReply(UUID replyId, OffsetDateTime now) {
