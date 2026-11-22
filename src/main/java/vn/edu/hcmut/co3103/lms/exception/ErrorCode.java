@@ -36,6 +36,7 @@ public enum ErrorCode {
     CONTENT_REPORT_NOT_FOUND("Content report not found", HttpStatus.NOT_FOUND),
     INVALID_REPORT_STATUS("The report status is invalid or unsupported", HttpStatus.BAD_REQUEST),
     REPORT_ALREADY_UPDATED("The report has already been reviewed", HttpStatus.CONFLICT),
+    AUDIT_LOG_NOT_FOUND("Audit log not found", HttpStatus.NOT_FOUND),
     INTERNAL_ERROR("An unexpected error occurred", HttpStatus.INTERNAL_SERVER_ERROR);
 
     private final String message;
