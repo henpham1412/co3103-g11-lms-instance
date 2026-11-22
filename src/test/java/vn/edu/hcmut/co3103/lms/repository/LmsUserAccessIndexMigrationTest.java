@@ -49,7 +49,7 @@ class LmsUserAccessIndexMigrationTest {
             var flyway = migration.target("latest").load();
             flyway.migrate();
             flyway.validate();
-            assertThat(flyway.info().current().getVersion().getVersion()).isEqualTo("22");
+            assertThat(flyway.info().current().getVersion().getVersion()).isEqualTo("23");
             assertThat(jdbc.queryForObject("SELECT indexdef FROM pg_indexes WHERE schemaname = ? AND indexname = ?",
                     String.class, schema, "idx_lms_user_access_created_at_user_id"))
                     .contains("USING btree (created_at DESC, user_id)");

@@ -169,6 +169,7 @@ class DiscussionHttpTest {
             db.update("DELETE FROM class WHERE class_id = ?", id);
         }
         for (UUID id : userIds) {
+            db.update("DELETE FROM notification WHERE recipient_id = ?", id);
             db.update("DELETE FROM lms_user_access WHERE user_id = ?", id);
         }
         classIds.clear();

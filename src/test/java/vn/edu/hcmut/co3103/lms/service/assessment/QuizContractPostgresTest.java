@@ -43,6 +43,7 @@ class QuizContractPostgresTest {
     @Autowired PlatformTransactionManager manager;
     @Autowired QuizCreationService factory;
     @Autowired ActivityRepository activities;
+    @Autowired QuizAttemptService attempts;
     UUID owner,student,course,chapter,lesson,activity,quiz,question;
     String token,studentToken;
     TransactionTemplate tx() { return new TransactionTemplate(manager); }
@@ -67,10 +68,31 @@ class QuizContractPostgresTest {
         db.update("delete from question where quiz_id=?",quiz);db.update("delete from quiz where quiz_id=?",quiz);
         db.update("delete from activity_skill_topics where activity_id in (select activity_id from activity where lesson_id=?)",lesson);
         db.update("delete from activity where lesson_id=?",lesson);db.update("delete from lesson where lesson_id=?",lesson);db.update("delete from chapter where chapter_id=?",chapter);db.update("delete from class_member where class_id=?",course);db.update("delete from class where class_id=?",course);
+        db.update("delete from notification where recipient_id in (?,?)",owner,student);
         db.update("delete from lms_user_access where user_id in (?,?)",owner,student);
     }
     HttpResponse<String> request(String method,String path,String body,String bearer) throws Exception {
         return HttpClient.newHttpClient().send(HttpRequest.newBuilder(URI.create("http://localhost:"+port+"/api/v1"+path)).header("Authorization","Bearer "+bearer).header("Content-Type","application/json").method(method,body==null?HttpRequest.BodyPublishers.noBody():HttpRequest.BodyPublishers.ofString(body)).build(),HttpResponse.BodyHandlers.ofString());
+    }
+    @Test void configuredPublicationAndAutomaticGradingNotifyStudentOnceEach() {
+        assertThat(db.queryForList("SELECT target_url FROM notification WHERE recipient_id=? AND notification_type='CONTENT_RELEASED'",
+                String.class, student)).containsExactly("/classes/" + course + "/lessons/" + lesson + "/activities/" + activity);
+
+        UUID attempt = db.queryForObject("""
+                INSERT INTO quiz_attempt (quiz_id, class_member_id, attempt_number, started_at)
+                SELECT ?, class_member_id, 1, ?
+                FROM class_member WHERE class_id = ? AND student_id = ?
+                RETURNING attempt_id
+                """, UUID.class, quiz, OffsetDateTime.now().minusHours(1), course, student);
+        attempts.expireIfDue(attempt);
+        attempts.gradePendingSubmission(attempt);
+
+        assertThat(db.queryForMap("SELECT status, auto_submitted, score FROM quiz_attempt WHERE attempt_id=?", attempt))
+                .containsEntry("status", "SUBMITTED").containsEntry("auto_submitted", true)
+                .containsEntry("score", new java.math.BigDecimal("0.00"));
+        assertThat(db.queryForList("SELECT target_url FROM notification WHERE recipient_id=? AND notification_type='ASSESSMENT_RESULT'",
+                String.class, student)).containsExactly("/assessment-history");
+        assertThat(db.queryForObject("SELECT count(*) FROM notification WHERE recipient_id=?", Long.class, owner)).isZero();
     }
     @ParameterizedTest @ValueSource(strings={"{\"openingTimeProvided\":true}","{\"openingTimeProvided\":null}","{\"unknown\":null}","{\"time_limit_minutes\":1.9}","{\"attempts_allowed\":\"2\"}","{\"attempts_allowed\":true}","{}","{\"deadline\":null}"})
     void invalidQuizPatchDoesNotWrite(String payload) throws Exception {

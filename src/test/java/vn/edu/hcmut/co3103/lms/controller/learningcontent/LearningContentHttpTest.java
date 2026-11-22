@@ -164,6 +164,7 @@ class LearningContentHttpTest {
         classMemberRepository.deleteAll(classMemberRepository.findByClassIdAndStudentId(classId, student.getUserId())
                 .map(List::of).orElse(List.of()));
         classIds.forEach(classRepository::deleteById);
+        userIds.forEach(id -> jdbcTemplate.update("DELETE FROM notification WHERE recipient_id = ?", id));
         userIds.forEach(userRepository::deleteById);
         classIds.clear();
         userIds.clear();
@@ -264,7 +265,7 @@ class LearningContentHttpTest {
         UUID lessonId = createLesson(createChapter("{\"title\":\"Basics\"}"));
 
         HttpResponse<String> uploaded = uploadMaterial(lessonId, tutorToken,
-                "{\"title\":\"Slides\",\"material_type\":\"DOCUMENT\"}", "slides.pdf", PDF_BYTES);
+                "{\"title\":\"Slides\",\"material_type\":\"DOCUMENT\",\"status\":\"PUBLISHED\"}", "slides.pdf", PDF_BYTES);
         assertThat(uploaded.statusCode()).isEqualTo(201);
         JsonNode material = json(uploaded);
         UUID materialId = UUID.fromString(material.get("material_id").asString());
@@ -279,6 +280,9 @@ class LearningContentHttpTest {
         HttpResponse<byte[]> served = getRaw(fileUrl, studentToken);
         assertThat(served.statusCode()).isEqualTo(200);
         assertThat(served.body()).containsExactly(PDF_BYTES);
+        assertThat(jdbcTemplate.queryForList("""
+                SELECT target_url FROM notification WHERE recipient_id=? AND notification_type='CONTENT_RELEASED'
+                """, String.class, student.getUserId())).containsExactly("/classes/" + classId + "/lessons/" + lessonId);
 
         assertThat(delete("/api/v1/materials/" + materialId, tutorToken).statusCode()).isEqualTo(204);
         assertThat(Files.exists(STORAGE_DIRECTORY.resolve(fileKey))).isFalse();

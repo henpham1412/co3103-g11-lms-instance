@@ -17,6 +17,7 @@ import vn.edu.hcmut.co3103.lms.repository.assessment.QuestionRepository;
 import vn.edu.hcmut.co3103.lms.repository.assessment.QuizAttemptRepository;
 import vn.edu.hcmut.co3103.lms.repository.assessment.QuizRepository;
 import vn.edu.hcmut.co3103.lms.service.adaptive.MasteryRecalculationService;
+import vn.edu.hcmut.co3103.lms.service.notification.NotificationEvents;
 
 import java.math.BigDecimal;
 import java.math.RoundingMode;
@@ -38,6 +39,7 @@ public class QuizGradingService {
     private final AssessmentLocks locks;
     private final QuizRepository quizzes;
     private final EntityManager entityManager;
+    private final NotificationEvents notifications;
 
     @Transactional
     public void recalculateSubmittedAttempts(Quiz quiz) {
@@ -138,7 +140,13 @@ public class QuizGradingService {
         BigDecimal percentage = totalEarnable.signum() <= 0 ? BigDecimal.ZERO
                 : scored.multiply(BigDecimal.valueOf(100))
                         .divide(totalEarnable, 2, RoundingMode.HALF_UP).max(BigDecimal.ZERO);
+        boolean firstGrade = attempt.getGradedAt() == null || attempt.getScore() == null;
+        boolean resultChanged = firstGrade || percentage.compareTo(attempt.getScore()) != 0;
+        OffsetDateTime gradedAt = OffsetDateTime.now();
         attempt.setScore(percentage);
-        attempt.setGradedAt(OffsetDateTime.now());
+        attempt.setGradedAt(gradedAt);
+        if (resultChanged) {
+            notifications.quizGraded(attempt.getClassMember().getStudentId(), attempt.getId(), gradedAt, firstGrade);
+        }
     }
 }

@@ -33,7 +33,7 @@ class ContentReportMigrationPostgresTest {
                     + "VALUES (?,'Existing reporter','migration@example.test','STUDENT','ACTIVE')", reporter);
             var users = db.queryForList("SELECT * FROM " + schema + ".lms_user_access");
             var latest = config.target("latest").load();
-            assertThat(latest.migrate().migrationsExecuted).isEqualTo(upgrade ? 1 : 0);
+            assertThat(latest.migrate().migrationsExecuted).isEqualTo(upgrade ? 2 : 0);
             latest.validate();
             assertThat(db.queryForList(history)).isEqualTo(before);
             assertThat(db.queryForList("SELECT * FROM " + schema + ".lms_user_access")).isEqualTo(users);
