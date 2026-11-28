@@ -212,7 +212,8 @@ class QuizContractPostgresTest {
                 invalid.equals("DEADLINE")?OffsetDateTime.now().minusDays(1):c.deadline(),
                 invalid.equals("SCORE")?new java.math.BigDecimal("101"):null,
                 invalid.equals("EMPTY")?List.of():invalid.equals("DUPLICATE_ORDER")?List.of(c.questions().getFirst(),c.questions().getFirst()):c.questions());
-        assertThatThrownBy(() -> tx().execute(s -> {var a=activities.saveAndFlush(new Activity(lesson,"Invalid",null,Activity.ActivityType.QUIZ,1,Chapter.VisibilityStatus.HIDDEN));return factory.createForActivity(a.getActivityId(),owner,bad);})).isInstanceOf(RuntimeException.class);
+        var visibility = invalid.equals("EMPTY") ? Chapter.VisibilityStatus.PUBLISHED : Chapter.VisibilityStatus.HIDDEN;
+        assertThatThrownBy(() -> tx().execute(s -> {var a=activities.saveAndFlush(new Activity(lesson,"Invalid",null,Activity.ActivityType.QUIZ,1,visibility));return factory.createForActivity(a.getActivityId(),owner,bad);})).isInstanceOf(RuntimeException.class);
         assertThat(db.queryForObject("select count(*) from activity where lesson_id=?",Integer.class,lesson)).isEqualTo(1);
         assertThat(db.queryForObject("select count(*) from quiz where activity_id=?",Integer.class,activity)).isEqualTo(1);
     }

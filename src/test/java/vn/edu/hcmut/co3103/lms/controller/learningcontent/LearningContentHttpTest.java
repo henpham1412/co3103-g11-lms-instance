@@ -156,7 +156,12 @@ class LearningContentHttpTest {
         for (Chapter chapter : chapters()) {
             for (Lesson lesson : lessons(chapter.getChapterId())) {
                 materials(lesson.getLessonId()).forEach(m -> materialRepository.deleteById(m.getMaterialId()));
-                activities(lesson.getLessonId()).forEach(a -> activityRepository.deleteById(a.getActivityId()));
+                activities(lesson.getLessonId()).forEach(a -> {
+                    jdbcTemplate.update("DELETE FROM question_option WHERE question_id IN (SELECT question_id FROM question WHERE quiz_id IN (SELECT quiz_id FROM quiz WHERE activity_id = ?))", a.getActivityId());
+                    jdbcTemplate.update("DELETE FROM question WHERE quiz_id IN (SELECT quiz_id FROM quiz WHERE activity_id = ?)", a.getActivityId());
+                    jdbcTemplate.update("DELETE FROM quiz WHERE activity_id = ?", a.getActivityId());
+                    activityRepository.deleteById(a.getActivityId());
+                });
                 lessonRepository.deleteById(lesson.getLessonId());
             }
             chapterRepository.deleteById(chapter.getChapterId());
@@ -173,12 +178,37 @@ class LearningContentHttpTest {
         }
     }
 
+    private static String publishedQuizPayload(String title) {
+        return """
+                {
+                  "title": "%s",
+                  "activity_type": "QUIZ",
+                  "quiz": {
+                    "time_limit_minutes": 20,
+                    "deadline": "2099-01-01T00:00:00Z",
+                    "questions": [
+                      {
+                        "question_type": "MCQ_SINGLE",
+                        "content": "Sample question",
+                        "points_awarded": 1,
+                        "order_index": 0,
+                        "options": [
+                          {"content": "A", "is_correct": true, "order_index": 0},
+                          {"content": "B", "is_correct": false, "order_index": 1}
+                        ]
+                      }
+                    ]
+                  }
+                }
+                """.formatted(title);
+    }
+
     @Test
     void tutorPlacesAnActivityAndItsVisibilityFollowsTheWholeChain() throws Exception {
         UUID lessonId = createLesson(createChapter("{\"title\":\"Basics\"}"));
 
         HttpResponse<String> created = post("/api/v1/lessons/" + lessonId + "/activities", tutorToken,
-                "{\"title\":\"Week 1 quiz\",\"activity_type\":\"QUIZ\"}");
+                publishedQuizPayload("Week 1 quiz"));
         assertThat(created.statusCode()).isEqualTo(201);
         JsonNode activity = json(created);
         UUID activityId = UUID.fromString(activity.get("activity_id").asString());
@@ -202,21 +232,27 @@ class LearningContentHttpTest {
         assertThat(patch("/api/v1/activities/" + activityId, tutorToken,
                 "{\"activity_type\":\"ASSIGNMENT\"}").statusCode()).isEqualTo(400);
 
-        assertThat(delete("/api/v1/activities/" + activityId, tutorToken).statusCode()).isEqualTo(204);
-        assertThat(get("/api/v1/activities/" + activityId, tutorToken).statusCode()).isEqualTo(404);
+        // Configured Quiz activity cannot be physically deleted while dependent quiz configuration exists.
+        HttpResponse<String> deleteBlocked = delete("/api/v1/activities/" + activityId, tutorToken);
+        assertThat(deleteBlocked.statusCode()).isEqualTo(409);
+        assertThat(json(deleteBlocked).get("code").asString()).isEqualTo("CONTENT_HAS_DEPENDENT_LEARNING_DATA");
     }
 
     @Test
-    void activityPlacementRefusesToCarryAssessmentConfiguration() throws Exception {
+    void activityPlacementEnforcesMatchingAssessmentConfiguration() throws Exception {
         UUID lessonId = createLesson(createChapter("{\"title\":\"Basics\"}"));
 
-        HttpResponse<String> mismatch = post("/api/v1/lessons/" + lessonId + "/activities", tutorToken,
-                "{\"title\":\"Week 1 quiz\",\"activity_type\":\"QUIZ\",\"quiz\":{\"time_limit_minutes\":60}}");
+        HttpResponse<String> bareQuiz = post("/api/v1/lessons/" + lessonId + "/activities", tutorToken,
+                "{\"title\":\"Week 1 quiz\",\"activity_type\":\"QUIZ\"}");
+        HttpResponse<String> wrongKey = post("/api/v1/lessons/" + lessonId + "/activities", tutorToken,
+                "{\"title\":\"Week 1 quiz\",\"activity_type\":\"QUIZ\",\"assignment\":{\"deadline\":\"2099-01-01T00:00:00Z\"}}");
         HttpResponse<String> unknown = post("/api/v1/lessons/" + lessonId + "/activities", tutorToken,
                 "{\"title\":\"Week 1 quiz\",\"activity_type\":\"QUIZ\",\"time_limit_minutes\":60}");
 
-        assertThat(mismatch.statusCode()).isEqualTo(409);
-        assertThat(json(mismatch).get("code").asString()).isEqualTo("ASSESSMENT_CONFIGURATION_MISMATCH");
+        assertThat(bareQuiz.statusCode()).isEqualTo(409);
+        assertThat(json(bareQuiz).get("code").asString()).isEqualTo("ASSESSMENT_CONFIGURATION_MISMATCH");
+        assertThat(wrongKey.statusCode()).isEqualTo(409);
+        assertThat(json(wrongKey).get("code").asString()).isEqualTo("ASSESSMENT_CONFIGURATION_MISMATCH");
         assertThat(unknown.statusCode()).isEqualTo(400);
         assertThat(json(unknown).get("code").asString()).isEqualTo("VALIDATION_ERROR");
         assertThat(activities(lessonId)).isEmpty();
@@ -452,7 +488,7 @@ class LearningContentHttpTest {
             }
             case "activity" -> {
                 HttpResponse<String> response = post("/api/v1/lessons/" + lessonId + "/activities", tutorToken,
-                        "{\"title\":\"Original\",\"activity_type\":\"QUIZ\"}");
+                        publishedQuizPayload("Original"));
                 assertThat(response.statusCode()).isEqualTo(201);
                 path = "/api/v1/activities/"; table = "activity";
                 id = UUID.fromString(json(response).get("activity_id").asString());

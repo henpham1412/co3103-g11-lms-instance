@@ -14,7 +14,7 @@ import java.util.LinkedHashMap;
 import java.util.Collections;
 import java.util.Map;
 
-/** Placement belongs to Learning Content; embedded Assignment settings are delegated atomically to Assessment. */
+/** Placement belongs to Learning Content; embedded Quiz and Assignment settings are delegated atomically to Assessment. */
 @JsonAutoDetect(fieldVisibility = JsonAutoDetect.Visibility.ANY)
 public class ActivityRequest {
 

@@ -32,6 +32,10 @@ public class QuizConfigurationAccessService {
     private final ClassRepository classRepository;
 
     public void requireCanView(Activity activity, UUID userId) {
+        requireCanViewAsTutor(activity, userId);
+    }
+
+    public boolean requireCanViewAsTutor(Activity activity, UUID userId) {
         LmsUserAccess user = requireActiveUser(userId);
 
         ContentPath contentPath = resolveContentPath(activity);
@@ -43,7 +47,7 @@ public class QuizConfigurationAccessService {
             if (!targetClass.getTutorId().equals(userId)) {
                 throw new ResponseStatusException(HttpStatus.FORBIDDEN, "FORBIDDEN");
             }
-            return;
+            return true;
         }
 
         if (user.getLmsRole() != LmsRole.STUDENT) {
@@ -57,6 +61,7 @@ public class QuizConfigurationAccessService {
                 || activity.getStatus() != Chapter.VisibilityStatus.PUBLISHED) {
             throw new ResponseStatusException(HttpStatus.NOT_FOUND, "QUIZ_NOT_FOUND");
         }
+        return false;
     }
 
     public void requireOwningTutor(Activity activity, UUID userId) {
