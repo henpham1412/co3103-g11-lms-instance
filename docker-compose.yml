@@ -39,6 +39,9 @@ services:
   central-identity:
     build:
       context: ${CENTRAL_IDENTITY_CONTEXT:-../co3103-g11-central-identity}
+      args:
+        MVNW_REPOURL: ${MVNW_REPOURL:-}
+        MAVEN_MIRROR_URL: ${MAVEN_MIRROR_URL:-}
     restart: unless-stopped
     depends_on:
       central-identity-db:
@@ -71,6 +74,9 @@ services:
   lms-instance:
     build:
       context: .
+      args:
+        MVNW_REPOURL: ${MVNW_REPOURL:-}
+        MAVEN_MIRROR_URL: ${MAVEN_MIRROR_URL:-}
     restart: unless-stopped
     depends_on:
       lms-db:
