@@ -49,9 +49,12 @@ class ChapterServiceTest {
     private final ActivityRepository activityRepository = mock(ActivityRepository.class);
     private final LocalMaterialStorageService materialStorage = mock(LocalMaterialStorageService.class);
     private final ContentReportRepository contentReportRepository = mock(ContentReportRepository.class);
+    private final vn.edu.hcmut.co3103.lms.service.assessment.QuizCreationService quizCreationService =
+            mock(vn.edu.hcmut.co3103.lms.service.assessment.QuizCreationService.class);
     private final ChapterService service = new ChapterService(classRepository, memberRepository,
             chapterRepository, lessonRepository, materialRepository, activityRepository, materialStorage, contentReportRepository,
             mock(vn.edu.hcmut.co3103.lms.service.assessment.AssignmentConfigurationService.class),
+            quizCreationService,
             mock(vn.edu.hcmut.co3103.lms.service.notification.NotificationEvents.class));
 
     private final UUID classId = UUID.randomUUID();
@@ -501,17 +504,23 @@ class ChapterServiceTest {
         ReflectionTestUtils.setField(activity, "activityId", activityId);
         when(lessonRepository.findById(lessonId)).thenReturn(Optional.of(lesson));
         when(chapterRepository.findById(chapterId)).thenReturn(Optional.of(chapter));
-        when(activityRepository.save(any(Activity.class))).thenAnswer(invocation -> invocation.getArgument(0));
+        when(activityRepository.saveAndFlush(any(Activity.class))).thenAnswer(invocation -> {
+            Activity saved = invocation.getArgument(0);
+            ReflectionTestUtils.setField(saved, "activityId", activityId);
+            return saved;
+        });
         when(activityRepository.findById(activityId)).thenReturn(Optional.of(activity));
         when(memberRepository.existsByClassIdAndStudentIdAndStatus(classId, studentId,
                 ClassMember.MembershipStatus.ACTIVE)).thenReturn(true);
 
         Activity placed = service.createActivity(lessonId, tutorId,
-                activityRequest("{\"title\":\"Week 1 quiz\",\"activity_type\":\"QUIZ\",\"sequence_order\":0}"));
+                activityRequest("{\"title\":\"Week 1 quiz\",\"activity_type\":\"QUIZ\",\"sequence_order\":0,\"quiz\":{\"time_limit_minutes\":20,\"deadline\":\"2099-01-01T00:00:00Z\"}}"));
 
         assertEquals(lessonId, placed.getLessonId());
         assertEquals(Activity.ActivityType.QUIZ, placed.getActivityType());
         assertEquals(Chapter.VisibilityStatus.PUBLISHED, placed.getStatus());
+        verify(quizCreationService).createFromRequest(org.mockito.ArgumentMatchers.eq(activityId),
+                org.mockito.ArgumentMatchers.eq(tutorId), any());
         assertEquals(activityId, service.getActivity(activityId, studentId, false).activityId());
 
         activity.setStatus(Chapter.VisibilityStatus.HIDDEN);
@@ -522,23 +531,46 @@ class ChapterServiceTest {
     }
 
     @Test
-    void activityPlacementRefusesToCarryAssessmentConfiguration() {
+    void activityPlacementEnforcesMatchingAssessmentConfigurationAndRejectsUnknownFields() {
         Lesson lesson = new Lesson(chapterId, "Lesson", null, 30, 0, null);
         ReflectionTestUtils.setField(lesson, "lessonId", lessonId);
         when(lessonRepository.findById(lessonId)).thenReturn(Optional.of(lesson));
         when(chapterRepository.findById(chapterId)).thenReturn(Optional.of(
                 new Chapter(classId, "Chapter", null, 0, null)));
 
-        ResponseStatusException mismatch = assertThrows(ResponseStatusException.class,
+        ResponseStatusException bareQuiz = assertThrows(ResponseStatusException.class,
                 () -> service.createActivity(lessonId, tutorId, activityRequest(
-                        "{\"title\":\"Quiz\",\"activity_type\":\"QUIZ\",\"quiz\":{\"time_limit\":60}}")));
+                        "{\"title\":\"Quiz\",\"activity_type\":\"QUIZ\"}")));
+        ResponseStatusException wrongKey = assertThrows(ResponseStatusException.class,
+                () -> service.createActivity(lessonId, tutorId, activityRequest(
+                        "{\"title\":\"Quiz\",\"activity_type\":\"QUIZ\",\"assignment\":{\"deadline\":\"2099-01-01T00:00:00Z\"}}")));
         ResponseStatusException unknown = assertThrows(ResponseStatusException.class,
                 () -> service.createActivity(lessonId, tutorId, activityRequest(
                         "{\"title\":\"Quiz\",\"activity_type\":\"QUIZ\",\"time_limit\":60}")));
 
-        assertEquals(HttpStatus.CONFLICT, mismatch.getStatusCode());
-        assertEquals("ASSESSMENT_CONFIGURATION_MISMATCH", mismatch.getReason());
+        assertEquals(HttpStatus.CONFLICT, bareQuiz.getStatusCode());
+        assertEquals("ASSESSMENT_CONFIGURATION_MISMATCH", bareQuiz.getReason());
+        assertEquals(HttpStatus.CONFLICT, wrongKey.getStatusCode());
+        assertEquals("ASSESSMENT_CONFIGURATION_MISMATCH", wrongKey.getReason());
         assertEquals(HttpStatus.BAD_REQUEST, unknown.getStatusCode());
+        verify(activityRepository, never()).saveAndFlush(any(Activity.class));
+    }
+
+    @Test
+    void publishingHiddenQuizRequiresPublishableValidation() {
+        Activity activity = new Activity(lessonId, "Draft Quiz", null, Activity.ActivityType.QUIZ, 0,
+                Chapter.VisibilityStatus.HIDDEN);
+        UUID activityId = UUID.randomUUID();
+        ReflectionTestUtils.setField(activity, "activityId", activityId);
+        when(activityRepository.findById(activityId)).thenReturn(Optional.of(activity));
+        doThrow(new ResponseStatusException(HttpStatus.CONFLICT, "ASSESSMENT_CONFIGURATION_MISMATCH"))
+                .when(quizCreationService).requirePublishable(activityId, tutorId);
+
+        ResponseStatusException blocked = assertThrows(ResponseStatusException.class,
+                () -> service.updateActivity(activityId, tutorId, java.util.Map.of("status", "PUBLISHED")));
+
+        assertEquals(HttpStatus.CONFLICT, blocked.getStatusCode());
+        assertEquals("ASSESSMENT_CONFIGURATION_MISMATCH", blocked.getReason());
         verify(activityRepository, never()).save(any(Activity.class));
     }
 
@@ -579,10 +611,10 @@ class ChapterServiceTest {
 
         ResponseStatusException exception = assertThrows(ResponseStatusException.class,
                 () -> service.createActivity(lessonId, UUID.randomUUID(), activityRequest(
-                        "{\"title\":\"Quiz\",\"activity_type\":\"QUIZ\",\"sequence_order\":0}")));
+                        "{\"title\":\"Quiz\",\"activity_type\":\"QUIZ\",\"sequence_order\":0,\"quiz\":{\"time_limit_minutes\":20,\"deadline\":\"2099-01-01T00:00:00Z\"}}")));
 
         assertEquals(HttpStatus.FORBIDDEN, exception.getStatusCode());
-        verify(activityRepository, never()).save(any(Activity.class));
+        verify(activityRepository, never()).saveAndFlush(any(Activity.class));
     }
 
     @Test

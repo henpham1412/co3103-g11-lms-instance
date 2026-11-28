@@ -8,6 +8,7 @@ import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.web.server.ResponseStatusException;
 import vn.edu.hcmut.co3103.lms.dto.request.ActivityRequest;
 import vn.edu.hcmut.co3103.lms.service.assessment.AssignmentConfigurationService;
+import vn.edu.hcmut.co3103.lms.service.assessment.QuizCreationService;
 import vn.edu.hcmut.co3103.lms.dto.request.ChapterRequest;
 import vn.edu.hcmut.co3103.lms.dto.request.LessonRequest;
 import vn.edu.hcmut.co3103.lms.dto.request.MaterialRequest;
@@ -61,6 +62,7 @@ public class ChapterService {
     private final LocalMaterialStorageService materialStorage;
     private final ContentReportRepository contentReportRepository;
     private final AssignmentConfigurationService assignmentConfiguration;
+    private final QuizCreationService quizCreation;
     private final NotificationEvents notifications;
 
     @Autowired
@@ -70,6 +72,7 @@ public class ChapterService {
                           LocalMaterialStorageService materialStorage,
                           ContentReportRepository contentReportRepository,
                           AssignmentConfigurationService assignmentConfiguration,
+                          QuizCreationService quizCreation,
                           NotificationEvents notifications) {
         this.classRepository = classRepository;
         this.classMemberRepository = classMemberRepository;
@@ -80,6 +83,7 @@ public class ChapterService {
         this.materialStorage = materialStorage;
         this.contentReportRepository = contentReportRepository;
         this.assignmentConfiguration = assignmentConfiguration;
+        this.quizCreation = quizCreation;
         this.notifications = notifications;
     }
 
@@ -418,19 +422,28 @@ public class ChapterService {
         Lesson lesson = requireLesson(lessonId);
         Chapter chapter = requireChapter(lesson.getChapterId());
         requireWritableClass(chapter.getClassId(), tutorId);
+        if (!Set.of("quiz", "assignment").containsAll(request.extraFields().keySet())) {
+            throw badRequest();
+        }
         boolean assignment = request.activity_type() == Activity.ActivityType.ASSIGNMENT;
-        if (assignment ? !request.extraFields().keySet().equals(Set.of("assignment")) : request.carriesAssessmentConfiguration()) {
+        boolean quiz = request.activity_type() == Activity.ActivityType.QUIZ;
+        if (assignment && !request.extraFields().keySet().equals(Set.of("assignment"))) {
             throw conflict("ASSESSMENT_CONFIGURATION_MISMATCH");
         }
-        if (!assignment && !request.extraFields().isEmpty()) throw badRequest();
+        if (quiz && !request.extraFields().keySet().equals(Set.of("quiz"))) {
+            throw conflict("ASSESSMENT_CONFIGURATION_MISMATCH");
+        }
+        if (!assignment && !quiz && !request.extraFields().isEmpty()) throw badRequest();
         validateContentTitle(request.title());
-        Activity activity = activityRepository.save(new Activity(lessonId, request.title().trim(), request.description(),
+        Activity activity = activityRepository.saveAndFlush(new Activity(lessonId, request.title().trim(), request.description(),
                 request.activity_type(),
                 resolveOrder(request.sequence_order(), () -> activityRepository.nextSequenceOrderForLesson(lessonId)),
                 request.status()));
         if (assignment) {
             assignmentConfiguration.create(activity, request.extraFields().get("assignment"));
             notifyPublication(ContentScope.ACTIVITY, activity.getActivityId(), null, activity.getStatus());
+        } else if (quiz) {
+            quizCreation.createFromRequest(activity.getActivityId(), tutorId, request.extraFields().get("quiz"));
         }
         return activity;
     }
@@ -468,6 +481,11 @@ public class ChapterService {
         if (patch.containsKey("description")) activity.setDescription(nullableText(patch, "description"));
         if (patch.containsKey("sequence_order")) activity.setSequenceOrder(nonNegativeInt(patch, "sequence_order"));
         if (patch.containsKey("status")) activity.setStatus(visibility(patch, "status"));
+        if (activity.getActivityType() == Activity.ActivityType.QUIZ
+                && previousStatus != Chapter.VisibilityStatus.PUBLISHED
+                && activity.getStatus() == Chapter.VisibilityStatus.PUBLISHED) {
+            quizCreation.requirePublishable(activityId, tutorId);
+        }
         Activity saved = activityRepository.save(activity);
         notifyPublication(ContentScope.ACTIVITY, activityId, previousStatus, activity.getStatus());
         return saved;

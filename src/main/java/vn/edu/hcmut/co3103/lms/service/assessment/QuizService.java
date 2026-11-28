@@ -6,30 +6,63 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.server.ResponseStatusException;
 import vn.edu.hcmut.co3103.lms.dto.request.QuizSettingsUpdateRequest;
+import vn.edu.hcmut.co3103.lms.dto.response.QuestionResponse;
 import vn.edu.hcmut.co3103.lms.dto.response.QuizConfigurationResponse;
+import vn.edu.hcmut.co3103.lms.entity.Question;
+import vn.edu.hcmut.co3103.lms.entity.QuestionOption;
 import vn.edu.hcmut.co3103.lms.entity.Quiz;
+import vn.edu.hcmut.co3103.lms.repository.assessment.QuestionOptionRepository;
+import vn.edu.hcmut.co3103.lms.repository.assessment.QuestionRepository;
 import vn.edu.hcmut.co3103.lms.repository.assessment.QuizRepository;
 
-import java.util.UUID;
 import java.math.BigDecimal;
 import java.time.OffsetDateTime;
+import java.util.List;
+import java.util.Map;
 import java.util.Set;
+import java.util.UUID;
+import java.util.stream.Collectors;
 
 @Service
 @RequiredArgsConstructor
 public class QuizService {
     private final AssessmentLocks locks;
     private final QuizRepository quizRepository;
+    private final QuestionRepository questionRepository;
+    private final QuestionOptionRepository optionRepository;
     private final QuizConfigurationAccessService accessService;
 
     @Transactional(readOnly = true)
     public QuizConfigurationResponse getQuizConfiguration(UUID activityId, UUID userId) {
         Quiz quiz = quizRepository.findByActivity_ActivityId(activityId)
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "QUIZ_NOT_FOUND"));
-        accessService.requireCanView(quiz.getActivity(), userId);
-        return new QuizConfigurationResponse(quiz.getId(), quiz.getTimeLimitMinutes(),
-                quiz.getAttemptsAllowed(), quiz.getGradingMethod(), quiz.getOpeningTime(),
-                quiz.getDeadline(), quiz.getRequiredScore());
+        boolean isTutor = accessService.requireCanViewAsTutor(quiz.getActivity(), userId);
+        List<QuestionResponse> tutorQuestions = isTutor ? loadTutorQuestions(quiz.getId()) : null;
+        return new QuizConfigurationResponse(quiz.getId(), quiz.getActivity().getActivityId(),
+                quiz.getTimeLimitMinutes(), quiz.getAttemptsAllowed(), quiz.getGradingMethod(),
+                quiz.getOpeningTime(), quiz.getDeadline(), quiz.getRequiredScore(), tutorQuestions);
+    }
+
+    private List<QuestionResponse> loadTutorQuestions(UUID quizId) {
+        List<Question> quizQuestions = questionRepository.findByQuiz_IdOrderByOrderIndex(quizId);
+        if (quizQuestions.isEmpty()) {
+            return List.of();
+        }
+        List<UUID> questionIds = quizQuestions.stream().map(Question::getId).toList();
+        Map<UUID, List<QuestionResponse.Option>> optionsByQuestion = optionRepository
+                .findByQuestion_IdInOrderByQuestion_IdAscOrderIndexAsc(questionIds).stream()
+                .collect(Collectors.groupingBy(
+                        option -> option.getQuestion().getId(),
+                        Collectors.mapping(
+                                option -> new QuestionResponse.Option(option.getId(), option.getContent(),
+                                        option.getIsCorrect(), option.getOrderIndex()),
+                                Collectors.toList())));
+        return quizQuestions.stream()
+                .map(question -> new QuestionResponse(
+                        question.getId(), question.getQuestionType(), question.getContent(),
+                        question.getPointsAwarded(), question.getPointsDeducted(), question.getOrderIndex(),
+                        optionsByQuestion.getOrDefault(question.getId(), List.of())))
+                .toList();
     }
 
     @Transactional
@@ -51,9 +84,9 @@ public class QuizService {
         if (request.isDeadlineProvided()) quiz.setDeadline(request.getDeadline());
         if (request.isRequiredScoreProvided()) quiz.setRequiredScore(request.getRequiredScore());
 
-        return new QuizConfigurationResponse(quiz.getId(), quiz.getTimeLimitMinutes(),
-                quiz.getAttemptsAllowed(), quiz.getGradingMethod(), quiz.getOpeningTime(),
-                quiz.getDeadline(), quiz.getRequiredScore());
+        return new QuizConfigurationResponse(quiz.getId(), quiz.getActivity().getActivityId(),
+                quiz.getTimeLimitMinutes(), quiz.getAttemptsAllowed(), quiz.getGradingMethod(),
+                quiz.getOpeningTime(), quiz.getDeadline(), quiz.getRequiredScore());
     }
 
     private void validateUpdate(QuizSettingsUpdateRequest request, Quiz quiz) {

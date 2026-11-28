@@ -69,6 +69,7 @@ class AssignmentPostgresHttpTest {
         for (UUID c : List.of(course, foreign)) {
             db.update("DELETE FROM submission WHERE assignment_id IN (SELECT assignment_id FROM assignment WHERE activity_id IN (SELECT a.activity_id FROM activity a JOIN lesson l ON l.lesson_id=a.lesson_id JOIN chapter ch ON ch.chapter_id=l.chapter_id WHERE ch.class_id=?))", c);
             db.update("DELETE FROM assignment WHERE activity_id IN (SELECT a.activity_id FROM activity a JOIN lesson l ON l.lesson_id=a.lesson_id JOIN chapter ch ON ch.chapter_id=l.chapter_id WHERE ch.class_id=?)", c);
+            db.update("DELETE FROM quiz WHERE activity_id IN (SELECT a.activity_id FROM activity a JOIN lesson l ON l.lesson_id=a.lesson_id JOIN chapter ch ON ch.chapter_id=l.chapter_id WHERE ch.class_id=?)", c);
             db.update("DELETE FROM activity_skill_topics WHERE skill_topic_id IN (SELECT skill_topic_id FROM skill_topics WHERE class_id=?)", c);
             db.update("DELETE FROM skill_topics WHERE class_id=?", c);
             db.update("DELETE FROM activity WHERE lesson_id IN (SELECT l.lesson_id FROM lesson l JOIN chapter ch ON ch.chapter_id=l.chapter_id WHERE ch.class_id=?)", c);
@@ -154,9 +155,13 @@ class AssignmentPostgresHttpTest {
         } finally { db.execute("DROP TRIGGER " + name + " ON assignment"); db.execute("DROP FUNCTION " + name + "()"); }
     }
     @Test void nonAssignmentCreationRetainsItsExistingPlacementContract() throws Exception {
-        var body = checked("POST", activityPath(), "{\"title\":\"Quiz\",\"activity_type\":\"QUIZ\"}", owner, 201);
+        var body = checked("POST", activityPath(),
+                "{\"title\":\"Quiz\",\"activity_type\":\"QUIZ\",\"status\":\"HIDDEN\",\"quiz\":{\"time_limit_minutes\":20,\"deadline\":\"" + future() + "\"}}",
+                owner, 201);
         assertThat(body.get("activity_type").asText()).isEqualTo("QUIZ");
-        assertThat(db.queryForObject("SELECT count(*) FROM assignment WHERE activity_id=?", Integer.class, UUID.fromString(body.get("activity_id").asText()))).isZero();
+        UUID activityId = UUID.fromString(body.get("activity_id").asText());
+        assertThat(db.queryForObject("SELECT count(*) FROM assignment WHERE activity_id=?", Integer.class, activityId)).isZero();
+        assertThat(db.queryForObject("SELECT count(*) FROM quiz WHERE activity_id=?", Integer.class, activityId)).isEqualTo(1);
         checked("POST", activityPath(), "{\"title\":\"Mismatch\",\"activity_type\":\"QUIZ\",\"assignment\":" + defaultConfiguration() + "}", owner, 409);
     }
     @Test void creationRequiresActiveLocalTutorRoleAndActualOwnership() throws Exception {
