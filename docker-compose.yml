@@ -1,0 +1,132 @@
+# Full stack: nginx frontend gateway, Central Identity, LMS Instance, two independent PostgreSQL 18.6.
+# Usage: scripts/init-docker-env.sh && docker compose --env-file .env.docker up -d --build
+name: co3103-g11
+
+x-pg-healthcheck: &pg-healthcheck
+  interval: 5s
+  timeout: 5s
+  retries: 20
+
+services:
+  central-identity-db:
+    image: postgres:18.6
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${CI_DB_NAME:-central_identity}
+      POSTGRES_USER: ${CI_DB_USER:-identity_app}
+      POSTGRES_PASSWORD: ${CI_DB_PASSWORD:?run scripts/init-docker-env.sh}
+    volumes:
+      - central-identity-db-data:/var/lib/postgresql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      <<: *pg-healthcheck
+    networks: [backend]
+
+  lms-db:
+    image: postgres:18.6
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${LMS_DB_NAME:-lms}
+      POSTGRES_USER: ${LMS_DB_USER:-lms_app}
+      POSTGRES_PASSWORD: ${LMS_DB_PASSWORD:?run scripts/init-docker-env.sh}
+    volumes:
+      - lms-db-data:/var/lib/postgresql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      <<: *pg-healthcheck
+    networks: [backend]
+
+  central-identity:
+    build:
+      context: ${CENTRAL_IDENTITY_CONTEXT:-../co3103-g11-central-identity}
+    restart: unless-stopped
+    depends_on:
+      central-identity-db:
+        condition: service_healthy
+    environment:
+      SERVER_PORT: 8080
+      DB_URL: jdbc:postgresql://central-identity-db:5432/${CI_DB_NAME:-central_identity}
+      DB_USERNAME: ${CI_DB_USER:-identity_app}
+      DB_PASSWORD: ${CI_DB_PASSWORD}
+      JWT_ISSUER: ${PUBLIC_ORIGIN:-http://localhost:3000}/identity
+      MAIL_HOST: ${MAIL_HOST:-smtp.gmail.com}
+      MAIL_PORT: ${MAIL_PORT:-587}
+      MAIL_USERNAME: ${MAIL_USERNAME:-}
+      MAIL_PASSWORD: ${MAIL_PASSWORD:-}
+      APP_RESET_PASSWORD_BASE_URL: ${APP_RESET_PASSWORD_BASE_URL:-http://localhost:3000/reset-password}
+      # Only the nginx gateway on the private Docker network may supply X-Forwarded-For.
+      RECOVERY_TRUSTED_PROXIES: 172.31.250.0/24
+    # Signing and recovery keys persist as bind-mounted secret files, so tokens survive recreation.
+    entrypoint:
+      - sh
+      - -c
+      - >-
+        export JWT_PRIVATE_KEY="$$(cat /run/secrets/jwt_private_key)"
+        JWT_PUBLIC_KEY="$$(cat /run/secrets/jwt_public_key)"
+        RECOVERY_TOKEN_KEY="$$(cat /run/secrets/recovery_token_key)";
+        exec java -jar /app/app.jar
+    secrets: [jwt_private_key, jwt_public_key, recovery_token_key]
+    networks: [backend]
+
+  lms-instance:
+    build:
+      context: .
+    restart: unless-stopped
+    depends_on:
+      lms-db:
+        condition: service_healthy
+      central-identity:
+        condition: service_healthy
+    environment:
+      SERVER_PORT: 8081
+      DB_URL: jdbc:postgresql://lms-db:5432/${LMS_DB_NAME:-lms}
+      DB_USERNAME: ${LMS_DB_USER:-lms_app}
+      DB_PASSWORD: ${LMS_DB_PASSWORD}
+      # Issuer must equal the JWT "iss" (browser-facing URL); keys are fetched over the private network.
+      CENTRAL_IDENTITY_ISSUER_URI: ${PUBLIC_ORIGIN:-http://localhost:3000}/identity
+      CENTRAL_IDENTITY_JWKS_URI: http://central-identity:8080/.well-known/jwks.json
+      LMS_ALLOWED_ORIGINS: ${PUBLIC_ORIGIN:-http://localhost:3000}
+      LMS_PUBLIC_BASE_URL: ${PUBLIC_ORIGIN:-http://localhost:3000}/lms
+    volumes:
+      - lms-files:/data/lms-files
+      - lms-class-thumbnails:/data/class-thumbnails
+    networks: [backend]
+
+  frontend:
+    build:
+      context: ${FRONTEND_CONTEXT:-../co3103-g11-frontend}
+      args:
+        VITE_CENTRAL_IDENTITY_API_URL: /identity/api/v1
+        VITE_LMS_API_URL: /lms/api/v1
+        VITE_AUTH_MODE: lms
+        VITE_LMS_CLIENT_ID: ${LMS_CLIENT_ID:-g11-lms}
+        VITE_LMS_REDIRECT_URI: ${PUBLIC_ORIGIN:-http://localhost:3000}/
+    restart: unless-stopped
+    depends_on:
+      central-identity:
+        condition: service_healthy
+      lms-instance:
+        condition: service_healthy
+    ports:
+      - "${FRONTEND_BIND:-127.0.0.1}:${FRONTEND_PORT:-3000}:8080"
+    networks: [backend]
+
+secrets:
+  jwt_private_key:
+    file: ./secrets/jwt-private.pem
+  jwt_public_key:
+    file: ./secrets/jwt-public.pem
+  recovery_token_key:
+    file: ./secrets/recovery-token.key
+
+volumes:
+  central-identity-db-data:
+  lms-db-data:
+  lms-files:
+  lms-class-thumbnails:
+
+networks:
+  backend:
+    ipam:
+      config:
+        - subnet: 172.31.250.0/24

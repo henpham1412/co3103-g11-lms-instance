@@ -1,0 +1,10 @@
+.git
+.github
+target
+var
+.env
+.env.*
+!.env.example
+*.md
+!README.md
+docs
